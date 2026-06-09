@@ -19,7 +19,7 @@ Requires: Docker Desktop 4.0+, Node.js 16+, pnpm 7.0+
 
 ### `safe-pnpm setup`
 
-Interactive first-time installation. Checks prerequisites, optionally configures a corporate CA certificate, builds the `safe-pnpm:latest` Docker image, and wires the `pnpm` shell function into your shell config.
+Interactive first-time installation. Checks prerequisites, builds the `safe-pnpm:latest` Docker image, and wires the `pnpm` shell function into your shell config.
 
 ```sh
 safe-pnpm setup
@@ -72,10 +72,6 @@ pnpm.cmd install      # PowerShell
 ```
 
 ---
-
-## Corporate CA Certificate
-
-If your network uses TLS inspection (Zscaler, etc.), provide your CA certificate during `safe-pnpm setup`. It's embedded in the Docker image at build time. To update after a cert rotation: `safe-pnpm update`.
 
 ---
 
