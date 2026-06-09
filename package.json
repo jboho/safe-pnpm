@@ -1,0 +1,33 @@
+{
+  "name": "@jboho/safe-pnpm",
+  "version": "2026.6.5",
+  "description": "Docker-based pnpm install isolation — protects developer machines from malicious npm lifecycle scripts",
+  "bin": {
+    "safe-pnpm": "./bin/safe-pnpm.js"
+  },
+  "scripts": {
+    "test": "node --test test/**/*.test.js",
+    "lint": "oxlint . && biome lint .",
+    "format": "biome format --write .",
+    "check": "biome check --write ."
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "assets/"
+  ],
+  "dependencies": {
+    "@socketsecurity/cli": "^1.1.102"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com/",
+    "access": "restricted"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.16",
+    "oxlint": "^1.68.0"
+  }
+}
