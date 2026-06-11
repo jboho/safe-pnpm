@@ -1,8 +1,9 @@
 name: Publish
 
 on:
-  release:
-    types: [created]
+  push:
+    tags:
+      - 'v*'
 
 jobs:
   publish:
@@ -12,6 +13,29 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+
+      # Install + verify against the public registry, where the dev/runtime
+      # dependencies live. Don't point at GitHub Packages yet, or npm ci would
+      # try to resolve them there and fail.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - run: npm test
+      - run: npm run lint
+
+      # Fail fast if the tag and the manifest disagree, so we never publish a
+      # version that doesn't match the tag that triggered the run.
+      - name: Verify tag matches package version
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          pkg_version="$(node -p "require('./package.json').version")"
+          if [ "$tag_version" != "$pkg_version" ]; then
+            echo "Tag $GITHUB_REF_NAME (=$tag_version) does not match package.json version $pkg_version" >&2
+            exit 1
+          fi
+
+      # Re-point npm at GitHub Packages for the publish step only.
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
