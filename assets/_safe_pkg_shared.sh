@@ -62,6 +62,11 @@ _safe_pkg_prescan() {
 #   manifest_files — space-separated list of files to copy into the sandbox
 #   remaining args — passed through to the package manager inside Docker
 _safe_pkg_run() {
+  # zsh does not word-split unquoted parameters by default; the manifest list
+  # ($manifest_files) and the docker env flags ($extra_env) below both rely on
+  # sh-style splitting. localoptions reverts this when the function returns.
+  [ -n "${ZSH_VERSION:-}" ] && setopt localoptions sh_word_split
+
   local manager="$1"
   local lockfile="$2"
   local workspace_file="$3"
