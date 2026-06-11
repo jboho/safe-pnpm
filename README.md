@@ -1,8 +1,8 @@
 # @jboho/safe-pnpm
 
-A Docker-based pnpm install isolation wrapper that protects developer machines from malicious npm package lifecycle scripts (`postinstall`, `preinstall`, etc.).
+A Docker-based install isolation wrapper for **pnpm, npm, and yarn** that protects developer machines from malicious package lifecycle scripts (`postinstall`, `preinstall`, etc.).
 
-When you run `pnpm install`, the wrapper pre-scans for known CVEs and malicious packages, runs the install inside an ephemeral Docker container that only sees your `package.json` and lockfile (never source files, `.env`, or credentials), then copies `node_modules` back. All other pnpm commands pass through instantly with no overhead.
+When you run `pnpm install`, `npm install`, or `yarn install`, the wrapper pre-scans for known CVEs and malicious packages, runs the install inside an ephemeral Docker container that only sees your manifests and lockfile (never source files, `.env`, or credentials), then copies `node_modules` back. All non-install commands pass through instantly with no overhead.
 
 ## Install
 
@@ -11,7 +11,9 @@ npm install -g @jboho/safe-pnpm
 safe-pnpm setup
 ```
 
-Requires: Docker Desktop 4.0+, Node.js 16+, pnpm 7.0+
+Requires: Docker Desktop 4.0+, Node.js 16+, and at least one of: pnpm 7.0+, npm 7.0+, yarn 1.x.
+
+The package is named `safe-pnpm` for historical reasons. npm and yarn are first-class — `setup` detects which managers you have installed and lets you choose which ones to wrap.
 
 ---
 
@@ -19,16 +21,21 @@ Requires: Docker Desktop 4.0+, Node.js 16+, pnpm 7.0+
 
 ### `safe-pnpm setup`
 
-Interactive first-time installation. Checks prerequisites, builds the `safe-pnpm:latest` Docker image, and wires the `pnpm` shell function into your shell config.
+Interactive first-time installation. Checks prerequisites, builds the `safe-pnpm:latest` Docker image, and wires shell functions for each manager you enable.
 
 ```sh
 safe-pnpm setup
+# Detected package managers:
+#   Enable pnpm   (10.33.0)  [Y/n]
+#   Enable npm    (10.2.4)   [Y/n]
+#   Enable yarn   (1.22.22)  [Y/n]
+
 source ~/.zshrc    # or open a new terminal
 ```
 
 ### `safe-pnpm update`
 
-Refresh wrapper files and rebuild the Docker image after a package update:
+Refresh wrapper files and rebuild the Docker image after a package update. If `update` detects a manager that wasn't enabled before, it offers to add it:
 
 ```sh
 npm update -g @jboho/safe-pnpm
@@ -43,9 +50,10 @@ Check that everything is installed and configured correctly:
   ✓  Docker           running
   ✓  Image            safe-pnpm:latest present
   ✓  Installation     ~/.safe-pnpm/ present
-  ✓  Wrapper files    all 6 files present
+  ✓  Wrapper files    all 9 files present
   ✓  Shell config     source line found in ~/.zshrc
   ✓  pnpm             10.33.0
+  ✓  npm              10.2.4
   ✓  Node.js          v22.0.0
   ✓  CA cert          not configured (no TLS proxy)
 ```
@@ -54,10 +62,16 @@ Check that everything is installed and configured correctly:
 
 ## How It Works
 
-When you run `pnpm install` (or `add`, `update`, `ci`, `remove`, `fetch`):
+When you run an install-class command:
 
-1. **Pre-install scan** — `pnpm audit` for known CVEs, Shai Hulud 2 malicious package check, and [Socket behavioral analysis](./docs/socket.md) if configured.
-2. **Copy only manifests** — `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `.npmrc` go into a temp directory. Source files, `.env`, and secrets never leave the host.
+| Manager | Intercepted subcommands |
+|---|---|
+| pnpm | `install`, `add`, `update`, `ci`, `remove`, `fetch` |
+| npm | `install`, `i`, `ci`, `update`, `uninstall`, `un` |
+| yarn | `install`, `add`, `remove`, `upgrade` (yarn v1 only) |
+
+1. **Pre-install scan** — manager-native audit (`pnpm audit`, `npm audit`, `yarn audit`), Shai Hulud 2 malicious package check, and [Socket behavioral analysis](./docs/socket.md) if configured.
+2. **Copy only manifests** — `package.json`, the lockfile, workspace files, and `.npmrc` / `.yarnrc` go into a temp directory. Source files, `.env`, and secrets never leave the host.
 3. **Run in Docker** — ephemeral container, `--cap-drop ALL`, no home directory or credential access.
 4. **Copy results back** — `node_modules` and the updated lockfile land in your project. The container is discarded.
 
@@ -65,19 +79,48 @@ When you run `pnpm install` (or `add`, `update`, `ci`, `remove`, `fetch`):
 
 ## Bypass
 
-```sh
-\pnpm install         # bash/zsh/fish
-command pnpm install  # any POSIX shell
-pnpm.cmd install      # PowerShell
-```
+To bypass the wrapper and run the native binary directly:
 
----
+```sh
+\pnpm install         # bash/zsh
+\npm install
+\yarn install
+
+command pnpm install  # any POSIX shell (also fish)
+command npm install
+command yarn install
+
+pnpm.cmd install      # PowerShell
+npm.cmd install
+yarn.cmd install
+```
 
 ---
 
 ## Private Registries
 
-`NODE_AUTH_TOKEN` and `NPM_TOKEN` are forwarded into the container automatically when set in your environment.
+Registry tokens are **not** forwarded into the sandbox by default — a malicious
+install lifecycle script running in the container could otherwise read and
+exfiltrate them. To enable forwarding for private installs, opt in:
+
+```sh
+SAFE_PNPM_FORWARD_TOKENS=1 pnpm install
+```
+
+When set, `NODE_AUTH_TOKEN` and `NPM_TOKEN` are passed into the container if
+present in your environment. Prefer read-only, registry-scoped tokens.
+
+---
+
+## Docker Not Running
+
+When Docker is unavailable, the wrapper fails **closed** rather than silently
+running the native package manager (which would execute untrusted lifecycle
+scripts on the host):
+
+- **Interactive shell** — you are prompted before any native fallback.
+- **Non-interactive (CI, scripts)** — the install is refused. To allow a native
+  fallback in this case, set `SAFE_PNPM_ALLOW_NATIVE_FALLBACK=1`.
 
 ---
 
@@ -88,7 +131,7 @@ pnpm.cmd install      # PowerShell
 | zsh | `~/.zshrc` |
 | bash (macOS) | `~/.bash_profile` |
 | bash (Linux) | `~/.bashrc` |
-| fish | `~/.config/fish/functions/pnpm.fish` |
+| fish | `~/.config/fish/functions/{pnpm,npm,yarn}.fish` (one per enabled manager) |
 | PowerShell | `~/Documents/PowerShell/Microsoft.PowerShell_profile.ps1` |
 
 ---

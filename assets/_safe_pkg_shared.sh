@@ -69,7 +69,17 @@ _safe_pkg_run() {
   shift 4
 
   if ! docker info > /dev/null 2>&1; then
-    if [ ! -t 0 ]; then command "$manager" "$@"; return; fi
+    if [ ! -t 0 ]; then
+      # Non-interactive (CI, scripts): fail closed. Silently running native
+      # here would execute untrusted lifecycle scripts on the host, defeating
+      # the isolation guarantee. Require explicit opt-in to fall back.
+      if [ "${SAFE_PNPM_ALLOW_NATIVE_FALLBACK:-}" = "1" ]; then
+        echo "⚠️  safe-pnpm: Docker not running — SAFE_PNPM_ALLOW_NATIVE_FALLBACK=1 set, running native $manager." >&2
+        command "$manager" "$@"; return
+      fi
+      echo "✗ safe-pnpm: Docker not running and no TTY — refusing native $manager (set SAFE_PNPM_ALLOW_NATIVE_FALLBACK=1 to override)." >&2
+      return 1
+    fi
     printf "⚠️  safe-pnpm: Docker not running. Use native %s? [y/N] " "$manager" >&2
     read -r _ans
     case "$_ans" in
@@ -115,9 +125,14 @@ _safe_pkg_run() {
   )
 
   local workdir="/app${rel_path:+/$rel_path}"
+  # Registry tokens are forwarded into the sandbox only on explicit opt-in.
+  # Untrusted install lifecycle scripts run inside the container and could
+  # otherwise read and exfiltrate them. Use read-only, registry-scoped tokens.
   local extra_env=""
-  [ -n "${NODE_AUTH_TOKEN:-}" ] && extra_env="$extra_env -e NODE_AUTH_TOKEN"
-  [ -n "${NPM_TOKEN:-}" ]       && extra_env="$extra_env -e NPM_TOKEN"
+  if [ "${SAFE_PNPM_FORWARD_TOKENS:-}" = "1" ]; then
+    [ -n "${NODE_AUTH_TOKEN:-}" ] && extra_env="$extra_env -e NODE_AUTH_TOKEN"
+    [ -n "${NPM_TOKEN:-}" ]       && extra_env="$extra_env -e NPM_TOKEN"
+  fi
 
   # shellcheck disable=SC2086
   docker run --rm --cap-drop ALL \

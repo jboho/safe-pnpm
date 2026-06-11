@@ -31,7 +31,7 @@ Inside the Docker container, **none of this is possible**. The container has no 
 |---|---|
 | Malicious code that runs at build/test time | `pnpm run build` and `pnpm test` execute on the host. Installed packages run with your full permissions. |
 | Novel, unlisted attack packages | Pre-install scans only catch packages in their databases. A zero-day campaign won't appear until the lists update. |
-| Auth tokens passed to the container | `NODE_AUTH_TOKEN` and `NPM_TOKEN` are forwarded when set — necessary trade-off for private package support. |
+| Auth tokens passed to the container | Not forwarded by default. Forwarding is opt-in via `SAFE_PNPM_FORWARD_TOKENS=1` for private-registry installs; when enabled, an install lifecycle script in the container can read `NODE_AUTH_TOKEN`/`NPM_TOKEN`. Use read-only, registry-scoped tokens. |
 | Container escape exploits | Rare kernel CVEs exist. `--cap-drop ALL` significantly reduces the surface but is not absolute. |
 
 ### Why it's still valuable despite those limits
