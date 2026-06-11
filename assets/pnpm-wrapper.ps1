@@ -65,8 +65,12 @@ function global:pnpm {
     $dockerArgs = @('run','--rm','--cap-drop','ALL',
         '-v', "$($tmpDir.FullName):/app",
         '-w', $workdir)
-    if ($env:NODE_AUTH_TOKEN) { $dockerArgs += @('-e','NODE_AUTH_TOKEN') }
-    if ($env:NPM_TOKEN)       { $dockerArgs += @('-e','NPM_TOKEN') }
+    # Forward registry tokens only on explicit opt-in — untrusted lifecycle
+    # scripts run in the container and could exfiltrate them otherwise.
+    if ($env:SAFE_PNPM_FORWARD_TOKENS -eq '1') {
+        if ($env:NODE_AUTH_TOKEN) { $dockerArgs += @('-e','NODE_AUTH_TOKEN') }
+        if ($env:NPM_TOKEN)       { $dockerArgs += @('-e','NPM_TOKEN') }
+    }
     $dockerArgs += @('safe-pnpm:latest','pnpm') + $args
 
     & docker @dockerArgs

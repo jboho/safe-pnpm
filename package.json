@@ -6,7 +6,7 @@
     "safe-pnpm": "./bin/safe-pnpm.js"
   },
   "scripts": {
-    "test": "node --test test/**/*.test.js",
+    "test": "node --test test/*.test.js",
     "lint": "oxlint . && biome lint .",
     "format": "biome format --write .",
     "check": "biome check --write ."
@@ -17,7 +17,7 @@
     "assets/"
   ],
   "dependencies": {
-    "@socketsecurity/cli": "^1.1.102"
+    "@socketsecurity/cli": "1.1.102"
   },
   "engines": {
     "node": ">=16"

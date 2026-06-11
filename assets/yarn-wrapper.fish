@@ -25,8 +25,12 @@ function yarn
             else
                 return 1
             end
-        else
+        else if test "$SAFE_PNPM_ALLOW_NATIVE_FALLBACK" = 1
+            echo "⚠️  safe-pnpm: Docker not running — SAFE_PNPM_ALLOW_NATIVE_FALLBACK=1 set, running native yarn." >&2
             command yarn $argv
+        else
+            echo "✗ safe-pnpm: Docker not running and no TTY — refusing native yarn (set SAFE_PNPM_ALLOW_NATIVE_FALLBACK=1 to override)." >&2
+            return 1
         end
         return
     end
@@ -40,11 +44,15 @@ function yarn
     end
 
     set -l docker_args run --rm --cap-drop ALL -v "$tmpdir:/app" -w /app
-    if test -n "$NODE_AUTH_TOKEN"
-        set docker_args $docker_args -e NODE_AUTH_TOKEN
-    end
-    if test -n "$NPM_TOKEN"
-        set docker_args $docker_args -e NPM_TOKEN
+    # Forward registry tokens only on explicit opt-in — untrusted lifecycle
+    # scripts run in the container and could exfiltrate them otherwise.
+    if test "$SAFE_PNPM_FORWARD_TOKENS" = 1
+        if test -n "$NODE_AUTH_TOKEN"
+            set docker_args $docker_args -e NODE_AUTH_TOKEN
+        end
+        if test -n "$NPM_TOKEN"
+            set docker_args $docker_args -e NPM_TOKEN
+        end
     end
     set docker_args $docker_args safe-pnpm:latest yarn
 
