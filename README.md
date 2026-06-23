@@ -1,5 +1,9 @@
 # @jboho/safe-pnpm
 
+[![CI](https://github.com/jboho/safe-npm/actions/workflows/ci.yml/badge.svg)](https://github.com/jboho/safe-npm/actions/workflows/ci.yml)
+[![Node >=16](https://img.shields.io/badge/node-%3E%3D16-brightgreen.svg)](https://nodejs.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+
 A Docker-based install isolation wrapper for **pnpm, npm, and yarn** that protects developer machines from malicious package lifecycle scripts (`postinstall`, `preinstall`, etc.).
 
 When you run `pnpm install`, `npm install`, or `yarn install`, the wrapper pre-scans for known CVEs and malicious packages, runs the install inside an ephemeral Docker container that only sees your manifests and lockfile (never source files, `.env`, or credentials), then copies `node_modules` back. All non-install commands pass through instantly with no overhead.
