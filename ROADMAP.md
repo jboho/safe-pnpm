@@ -3,7 +3,7 @@
 > Goal: A Docker-based package-manager wrapper (pnpm/npm/yarn) that sandboxes install scripts and pre-scans for malicious packages and CVEs.
 
 ## Current next action
-- [ ] Merge the idle `ci/publish-on-tags` branch (PR #3) to unblock tagged releases
+- [ ] Start M0 (Socket CLI wrap) — see Milestones below
 
 ## Milestones
 - [ ] M0 — Socket CLI wrap: accept a `--socket` flag, call `@socketsecurity/cli` for manifest analysis, gated on `SAFE_PNPM_ENABLE_SOCKET`
