@@ -18,7 +18,6 @@ yarn() {
     *) command yarn "$@"; return ;;
   esac
 
-  _safe_pkg_prescan "yarn" "yarn.lock" || return 1
-  _safe_pkg_run "yarn" "yarn.lock" "" \
+  _safe_pkg_dispatch "yarn" "yarn.lock" "" \
     "package.json yarn.lock .yarnrc .npmrc" "$@"
 }

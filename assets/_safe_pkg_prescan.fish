@@ -1,7 +1,7 @@
 # _safe_pkg_prescan.fish — shared prescan for safe-pnpm, safe-npm, safe-yarn (fish shell)
 # Place in ~/.config/fish/functions/ — fish autoloads it when _safe_pkg_prescan is first called.
 
-function _safe_pkg_prescan --argument manager lockfile
+function _safe_pkg_prescan --argument manager lockfile socket_flag
     if test -f $lockfile
         echo "→ $manager audit..." >&2
         switch $manager
@@ -40,8 +40,14 @@ function _safe_pkg_prescan --argument manager lockfile
         end
     end
 
+    # Socket is opt-in: enable globally with SAFE_PNPM_ENABLE_SOCKET=1 or
+    # per-invocation with `--socket`.
+    set -l socket_enabled 0
+    if test "$SAFE_PNPM_ENABLE_SOCKET" = "1"; or test "$socket_flag" = "1"
+        set socket_enabled 1
+    end
     set -l socket_cmd "$HOME/.safe-pnpm/socket"
-    if test -f $socket_cmd
+    if test "$socket_enabled" = "1"; and test -f $socket_cmd
         echo "→ Socket behavioral scan..." >&2
         $socket_cmd scan create . --no-spinner --no-banner >/dev/null 2>&1
         if test $status -ne 0

@@ -13,20 +13,31 @@ function npm
         return
     end
 
-    _safe_pkg_prescan npm package-lock.json
+    # Extract the safe-pnpm-only `--socket` flag so it never reaches npm.
+    set -l socket_flag 0
+    set -l pass_args
+    for a in $argv
+        if test "$a" = "--socket"
+            set socket_flag 1
+        else
+            set pass_args $pass_args $a
+        end
+    end
+
+    _safe_pkg_prescan npm package-lock.json $socket_flag
     or return 1
 
     if not docker info >/dev/null 2>&1
         if isatty stdin
             read --prompt-str "⚠️  safe-pnpm: Docker not running. Use native npm? [y/N] " _ans
             if string match -qi 'y*' "$_ans"
-                command npm $argv
+                command npm $pass_args
             else
                 return 1
             end
         else if test "$SAFE_PNPM_ALLOW_NATIVE_FALLBACK" = 1
             echo "⚠️  safe-pnpm: Docker not running — SAFE_PNPM_ALLOW_NATIVE_FALLBACK=1 set, running native npm." >&2
-            command npm $argv
+            command npm $pass_args
         else
             echo "✗ safe-pnpm: Docker not running and no TTY — refusing native npm (set SAFE_PNPM_ALLOW_NATIVE_FALLBACK=1 to override)." >&2
             return 1
@@ -55,7 +66,7 @@ function npm
     end
     set docker_args $docker_args safe-pnpm:latest npm
 
-    docker $docker_args $argv
+    docker $docker_args $pass_args
     set -l rc $status
 
     if test $rc -eq 0

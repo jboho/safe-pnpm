@@ -6,6 +6,10 @@ _SAFE_PKG_SHARED_LOADED=1
 _safe_pkg_prescan() {
   local manager="$1"
   local lockfile="$2"
+  # socket_flag is set to 1 by the wrapper when `--socket` was passed on the
+  # command line. Combined with SAFE_PNPM_ENABLE_SOCKET, it opts this run into
+  # the Socket behavioral scan (off by default).
+  local socket_flag="${3:-0}"
   local interactive=0
   [ -t 0 ] && interactive=1
 
@@ -40,8 +44,15 @@ _safe_pkg_prescan() {
     }
   fi
 
+  # Socket is opt-in: it needs an authenticated account and makes a network
+  # call, so it only runs when the user enables it globally
+  # (SAFE_PNPM_ENABLE_SOCKET=1) or per-invocation (`--socket`).
+  local socket_enabled=0
+  if [ "${SAFE_PNPM_ENABLE_SOCKET:-}" = "1" ] || [ "$socket_flag" = "1" ]; then
+    socket_enabled=1
+  fi
   local socket_cmd="$HOME/.safe-pnpm/socket"
-  if [ -f "$socket_cmd" ]; then
+  if [ "$socket_enabled" -eq 1 ] && [ -f "$socket_cmd" ]; then
     echo "→ Socket behavioral scan..." >&2
     "$socket_cmd" scan create . --no-spinner --no-banner 2>/dev/null || {
       if [ "$interactive" -eq 1 ]; then
@@ -53,6 +64,38 @@ _safe_pkg_prescan() {
       fi
     }
   fi
+}
+
+# _safe_pkg_dispatch manager lockfile workspace_file manifest_files [pkg-manager-args...]
+#   Shared entry point for the install-class path of every manager wrapper.
+#   Strips the safe-pnpm-only `--socket` flag from the pass-through args (so it
+#   never reaches the package manager), runs the prescan, then the sandboxed
+#   install with the remaining args.
+_safe_pkg_dispatch() {
+  local manager="$1"
+  local lockfile="$2"
+  local workspace_file="$3"
+  local manifest_files="$4"
+  shift 4
+
+  # Rotate positional params: pop each of the original args from the front and
+  # either consume `--socket` or push it to the back. After $count iterations,
+  # "$@" holds every arg except `--socket`, in order. This is space-safe in
+  # sh/bash/zsh without relying on word-splitting.
+  local socket_flag=0 count=$# arg
+  while [ "$count" -gt 0 ]; do
+    arg="$1"
+    shift
+    if [ "$arg" = "--socket" ]; then
+      socket_flag=1
+    else
+      set -- "$@" "$arg"
+    fi
+    count=$((count - 1))
+  done
+
+  _safe_pkg_prescan "$manager" "$lockfile" "$socket_flag" || return 1
+  _safe_pkg_run "$manager" "$lockfile" "$workspace_file" "$manifest_files" "$@"
 }
 
 # _safe_pkg_run manager lockfile workspace_file manifest_files [pkg-manager-args...]

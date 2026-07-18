@@ -17,7 +17,6 @@ npm() {
     *) command npm "$@"; return ;;
   esac
 
-  _safe_pkg_prescan "npm" "package-lock.json" || return 1
-  _safe_pkg_run "npm" "package-lock.json" "" \
+  _safe_pkg_dispatch "npm" "package-lock.json" "" \
     "package.json package-lock.json .npmrc" "$@"
 }

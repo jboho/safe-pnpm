@@ -5,7 +5,7 @@ if ($global:_SafePkgSharedLoaded) { return }
 $global:_SafePkgSharedLoaded = $true
 
 function _Safe_Pkg_Prescan {
-    param([string]$Manager, [string]$Lockfile)
+    param([string]$Manager, [string]$Lockfile, [switch]$Socket)
 
     if (Test-Path $Lockfile) {
         Write-Host "→ $Manager audit..." -ForegroundColor Cyan
@@ -31,8 +31,11 @@ function _Safe_Pkg_Prescan {
         }
     }
 
+    # Socket is opt-in: enable globally with SAFE_PNPM_ENABLE_SOCKET=1 or
+    # per-invocation with `--socket`.
+    $socketEnabled = ($env:SAFE_PNPM_ENABLE_SOCKET -eq '1') -or $Socket
     $socketCmd = Join-Path $HOME ".safe-pnpm\socket"
-    if (Test-Path $socketCmd) {
+    if ($socketEnabled -and (Test-Path $socketCmd)) {
         Write-Host "→ Socket behavioral scan..." -ForegroundColor Cyan
         & $socketCmd scan create . --no-spinner --no-banner 2>$null | Out-Null
         if ($LASTEXITCODE -ne 0) {

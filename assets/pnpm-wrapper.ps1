@@ -18,14 +18,18 @@ function global:pnpm {
         return
     }
 
-    if (-not (_Safe_Pkg_Prescan -Manager pnpm -Lockfile 'pnpm-lock.yaml')) { return }
+    # Extract the safe-pnpm-only --socket flag so it never reaches pnpm.
+    $socketFlag = $args -contains '--socket'
+    $passArgs = @($args | Where-Object { $_ -ne '--socket' })
+
+    if (-not (_Safe_Pkg_Prescan -Manager pnpm -Lockfile 'pnpm-lock.yaml' -Socket:$socketFlag)) { return }
 
     docker info 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) {
         $ans = Read-Host "⚠️  safe-pnpm: Docker not running. Use native pnpm? [y/N]"
         if ($ans -match '^[Yy]') {
             $pnpmExe = (Get-Command pnpm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
-            & $pnpmExe @args
+            & $pnpmExe @passArgs
         }
         return
     }
@@ -71,7 +75,7 @@ function global:pnpm {
         if ($env:NODE_AUTH_TOKEN) { $dockerArgs += @('-e','NODE_AUTH_TOKEN') }
         if ($env:NPM_TOKEN)       { $dockerArgs += @('-e','NPM_TOKEN') }
     }
-    $dockerArgs += @('safe-pnpm:latest','pnpm') + $args
+    $dockerArgs += @('safe-pnpm:latest','pnpm') + $passArgs
 
     & docker @dockerArgs
     $rc = $LASTEXITCODE

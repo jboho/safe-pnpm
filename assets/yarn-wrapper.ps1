@@ -19,14 +19,18 @@ function global:yarn {
         return
     }
 
-    if (-not (_Safe_Pkg_Prescan -Manager yarn -Lockfile 'yarn.lock')) { return }
+    # Extract the safe-pnpm-only --socket flag so it never reaches yarn.
+    $socketFlag = $args -contains '--socket'
+    $passArgs = @($args | Where-Object { $_ -ne '--socket' })
+
+    if (-not (_Safe_Pkg_Prescan -Manager yarn -Lockfile 'yarn.lock' -Socket:$socketFlag)) { return }
 
     docker info 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) {
         $ans = Read-Host "⚠️  safe-pnpm: Docker not running. Use native yarn? [y/N]"
         if ($ans -match '^[Yy]') {
             $yarnExe = (Get-Command yarn -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
-            & $yarnExe @args
+            & $yarnExe @passArgs
         }
         return
     }
@@ -46,7 +50,7 @@ function global:yarn {
         if ($env:NODE_AUTH_TOKEN) { $dockerArgs += @('-e','NODE_AUTH_TOKEN') }
         if ($env:NPM_TOKEN)       { $dockerArgs += @('-e','NPM_TOKEN') }
     }
-    $dockerArgs += @('safe-pnpm:latest','yarn') + $args
+    $dockerArgs += @('safe-pnpm:latest','yarn') + $passArgs
 
     & docker @dockerArgs
     $rc = $LASTEXITCODE

@@ -18,14 +18,18 @@ function global:npm {
         return
     }
 
-    if (-not (_Safe_Pkg_Prescan -Manager npm -Lockfile 'package-lock.json')) { return }
+    # Extract the safe-pnpm-only --socket flag so it never reaches npm.
+    $socketFlag = $args -contains '--socket'
+    $passArgs = @($args | Where-Object { $_ -ne '--socket' })
+
+    if (-not (_Safe_Pkg_Prescan -Manager npm -Lockfile 'package-lock.json' -Socket:$socketFlag)) { return }
 
     docker info 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) {
         $ans = Read-Host "⚠️  safe-pnpm: Docker not running. Use native npm? [y/N]"
         if ($ans -match '^[Yy]') {
             $npmExe = (Get-Command npm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
-            & $npmExe @args
+            & $npmExe @passArgs
         }
         return
     }
@@ -45,7 +49,7 @@ function global:npm {
         if ($env:NODE_AUTH_TOKEN) { $dockerArgs += @('-e','NODE_AUTH_TOKEN') }
         if ($env:NPM_TOKEN)       { $dockerArgs += @('-e','NPM_TOKEN') }
     }
-    $dockerArgs += @('safe-pnpm:latest','npm') + $args
+    $dockerArgs += @('safe-pnpm:latest','npm') + $passArgs
 
     & docker @dockerArgs
     $rc = $LASTEXITCODE

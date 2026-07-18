@@ -17,7 +17,6 @@ pnpm() {
     *) command pnpm "$@"; return ;;
   esac
 
-  _safe_pkg_prescan "pnpm" "pnpm-lock.yaml" || return 1
-  _safe_pkg_run "pnpm" "pnpm-lock.yaml" "pnpm-workspace.yaml" \
+  _safe_pkg_dispatch "pnpm" "pnpm-lock.yaml" "pnpm-workspace.yaml" \
     "package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc" "$@"
 }
