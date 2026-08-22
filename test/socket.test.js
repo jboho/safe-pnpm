@@ -6,21 +6,33 @@ const os = require("node:os");
 const path = require("node:path");
 
 const SHARED_SH = path.join(__dirname, "..", "assets", "_safe_pkg_shared.sh");
+const CLASSIFIER = path.join(__dirname, "..", "assets", "socket-classify.js");
 
-// Runs a bash snippet with HOME pointed at a fresh temp dir that contains a
-// stub `socket` binary. The stub records its invocation so tests can assert
-// whether the Socket behavioral scan actually ran.
-function runShared(snippet, env = {}) {
+// Runs a bash snippet with HOME pointed at a fresh temp dir containing a stub
+// `socket` binary and the real classifier. The stub records its invocation so
+// tests can assert whether the scan ran, and emits `socketStdout` with exit
+// code `socketExit` so tests can drive each outcome of the failure semantics.
+function runShared(snippet, env = {}, socketOpts = {}) {
+  const {
+    socketStdout = JSON.stringify({ ok: true, data: { healthy: true } }),
+    socketExit = 0,
+    installSocket = true,
+  } = socketOpts;
+
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "safe-pnpm-socket-"));
   const safeDir = path.join(home, ".safe-pnpm");
   fs.mkdirSync(safeDir, { recursive: true });
 
+  fs.copyFileSync(CLASSIFIER, path.join(safeDir, "socket-classify.js"));
+
   const marker = path.join(safeDir, "socket-invoked");
-  fs.writeFileSync(
-    path.join(safeDir, "socket"),
-    `#!/bin/sh\necho "$@" > "${marker}"\nexit 0\n`,
-    { mode: 0o755 },
-  );
+  if (installSocket) {
+    fs.writeFileSync(
+      path.join(safeDir, "socket"),
+      `#!/bin/sh\necho "$@" > "${marker}"\ncat <<'SOCKET_EOF'\n${socketStdout}\nSOCKET_EOF\nexit ${socketExit}\n`,
+      { mode: 0o755 },
+    );
+  }
 
   const script = `set -e\nsource "${SHARED_SH}"\n${snippet}\n`;
   const r = spawnSync("bash", ["-c", script], {
@@ -92,4 +104,109 @@ echo "ARGS=$(cat "$HOME/.safe-pnpm/run-args")"
   const { stdout } = runShared(snippet);
   assert.match(stdout, /FLAG=0/);
   assert.match(stdout, /ARGS=install lodash/);
+});
+
+// --- Failure semantics (M1) -------------------------------------------------
+//
+// The scan has three outcomes and safe-pnpm responds differently to each:
+// pass, findings (scan ran, unhealthy report) and failure (scan could not run).
+// All tests below run without a TTY, i.e. the non-interactive path.
+
+const PRESCAN = `_safe_pkg_prescan pnpm nonexistent.lock 1`;
+
+test("Socket scan passes a healthy report through", () => {
+  const { status, stderr } = runShared(PRESCAN);
+  assert.equal(status, 0);
+  assert.doesNotMatch(stderr, /⚠️/);
+});
+
+test("Socket scan requests a report so findings can surface at all", () => {
+  const { invokedArgs } = runShared(PRESCAN);
+  assert.match(invokedArgs, /--report/);
+  assert.match(invokedArgs, /--json/);
+});
+
+test("findings warn and continue in non-interactive mode", () => {
+  const { status, stderr } = runShared(PRESCAN, {}, {
+    socketStdout: JSON.stringify({ ok: true, data: { healthy: false } }),
+    socketExit: 1,
+  });
+  assert.equal(status, 0);
+  assert.match(stderr, /policy violations/i);
+  assert.match(stderr, /non-interactive/);
+});
+
+test("findings block under SAFE_PNPM_SOCKET_STRICT=1", () => {
+  const { status, stderr } = runShared(
+    PRESCAN,
+    { SAFE_PNPM_SOCKET_STRICT: "1" },
+    {
+      socketStdout: JSON.stringify({ ok: true, data: { healthy: false } }),
+      socketExit: 1,
+    },
+  );
+  assert.notEqual(status, 0);
+  assert.match(stderr, /Blocking/);
+});
+
+// A scan that could not run is not evidence of a problem, so by default it must
+// not break the install — the CVE and Shai Hulud layers have already run.
+test("a failed scan warns and continues by default", () => {
+  const { status, stderr } = runShared(PRESCAN, {}, {
+    socketStdout: JSON.stringify({ ok: false, cause: "401 Unauthorized" }),
+    socketExit: 1,
+  });
+  assert.equal(status, 0);
+  assert.match(stderr, /could not run/i);
+  assert.match(stderr, /Continuing without Socket results/);
+});
+
+test("a failed scan blocks under SAFE_PNPM_SOCKET_STRICT=1", () => {
+  const { status, stderr } = runShared(
+    PRESCAN,
+    { SAFE_PNPM_SOCKET_STRICT: "1" },
+    {
+      socketStdout: JSON.stringify({ ok: false, cause: "401 Unauthorized" }),
+      socketExit: 1,
+    },
+  );
+  assert.notEqual(status, 0);
+  assert.match(stderr, /Blocking/);
+});
+
+test("an unconfigured Socket (exit 2) warns with a login hint, not a findings claim", () => {
+  const { status, stderr } = runShared(PRESCAN, {}, {
+    socketStdout: "",
+    socketExit: 2,
+  });
+  assert.equal(status, 0);
+  assert.match(stderr, /socket login/);
+  assert.doesNotMatch(stderr, /policy violations/i);
+});
+
+test("a missing Socket install warns by default but blocks under strict", () => {
+  const lenient = runShared(PRESCAN, {}, { installSocket: false });
+  assert.equal(lenient.status, 0);
+  assert.match(lenient.stderr, /not installed/);
+
+  const strict = runShared(
+    PRESCAN,
+    { SAFE_PNPM_SOCKET_STRICT: "1" },
+    { installSocket: false },
+  );
+  assert.notEqual(strict.status, 0);
+  assert.match(strict.stderr, /not installed/);
+});
+
+test("SAFE_PNPM_SOCKET_STRICT has no effect when Socket is not enabled", () => {
+  const { status, invoked } = runShared(
+    `_safe_pkg_prescan pnpm nonexistent.lock 0`,
+    { SAFE_PNPM_SOCKET_STRICT: "1" },
+    {
+      socketStdout: JSON.stringify({ ok: false, cause: "401 Unauthorized" }),
+      socketExit: 1,
+    },
+  );
+  assert.equal(invoked, false);
+  assert.equal(status, 0);
 });

@@ -51,19 +51,89 @@ _safe_pkg_prescan() {
   if [ "${SAFE_PNPM_ENABLE_SOCKET:-}" = "1" ] || [ "$socket_flag" = "1" ]; then
     socket_enabled=1
   fi
-  local socket_cmd="$HOME/.safe-pnpm/socket"
-  if [ "$socket_enabled" -eq 1 ] && [ -f "$socket_cmd" ]; then
-    echo "→ Socket behavioral scan..." >&2
-    "$socket_cmd" scan create . --no-spinner --no-banner 2>/dev/null || {
-      if [ "$interactive" -eq 1 ]; then
-        printf "⚠️  Socket flagged issues. Continue anyway? [y/N] " >&2
-        read -r _ans
-        case "$_ans" in [Yy]*) ;; *) return 1 ;; esac
-      else
-        echo "⚠️  Socket flagged issues — continuing in non-interactive mode." >&2
-      fi
-    }
+  if [ "$socket_enabled" -eq 1 ]; then
+    _safe_pkg_socket_scan "$interactive" || return 1
   fi
+}
+
+# _safe_pkg_socket_scan interactive
+#   Runs the Socket behavioral scan and applies safe-pnpm's failure semantics.
+#
+#   Three outcomes are distinguished, because "Socket says these packages are
+#   bad" and "Socket could not tell us anything" warrant different responses:
+#
+#     pass     — continue.
+#     findings — the scan ran and the report is unhealthy. Prompt when
+#                interactive; warn and continue when not, matching the audit and
+#                Shai Hulud layers.
+#     failure  — the scan could not run (no token, network/API error, crash).
+#                Warn and continue by default: Socket is an opt-in third layer
+#                and the CVE + supply chain layers have already run, so an
+#                expired token or an offline laptop should not break installs.
+#
+#   SAFE_PNPM_SOCKET_STRICT=1 turns both findings and failures into hard blocks,
+#   which is the setting for CI, where "the scan never ran" must not silently
+#   look like a pass.
+_safe_pkg_socket_scan() {
+  local interactive="$1"
+  local strict=0
+  [ "${SAFE_PNPM_SOCKET_STRICT:-}" = "1" ] && strict=1
+
+  local socket_cmd="$HOME/.safe-pnpm/socket"
+  local classifier="$HOME/.safe-pnpm/socket-classify.js"
+
+  if [ ! -f "$socket_cmd" ] || [ ! -f "$classifier" ]; then
+    # The scan was explicitly requested but cannot run at all.
+    if [ "$strict" -eq 1 ]; then
+      echo "✗ Socket scan requested but not installed — run \`safe-pnpm setup\` (SAFE_PNPM_SOCKET_STRICT=1)." >&2
+      return 1
+    fi
+    echo "⚠️  Socket scan requested but not installed — skipping. Run \`safe-pnpm setup\`." >&2
+    return 0
+  fi
+
+  echo "→ Socket behavioral scan..." >&2
+
+  local out rc verdict reason
+  out=$(mktemp)
+  # --report waits for the scan to finish and applies the org policy; without it
+  # `scan create` only uploads the manifest and can never surface findings.
+  "$socket_cmd" scan create . --report --json --no-spinner --no-banner \
+    >"$out" 2>/dev/null
+  rc=$?
+
+  reason=$(node "$classifier" "$out" "$rc" 2>&1)
+  verdict=$?
+  rm -f "$out"
+
+  case "$verdict" in
+    0)
+      return 0
+      ;;
+    3)
+      if [ "$strict" -eq 1 ]; then
+        echo "✗ $reason Blocking (SAFE_PNPM_SOCKET_STRICT=1)." >&2
+        return 1
+      fi
+      if [ "$interactive" -eq 1 ]; then
+        printf "⚠️  %s Continue anyway? [y/N] " "$reason" >&2
+        read -r _ans
+        case "$_ans" in [Yy]*) return 0 ;; *) return 1 ;; esac
+      fi
+      echo "⚠️  $reason Continuing in non-interactive mode." >&2
+      return 0
+      ;;
+    *)
+      if [ "$strict" -eq 1 ]; then
+        echo "✗ $reason Blocking (SAFE_PNPM_SOCKET_STRICT=1)." >&2
+        return 1
+      fi
+      # A failed scan is not evidence of a problem, so it never prompts — it
+      # only tells the user the layer did not run.
+      echo "⚠️  $reason Continuing without Socket results." >&2
+      return 0
+      ;;
+  esac
 }
 
 # _safe_pkg_dispatch manager lockfile workspace_file manifest_files [pkg-manager-args...]

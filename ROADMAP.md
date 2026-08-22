@@ -3,11 +3,11 @@
 > Goal: A Docker-based package-manager wrapper (pnpm/npm/yarn) that sandboxes install scripts and pre-scans for malicious packages and CVEs.
 
 ## Current next action
-- [ ] Start M1 (Failure semantics) — see Milestones below
+- [ ] Start M2 (Tests + docs) — see Milestones below
 
 ## Milestones
 - [x] M0 — Socket CLI wrap: accept a `--socket` flag, call `@socketsecurity/cli` for manifest analysis, gated on `SAFE_PNPM_ENABLE_SOCKET`
-- [ ] M1 — Failure semantics: define warn-vs-block behavior when a Socket scan fails; document in docs/socket.md
+- [x] M1 — Failure semantics: findings vs scan-failure are now distinguished via `--report --json` and `socket-classify.js`; failures warn by default, `SAFE_PNPM_SOCKET_STRICT=1` blocks both. Documented in docs/socket.md
 - [ ] M2 — Tests + docs: cover the Socket flow with tests; add examples to README and CONTRIBUTING.md
 
 ## Notes
