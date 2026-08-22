@@ -98,16 +98,39 @@ _safe_pkg_dispatch() {
   _safe_pkg_run "$manager" "$lockfile" "$workspace_file" "$manifest_files" "$@"
 }
 
+# _safe_pkg_strip_npmrc_auth path
+#   Remove only credential-bearing lines from a copied .npmrc, leaving registry
+#   URLs, scopes and hoisting config intact. Used between the fetch and build
+#   phases so build-time lifecycle scripts never see a registry token.
+_safe_pkg_strip_npmrc_auth() {
+  local f="$1"
+  [ -f "$f" ] || return 0
+  # Matches _authToken, _auth, _password, and username lines in any scope/host
+  # form (e.g. //registry.example.com/:_authToken=...).
+  grep -viE '(_authtoken|_auth|_password|username)[[:space:]]*=' "$f" > "$f.clean" 2>/dev/null || : > "$f.clean"
+  mv "$f.clean" "$f"
+}
+
 # _safe_pkg_run manager lockfile workspace_file manifest_files [pkg-manager-args...]
 #   manager        — binary name (pnpm, npm, yarn)
 #   lockfile       — lock file name (e.g. pnpm-lock.yaml)
 #   workspace_file — sidecar workspace file to walk up for, or "" for none
 #   manifest_files — space-separated list of files to copy into the sandbox
 #   remaining args — passed through to the package manager inside Docker
+#
+# Two-phase isolation:
+#   Phase 1 (fetch)  — network on, registry token available, --ignore-scripts.
+#                      Resolves and downloads every dependency into a store under
+#                      /app. No package code runs, so the token cannot leak.
+#   Phase 2 (build)  — network off (--network none), token gone, .npmrc auth
+#                      lines stripped. Lifecycle/build scripts run here against
+#                      the already-populated store, with nothing left to steal.
+#   Set SAFE_PNPM_BUILD_NETWORK=1 to keep network in phase 2 for packages whose
+#   build genuinely needs it (e.g. esbuild, sharp); the token is still withheld.
 _safe_pkg_run() {
   # zsh does not word-split unquoted parameters by default; the manifest list
-  # ($manifest_files) and the docker env flags ($extra_env) below both rely on
-  # sh-style splitting. localoptions reverts this when the function returns.
+  # ($manifest_files) and the docker flag lists below all rely on sh-style
+  # splitting. localoptions reverts this when the function returns.
   [ -n "${ZSH_VERSION:-}" ] && setopt localoptions sh_word_split
 
   local manager="$1"
@@ -115,6 +138,7 @@ _safe_pkg_run() {
   local workspace_file="$3"
   local manifest_files="$4"
   shift 4
+  local subcmd="${1:-}"
 
   if ! docker info > /dev/null 2>&1; then
     if [ ! -t 0 ]; then
@@ -173,31 +197,68 @@ _safe_pkg_run() {
   )
 
   local workdir="/app${rel_path:+/$rel_path}"
-  # Registry tokens are forwarded into the sandbox only on explicit opt-in.
-  # Untrusted install lifecycle scripts run inside the container and could
-  # otherwise read and exfiltrate them. Use read-only, registry-scoped tokens.
-  local extra_env=""
-  if [ "${SAFE_PNPM_FORWARD_TOKENS:-}" = "1" ]; then
-    [ -n "${NODE_AUTH_TOKEN:-}" ] && extra_env="$extra_env -e NODE_AUTH_TOKEN"
-    [ -n "${NPM_TOKEN:-}" ]       && extra_env="$extra_env -e NPM_TOKEN"
-  fi
 
+  # Per-manager store/cache kept under /app so phase 2 resolves fully offline,
+  # plus the phase-1 fetch flags and the phase-2 build command.
+  local store_flag phase2_cmd
+  case "$manager" in
+    pnpm) store_flag="--config.store-dir=/app/.safe-store"
+          phase2_cmd="install --offline --trust-lockfile $store_flag" ;;
+    npm)  store_flag="--cache /app/.safe-store"
+          phase2_cmd="rebuild $store_flag" ;;
+    yarn) store_flag="--cache-folder /app/.safe-store"
+          phase2_cmd="install --offline --force $store_flag" ;;
+    *)    store_flag=""; phase2_cmd="" ;;
+  esac
+
+  # Tokens are forwarded only into the fetch phase, where --ignore-scripts
+  # guarantees no package code runs. They are never present during phase 2.
+  local token_env=""
+  [ -n "${NODE_AUTH_TOKEN:-}" ] && token_env="$token_env -e NODE_AUTH_TOKEN"
+  [ -n "${NPM_TOKEN:-}" ]       && token_env="$token_env -e NPM_TOKEN"
+
+  # --- Phase 1: fetch (network on, token available, scripts disabled) ---
   # shellcheck disable=SC2086
   docker run --rm --cap-drop ALL \
     -v "${tmpdir}:/app" \
     -w "$workdir" \
-    $extra_env \
-    safe-pnpm:latest "$manager" "$@"
-  local rc=$?
+    $token_env \
+    safe-pnpm:latest "$manager" "$@" --ignore-scripts $store_flag
+  local phase1_rc=$?
+  local rc=$phase1_rc
 
-  if [ "$rc" -eq 0 ]; then
+  # pnpm `fetch` only populates the store and never builds node_modules; there
+  # is nothing to run scripts for, so skip the build phase entirely.
+  local run_build=1
+  { [ "$manager" = "pnpm" ] && [ "$subcmd" = "fetch" ]; } && run_build=0
+
+  if [ "$phase1_rc" -eq 0 ] && [ "$run_build" -eq 1 ] && [ -n "$phase2_cmd" ]; then
+    # Strip registry credentials before any build script can run.
+    _safe_pkg_strip_npmrc_auth "$tmpdir/.npmrc"
+
+    local net_flag="--network none"
+    [ "${SAFE_PNPM_BUILD_NETWORK:-}" = "1" ] && net_flag=""
+
+    # --- Phase 2: build (no token, no .npmrc auth, network off by default) ---
+    # shellcheck disable=SC2086
+    docker run --rm --cap-drop ALL $net_flag \
+      -v "${tmpdir}:/app" \
+      -w "$workdir" \
+      safe-pnpm:latest "$manager" $phase2_cmd
+    rc=$?
+  fi
+
+  # Copy results back whenever the fetch succeeded — the dependency tree exists
+  # even if a build script later failed, and the non-zero rc still surfaces. A
+  # failed fetch leaves a partial/empty tree, so nothing is copied there.
+  if [ "$phase1_rc" -eq 0 ]; then
     if [ -d "$tmpdir/node_modules" ]; then
       rm -rf "${workspace_root}/node_modules"
       cp -r "$tmpdir/node_modules" "${workspace_root}/node_modules"
     fi
     [ -f "$tmpdir/$lockfile" ] && cp "$tmpdir/$lockfile" "${workspace_root}/$lockfile"
     if [ -n "$workspace_file" ] && [ -f "${workspace_root}/$workspace_file" ]; then
-      find "$tmpdir" -mindepth 2 -name node_modules -type d | while read -r nm; do
+      find "$tmpdir" -mindepth 2 -name node_modules -type d -not -path "*/.safe-store/*" | while read -r nm; do
         rel="${nm#${tmpdir}/}"
         rm -rf "${workspace_root}/${rel}"
         mkdir -p "$(dirname "${workspace_root}/${rel}")"

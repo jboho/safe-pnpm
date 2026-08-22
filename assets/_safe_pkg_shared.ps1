@@ -46,3 +46,14 @@ function _Safe_Pkg_Prescan {
 
     return $true
 }
+
+# Remove only credential-bearing lines from a copied .npmrc, leaving registry
+# URLs, scopes and hoisting config intact. Used between the fetch and build
+# phases so build-time lifecycle scripts never see a registry token.
+function _Safe_Pkg_Strip_NpmrcAuth {
+    param([string]$Path)
+    if (-not (Test-Path $Path)) { return }
+    (Get-Content $Path) |
+        Where-Object { $_ -notmatch '(?i)(_authtoken|_auth|_password|username)\s*=' } |
+        Set-Content $Path
+}

@@ -76,8 +76,9 @@ When you run an install-class command:
 
 1. **Pre-install scan** — manager-native audit (`pnpm audit`, `npm audit`, `yarn audit`), Shai Hulud 2 malicious package check, and [Socket behavioral analysis](./docs/socket.md) if configured.
 2. **Copy only manifests** — `package.json`, the lockfile, workspace files, and `.npmrc` / `.yarnrc` go into a temp directory. Source files, `.env`, and secrets never leave the host.
-3. **Run in Docker** — ephemeral container, `--cap-drop ALL`, no home directory or credential access.
-4. **Copy results back** — `node_modules` and the updated lockfile land in your project. The container is discarded.
+3. **Fetch in Docker** — ephemeral container, `--cap-drop ALL`, `--ignore-scripts`. Dependencies download with any registry token available but no package code running.
+4. **Build in Docker** — a second container with `--network none` and the token removed runs any lifecycle/build scripts against the downloaded store — nothing to steal, nowhere to send it. See [the two-phase model](./docs/security.md#two-phase-install).
+5. **Copy results back** — `node_modules` and the updated lockfile land in your project. The containers are discarded.
 
 ---
 
@@ -103,16 +104,22 @@ yarn.cmd install
 
 ## Private Registries
 
-Registry tokens are **not** forwarded into the sandbox by default — a malicious
-install lifecycle script running in the container could otherwise read and
-exfiltrate them. To enable forwarding for private installs, opt in:
+Private and scoped registries work out of the box. Configure your registry the
+usual way — `.npmrc` (including `${NPM_TOKEN}` interpolation) or a `NODE_AUTH_TOKEN`
+/ `NPM_TOKEN` environment variable — and install normally:
 
 ```sh
-SAFE_PNPM_FORWARD_TOKENS=1 pnpm install
+export NPM_TOKEN=your-read-only-token
+pnpm install
 ```
 
-When set, `NODE_AUTH_TOKEN` and `NPM_TOKEN` are passed into the container if
-present in your environment. Prefer read-only, registry-scoped tokens.
+The token is available only during the script-free **fetch** phase and is
+withheld (along with any `.npmrc` credential lines) during the **build** phase,
+so untrusted lifecycle scripts never see it. The old `SAFE_PNPM_FORWARD_TOKENS`
+opt-in is obsolete. See [private-registry.md](./docs/private-registry.md).
+
+If a package's build step genuinely needs network (e.g. `esbuild`, `sharp`), set
+`SAFE_PNPM_BUILD_NETWORK=1`; the token is still withheld.
 
 ---
 
@@ -143,6 +150,8 @@ scripts on the host):
 ## Further Reading
 
 - [Security model — what's protected and what isn't](./docs/security.md)
+- [Private registries — token-safe private/scoped installs](./docs/private-registry.md)
+- [ADR 0001 — two-phase install design and findings](./docs/decisions/0001-two-phase-private-registry.md)
 - [Performance — overhead numbers and when they matter](./docs/performance.md)
 - [Socket.dev behavioral scanning setup](./docs/socket.md)
 - [Contributing](./CONTRIBUTING.md)

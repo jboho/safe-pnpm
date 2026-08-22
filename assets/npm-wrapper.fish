@@ -53,23 +53,41 @@ function npm
         end
     end
 
-    set -l docker_args run --rm --cap-drop ALL -v "$tmpdir:/app" -w /app
-    # Forward registry tokens only on explicit opt-in — untrusted lifecycle
-    # scripts run in the container and could exfiltrate them otherwise.
-    if test "$SAFE_PNPM_FORWARD_TOKENS" = 1
-        if test -n "$NODE_AUTH_TOKEN"
-            set docker_args $docker_args -e NODE_AUTH_TOKEN
-        end
-        if test -n "$NPM_TOKEN"
-            set docker_args $docker_args -e NPM_TOKEN
-        end
-    end
-    set docker_args $docker_args safe-pnpm:latest npm
+    # Per-manager cache kept under /app so phase 2 resolves fully offline.
+    set -l store_flag --cache /app/.safe-store
 
-    docker $docker_args $pass_args
+    # Tokens are forwarded only into the fetch phase, where --ignore-scripts
+    # guarantees no package code runs. They are never present during phase 2.
+    set -l token_env
+    if test -n "$NODE_AUTH_TOKEN"
+        set token_env $token_env -e NODE_AUTH_TOKEN
+    end
+    if test -n "$NPM_TOKEN"
+        set token_env $token_env -e NPM_TOKEN
+    end
+
+    # Phase 1: fetch (network on, token available, scripts disabled).
+    docker run --rm --cap-drop ALL -v "$tmpdir:/app" -w /app $token_env \
+        safe-pnpm:latest npm $pass_args --ignore-scripts $store_flag
     set -l rc $status
 
     if test $rc -eq 0
+        # Strip registry credentials before any build script can run.
+        if test -f "$tmpdir/.npmrc"
+            grep -viE '(_authtoken|_auth|_password|username)[[:space:]]*=' "$tmpdir/.npmrc" >"$tmpdir/.npmrc.clean" 2>/dev/null
+            mv "$tmpdir/.npmrc.clean" "$tmpdir/.npmrc"
+        end
+
+        set -l net_flag --network none
+        if test "$SAFE_PNPM_BUILD_NETWORK" = 1
+            set net_flag
+        end
+
+        # Phase 2: build (no token, no .npmrc auth, network off by default).
+        docker run --rm --cap-drop ALL $net_flag -v "$tmpdir:/app" -w /app \
+            safe-pnpm:latest npm rebuild $store_flag
+        set rc $status
+
         if test -d "$tmpdir/node_modules"
             rm -rf node_modules
             cp -r "$tmpdir/node_modules" node_modules
