@@ -257,12 +257,20 @@ _safe_pkg_run() {
       cp -r "$tmpdir/node_modules" "${workspace_root}/node_modules"
     fi
     [ -f "$tmpdir/$lockfile" ] && cp "$tmpdir/$lockfile" "${workspace_root}/$lockfile"
+    # add/remove/update rewrite the manifest inside the sandbox; sync it back.
+    [ -f "$tmpdir/package.json" ] && cp "$tmpdir/package.json" "${workspace_root}/package.json"
     if [ -n "$workspace_file" ] && [ -f "${workspace_root}/$workspace_file" ]; then
       find "$tmpdir" -mindepth 2 -name node_modules -type d -not -path "*/.safe-store/*" | while read -r nm; do
         rel="${nm#${tmpdir}/}"
         rm -rf "${workspace_root}/${rel}"
         mkdir -p "$(dirname "${workspace_root}/${rel}")"
         cp -r "$nm" "${workspace_root}/${rel}"
+      done
+      # Sync back any workspace-member manifests the command may have rewritten.
+      find "$tmpdir" -mindepth 2 -name package.json -not -path "*/node_modules/*" -not -path "*/.safe-store/*" | while read -r pkg; do
+        rel="${pkg#${tmpdir}/}"
+        mkdir -p "$(dirname "${workspace_root}/${rel}")"
+        cp "$pkg" "${workspace_root}/${rel}"
       done
     fi
   fi

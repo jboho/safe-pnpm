@@ -57,10 +57,12 @@ echo "$n" > "${log}/count"
 echo "$@" > "${log}/run$n.args"
 [ -f "$src/.npmrc" ] && cp "$src/.npmrc" "${log}/run$n.npmrc" || : > "${log}/run$n.npmrc"
 
-# Phase 1 populates node_modules so the copy-back has something to move.
+# Phase 1 populates node_modules and rewrites the manifest, as a real
+# resolving install would, so the copy-back has something to move.
 if [ "$n" = "1" ]; then
   mkdir -p "$src/node_modules/dep"
   echo "module.exports=1" > "$src/node_modules/dep/index.js"
+  echo '{"name":"fixture","version":"1.0.0","private":true,"dependencies":{"added-by-sandbox":"1.0.0"}}' > "$src/package.json"
 fi
 exit 0
 `;
@@ -134,6 +136,16 @@ for (const [manager, wrapperFile] of [
     assert.ok(
       fs.existsSync(path.join(proj, "node_modules", "dep", "index.js")),
       "installed tree must land in the project",
+    );
+  });
+
+  test(`${manager}: a rewritten package.json is copied back to the project`, () => {
+    const { proj } = runWrapper(manager, wrapperFile);
+    const pkg = fs.readFileSync(path.join(proj, "package.json"), "utf8");
+    assert.match(
+      pkg,
+      /added-by-sandbox/,
+      "add/remove manifest changes must land in the project",
     );
   });
 }

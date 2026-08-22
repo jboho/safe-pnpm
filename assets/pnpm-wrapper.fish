@@ -124,12 +124,22 @@ function pnpm
         if test -f "$tmpdir/pnpm-lock.yaml"
             cp "$tmpdir/pnpm-lock.yaml" "$workspace_root/pnpm-lock.yaml"
         end
+        # add/remove/update rewrite the manifest inside the sandbox; sync it back.
+        if test -f "$tmpdir/package.json"
+            cp "$tmpdir/package.json" "$workspace_root/package.json"
+        end
         if test -f "$workspace_root/pnpm-workspace.yaml"
             for nm in (find $tmpdir -mindepth 2 -name node_modules -type d -not -path "*/.safe-store/*")
                 set -l rel (string replace -- "$tmpdir/" "" $nm)
                 rm -rf "$workspace_root/$rel"
                 mkdir -p (dirname "$workspace_root/$rel")
                 cp -r $nm "$workspace_root/$rel"
+            end
+            # Sync back any workspace-member manifests the command may have rewritten.
+            for pkg in (find $tmpdir -mindepth 2 -name package.json -not -path "*/node_modules/*" -not -path "*/.safe-store/*")
+                set -l rel (string replace -- "$tmpdir/" "" $pkg)
+                mkdir -p (dirname "$workspace_root/$rel")
+                cp $pkg "$workspace_root/$rel"
             end
         end
     end

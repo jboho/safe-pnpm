@@ -96,6 +96,10 @@ function yarn
         if test -f "$tmpdir/yarn.lock"
             cp "$tmpdir/yarn.lock" yarn.lock
         end
+        # add/remove/upgrade rewrite the manifest inside the sandbox; sync it back.
+        if test -f "$tmpdir/package.json"
+            cp "$tmpdir/package.json" package.json
+        end
     end
 
     rm -rf $tmpdir

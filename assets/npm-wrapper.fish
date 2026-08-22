@@ -95,6 +95,10 @@ function npm
         if test -f "$tmpdir/package-lock.json"
             cp "$tmpdir/package-lock.json" package-lock.json
         end
+        # add/remove/update rewrite the manifest inside the sandbox; sync it back.
+        if test -f "$tmpdir/package.json"
+            cp "$tmpdir/package.json" package.json
+        end
     end
 
     rm -rf $tmpdir

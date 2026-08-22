@@ -105,17 +105,33 @@ function global:pnpm {
         }
         $srcLock = Join-Path $tmpDir.FullName "pnpm-lock.yaml"
         if (Test-Path $srcLock) { Copy-Item $srcLock $workspaceRoot }
+        # add/remove/update rewrite the manifest inside the sandbox; sync it back.
+        $srcManifest = Join-Path $tmpDir.FullName "package.json"
+        if (Test-Path $srcManifest) { Copy-Item $srcManifest $workspaceRoot }
 
         if (Test-Path (Join-Path $workspaceRoot "pnpm-workspace.yaml")) {
+            $storeSep = [IO.Path]::DirectorySeparatorChar + '.safe-store' + [IO.Path]::DirectorySeparatorChar
             Get-ChildItem -Recurse -Directory -Filter "node_modules" -Path $tmpDir.FullName |
                 Where-Object { $_.FullName -ne $srcModules -and
-                               $_.FullName -notmatch [regex]::Escape([IO.Path]::DirectorySeparatorChar + '.safe-store' + [IO.Path]::DirectorySeparatorChar) } |
+                               $_.FullName -notmatch [regex]::Escape($storeSep) } |
                 ForEach-Object {
                     $rel = $_.FullName.Substring($tmpDir.FullName.Length).TrimStart([char]'\', [char]'/')
                     $dest = Join-Path $workspaceRoot $rel
                     if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
                     New-Item -Type Directory -Force (Split-Path $dest -Parent) | Out-Null
                     Copy-Item -Recurse $_.FullName $dest
+                }
+            # Sync back any workspace-member manifests the command may have rewritten.
+            $nmSep = [IO.Path]::DirectorySeparatorChar + 'node_modules' + [IO.Path]::DirectorySeparatorChar
+            Get-ChildItem -Recurse -Filter "package.json" -Path $tmpDir.FullName |
+                Where-Object { $_.FullName -ne $srcManifest -and
+                               $_.FullName -notmatch [regex]::Escape($nmSep) -and
+                               $_.FullName -notmatch [regex]::Escape($storeSep) } |
+                ForEach-Object {
+                    $rel = $_.FullName.Substring($tmpDir.FullName.Length).TrimStart([char]'\', [char]'/')
+                    $dest = Join-Path $workspaceRoot $rel
+                    New-Item -Type Directory -Force (Split-Path $dest -Parent) | Out-Null
+                    Copy-Item $_.FullName $dest
                 }
         }
     }

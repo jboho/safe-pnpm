@@ -76,6 +76,9 @@ function global:yarn {
         }
         $srcLock = Join-Path $tmpDir.FullName "yarn.lock"
         if (Test-Path $srcLock) { Copy-Item $srcLock (Get-Location).Path }
+        # add/remove/upgrade rewrite the manifest inside the sandbox; sync it back.
+        $srcManifest = Join-Path $tmpDir.FullName "package.json"
+        if (Test-Path $srcManifest) { Copy-Item $srcManifest (Get-Location).Path }
     }
 
     Remove-Item -Recurse -Force $tmpDir.FullName
