@@ -66,21 +66,37 @@ function global:pnpm {
     Pop-Location
 
     $workdir = if ($relPath) { "/app/$($relPath -replace '\\','/')" } else { "/app" }
-    $dockerArgs = @('run','--rm','--cap-drop','ALL',
-        '-v', "$($tmpDir.FullName):/app",
-        '-w', $workdir)
-    # Forward registry tokens only on explicit opt-in — untrusted lifecycle
-    # scripts run in the container and could exfiltrate them otherwise.
-    if ($env:SAFE_PNPM_FORWARD_TOKENS -eq '1') {
-        if ($env:NODE_AUTH_TOKEN) { $dockerArgs += @('-e','NODE_AUTH_TOKEN') }
-        if ($env:NPM_TOKEN)       { $dockerArgs += @('-e','NPM_TOKEN') }
-    }
-    $dockerArgs += @('safe-pnpm:latest','pnpm') + $passArgs
+    # Per-manager store kept under /app so phase 2 resolves fully offline.
+    $storeFlag = @('--config.store-dir=/app/.safe-store')
 
-    & docker @dockerArgs
+    # Tokens are forwarded only into the fetch phase, where --ignore-scripts
+    # guarantees no package code runs. They are never present during phase 2.
+    $tokenEnv = @()
+    if ($env:NODE_AUTH_TOKEN) { $tokenEnv += @('-e','NODE_AUTH_TOKEN') }
+    if ($env:NPM_TOKEN)       { $tokenEnv += @('-e','NPM_TOKEN') }
+
+    # Phase 1: fetch (network on, token available, scripts disabled).
+    $p1 = @('run','--rm','--cap-drop','ALL','-v',"$($tmpDir.FullName):/app",'-w',$workdir) +
+        $tokenEnv + @('safe-pnpm:latest','pnpm') + $passArgs + @('--ignore-scripts') + $storeFlag
+    & docker @p1
     $rc = $LASTEXITCODE
 
     if ($rc -eq 0) {
+        # `pnpm fetch` only populates the store; there is nothing to build.
+        if ($cmd -ne 'fetch') {
+            # Strip registry credentials before any build script can run.
+            _Safe_Pkg_Strip_NpmrcAuth (Join-Path $tmpDir.FullName '.npmrc')
+
+            $netFlag = @('--network','none')
+            if ($env:SAFE_PNPM_BUILD_NETWORK -eq '1') { $netFlag = @() }
+
+            # Phase 2: build (no token, no .npmrc auth, network off by default).
+            $p2 = @('run','--rm','--cap-drop','ALL') + $netFlag +
+                @('-v',"$($tmpDir.FullName):/app",'-w',$workdir,'safe-pnpm:latest','pnpm','install','--offline','--trust-lockfile') + $storeFlag
+            & docker @p2
+            $rc = $LASTEXITCODE
+        }
+
         $srcModules = Join-Path $tmpDir.FullName "node_modules"
         if (Test-Path $srcModules) {
             $destModules = Join-Path $workspaceRoot "node_modules"
@@ -89,16 +105,33 @@ function global:pnpm {
         }
         $srcLock = Join-Path $tmpDir.FullName "pnpm-lock.yaml"
         if (Test-Path $srcLock) { Copy-Item $srcLock $workspaceRoot }
+        # add/remove/update rewrite the manifest inside the sandbox; sync it back.
+        $srcManifest = Join-Path $tmpDir.FullName "package.json"
+        if (Test-Path $srcManifest) { Copy-Item $srcManifest $workspaceRoot }
 
         if (Test-Path (Join-Path $workspaceRoot "pnpm-workspace.yaml")) {
+            $storeSep = [IO.Path]::DirectorySeparatorChar + '.safe-store' + [IO.Path]::DirectorySeparatorChar
             Get-ChildItem -Recurse -Directory -Filter "node_modules" -Path $tmpDir.FullName |
-                Where-Object { $_.FullName -ne $srcModules } |
+                Where-Object { $_.FullName -ne $srcModules -and
+                               $_.FullName -notmatch [regex]::Escape($storeSep) } |
                 ForEach-Object {
                     $rel = $_.FullName.Substring($tmpDir.FullName.Length).TrimStart([char]'\', [char]'/')
                     $dest = Join-Path $workspaceRoot $rel
                     if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
                     New-Item -Type Directory -Force (Split-Path $dest -Parent) | Out-Null
                     Copy-Item -Recurse $_.FullName $dest
+                }
+            # Sync back any workspace-member manifests the command may have rewritten.
+            $nmSep = [IO.Path]::DirectorySeparatorChar + 'node_modules' + [IO.Path]::DirectorySeparatorChar
+            Get-ChildItem -Recurse -Filter "package.json" -Path $tmpDir.FullName |
+                Where-Object { $_.FullName -ne $srcManifest -and
+                               $_.FullName -notmatch [regex]::Escape($nmSep) -and
+                               $_.FullName -notmatch [regex]::Escape($storeSep) } |
+                ForEach-Object {
+                    $rel = $_.FullName.Substring($tmpDir.FullName.Length).TrimStart([char]'\', [char]'/')
+                    $dest = Join-Path $workspaceRoot $rel
+                    New-Item -Type Directory -Force (Split-Path $dest -Parent) | Out-Null
+                    Copy-Item $_.FullName $dest
                 }
         }
     }

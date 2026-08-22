@@ -79,23 +79,44 @@ function pnpm
         set workdir /app/$rel_path
     end
 
-    set -l docker_args run --rm --cap-drop ALL -v "$tmpdir:/app" -w $workdir
-    # Forward registry tokens only on explicit opt-in — untrusted lifecycle
-    # scripts run in the container and could exfiltrate them otherwise.
-    if test "$SAFE_PNPM_FORWARD_TOKENS" = 1
-        if test -n "$NODE_AUTH_TOKEN"
-            set docker_args $docker_args -e NODE_AUTH_TOKEN
-        end
-        if test -n "$NPM_TOKEN"
-            set docker_args $docker_args -e NPM_TOKEN
-        end
-    end
-    set docker_args $docker_args safe-pnpm:latest pnpm
+    # Per-manager store kept under /app so phase 2 resolves fully offline.
+    set -l store_flag --config.store-dir=/app/.safe-store
 
-    docker $docker_args $pass_args
+    # Tokens are forwarded only into the fetch phase, where --ignore-scripts
+    # guarantees no package code runs. They are never present during phase 2.
+    set -l token_env
+    if test -n "$NODE_AUTH_TOKEN"
+        set token_env $token_env -e NODE_AUTH_TOKEN
+    end
+    if test -n "$NPM_TOKEN"
+        set token_env $token_env -e NPM_TOKEN
+    end
+
+    # Phase 1: fetch (network on, token available, scripts disabled).
+    docker run --rm --cap-drop ALL -v "$tmpdir:/app" -w $workdir $token_env \
+        safe-pnpm:latest pnpm $pass_args --ignore-scripts $store_flag
     set -l rc $status
 
     if test $rc -eq 0
+        # `pnpm fetch` only populates the store; there is nothing to build.
+        if test "$argv[1]" != "fetch"
+            # Strip registry credentials before any build script can run.
+            if test -f "$tmpdir/.npmrc"
+                grep -viE '(_authtoken|_auth|_password|username)[[:space:]]*=' "$tmpdir/.npmrc" >"$tmpdir/.npmrc.clean" 2>/dev/null
+                mv "$tmpdir/.npmrc.clean" "$tmpdir/.npmrc"
+            end
+
+            set -l net_flag --network none
+            if test "$SAFE_PNPM_BUILD_NETWORK" = 1
+                set net_flag
+            end
+
+            # Phase 2: build (no token, no .npmrc auth, network off by default).
+            docker run --rm --cap-drop ALL $net_flag -v "$tmpdir:/app" -w $workdir \
+                safe-pnpm:latest pnpm install --offline --trust-lockfile $store_flag
+            set rc $status
+        end
+
         if test -d "$tmpdir/node_modules"
             rm -rf "$workspace_root/node_modules"
             cp -r "$tmpdir/node_modules" "$workspace_root/node_modules"
@@ -103,12 +124,22 @@ function pnpm
         if test -f "$tmpdir/pnpm-lock.yaml"
             cp "$tmpdir/pnpm-lock.yaml" "$workspace_root/pnpm-lock.yaml"
         end
+        # add/remove/update rewrite the manifest inside the sandbox; sync it back.
+        if test -f "$tmpdir/package.json"
+            cp "$tmpdir/package.json" "$workspace_root/package.json"
+        end
         if test -f "$workspace_root/pnpm-workspace.yaml"
-            for nm in (find $tmpdir -mindepth 2 -name node_modules -type d)
+            for nm in (find $tmpdir -mindepth 2 -name node_modules -type d -not -path "*/.safe-store/*")
                 set -l rel (string replace -- "$tmpdir/" "" $nm)
                 rm -rf "$workspace_root/$rel"
                 mkdir -p (dirname "$workspace_root/$rel")
                 cp -r $nm "$workspace_root/$rel"
+            end
+            # Sync back any workspace-member manifests the command may have rewritten.
+            for pkg in (find $tmpdir -mindepth 2 -name package.json -not -path "*/node_modules/*" -not -path "*/.safe-store/*")
+                set -l rel (string replace -- "$tmpdir/" "" $pkg)
+                mkdir -p (dirname "$workspace_root/$rel")
+                cp $pkg "$workspace_root/$rel"
             end
         end
     end

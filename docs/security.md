@@ -13,7 +13,7 @@ The most dangerous moment in an npm supply chain attack is **install time**. Mal
 - Read `.env` files in every project they can find
 - Install persistent backdoors on the host
 
-Inside the Docker container, **none of this is possible**. The container has no home directory mount, no access to other projects, no network access to internal services, and all Linux capabilities are dropped. Even if a malicious package's lifecycle script runs inside the container, it finds nothing worth stealing — and the container is thrown away immediately after.
+Inside the Docker container, **none of this is possible**. The container has no home directory mount, no access to other projects, and all Linux capabilities are dropped. Installs run in [two phases](#two-phase-install): dependencies are downloaded with lifecycle scripts disabled, then any build scripts run in a second container with **no network** (`--network none`) and **no registry token**. Even if a malicious package's lifecycle script runs, it finds nothing worth stealing and cannot phone home — and the container is thrown away immediately after.
 
 | Threat | Protected |
 |---|---|
@@ -31,8 +31,17 @@ Inside the Docker container, **none of this is possible**. The container has no 
 |---|---|
 | Malicious code that runs at build/test time | `pnpm run build` and `pnpm test` execute on the host. Installed packages run with your full permissions. |
 | Novel, unlisted attack packages | Pre-install scans only catch packages in their databases. A zero-day campaign won't appear until the lists update. |
-| Auth tokens passed to the container | Not forwarded by default. Forwarding is opt-in via `SAFE_PNPM_FORWARD_TOKENS=1` for private-registry installs; when enabled, an install lifecycle script in the container can read `NODE_AUTH_TOKEN`/`NPM_TOKEN`. Use read-only, registry-scoped tokens. |
 | Container escape exploits | Rare kernel CVEs exist. `--cap-drop ALL` significantly reduces the surface but is not absolute. |
+| Malicious registry response exploiting the client | Out of scope. The fetch phase runs the package manager against your configured registry; a compromised registry attacking the client itself is not defended against. |
+
+## Two-phase install
+
+Every install runs as two throwaway containers:
+
+1. **Fetch** — network on, registry token available, `--ignore-scripts`. Resolves and downloads every dependency into a store on the sandbox volume. No package code runs, so a token cannot be read or exfiltrated here.
+2. **Build** — `--network none`, token withheld, `.npmrc` credential lines stripped. Any lifecycle/build scripts run against the already-downloaded store with nothing to steal and nowhere to send it.
+
+Because the token and untrusted code are never present at the same time, private-registry installs no longer require the old `SAFE_PNPM_FORWARD_TOKENS` opt-in — see [private-registry.md](./private-registry.md). Set `SAFE_PNPM_BUILD_NETWORK=1` if a package's build genuinely needs network (e.g. `esbuild`, `sharp`); the token is still withheld in that phase.
 
 ### Why it's still valuable despite those limits
 
