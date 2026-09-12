@@ -91,3 +91,117 @@ test("healthy report contradicted by a nonzero exit is a scan failure", () => {
   );
   assert.equal(code, FAILED);
 });
+
+// A non-numeric exit arg parses to NaN; Number.isInteger(NaN) is false, so both
+// the exit-2 guard and the nonzero-exit contradiction check are deliberately
+// skipped. A healthy envelope must still pass rather than crash.
+test("NaN/non-numeric socketExit argument is treated safely", () => {
+  const { code } = classify(
+    JSON.stringify({ ok: true, data: { healthy: true } }),
+    "abc",
+  );
+  assert.equal(code, PASS);
+});
+
+test("ok:false with unhealthy data also present is a scan failure", () => {
+  const { code, reason } = classify(
+    JSON.stringify({ ok: false, cause: "timeout", data: { healthy: false } }),
+    1,
+  );
+  assert.equal(code, FAILED);
+  assert.match(reason, /timeout/);
+});
+
+test("ok:false with neither cause nor message falls back to unknown error", () => {
+  const { code, reason } = classify(
+    JSON.stringify({ ok: false, data: { code: 500 } }),
+    1,
+  );
+  assert.equal(code, FAILED);
+  assert.match(reason, /unknown error/i);
+});
+
+test("ok:false with message but no cause uses the message fallback", () => {
+  const { code, reason } = classify(
+    JSON.stringify({ ok: false, message: "Bad request", data: { code: 400 } }),
+    1,
+  );
+  assert.equal(code, FAILED);
+  assert.match(reason, /Bad request/);
+});
+
+// The exit-2 config guard runs before the report is read, so it must win even
+// over a body that would otherwise classify as FINDINGS.
+test("config-error exit wins over unhealthy findings", () => {
+  const { code, reason } = classify(
+    JSON.stringify({ ok: true, data: { healthy: false } }),
+    2,
+  );
+  assert.equal(code, FAILED);
+  assert.match(reason, /socket login/);
+});
+
+test("healthy key present but not boolean is a scan failure", () => {
+  const { code, reason } = classify(
+    JSON.stringify({ ok: true, data: { healthy: 1 } }),
+    0,
+  );
+  assert.equal(code, FAILED);
+  assert.match(reason, /no report verdict/);
+});
+
+test("data is null while ok:true is a scan failure", () => {
+  const { code, reason } = classify(
+    JSON.stringify({ ok: true, data: null }),
+    0,
+  );
+  assert.equal(code, FAILED);
+  assert.match(reason, /no report verdict/);
+});
+
+test("valid JSON array body does not crash the classifier", () => {
+  const { code, reason } = classify("[1,2,3]", 1);
+  assert.equal(code, FAILED);
+  assert.match(reason, /no report verdict/);
+});
+
+test("ok field absent with healthy:true still passes", () => {
+  const { code } = classify(JSON.stringify({ data: { healthy: true } }), 0);
+  assert.equal(code, PASS);
+});
+
+test("ok field absent with healthy:false is still findings", () => {
+  const { code, reason } = classify(
+    JSON.stringify({ data: { healthy: false } }),
+    1,
+  );
+  assert.equal(code, FINDINGS);
+  assert.match(reason, /policy violations/i);
+});
+
+test("top-level JSON number is an unrecognized result", () => {
+  const { code, reason } = classify("42", 1);
+  assert.equal(code, FAILED);
+  assert.match(reason, /unrecognized result/i);
+});
+
+test("top-level JSON null is an unrecognized result", () => {
+  const { code, reason } = classify("null", 1);
+  assert.equal(code, FAILED);
+  assert.match(reason, /unrecognized result/i);
+});
+
+test("top-level JSON string scalar is an unrecognized result", () => {
+  const { code, reason } = classify('"done"', 1);
+  assert.equal(code, FAILED);
+  assert.match(reason, /unrecognized result/i);
+});
+
+// The existing "missing output file" test writes no file but passes a real
+// (truthy) path, hitting the readFileSync catch. Passing "" hits the earlier
+// argv-level guard instead.
+test("empty string outputFile argument is a scan failure", () => {
+  const r = spawnSync("node", [CLASSIFIER, "", "0"], { encoding: "utf8" });
+  assert.equal(r.status, FAILED);
+  assert.match(r.stderr.trim(), /no output file to classify/);
+});
