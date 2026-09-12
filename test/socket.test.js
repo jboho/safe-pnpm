@@ -48,9 +48,7 @@ function runShared(snippet, env = {}, socketOpts = {}) {
 }
 
 test("Socket scan is skipped by default (no flag, no env)", () => {
-  const { invoked } = runShared(
-    `_safe_pkg_prescan pnpm nonexistent.lock 0`,
-  );
+  const { invoked } = runShared(`_safe_pkg_prescan pnpm nonexistent.lock 0`);
   assert.equal(invoked, false);
 });
 
@@ -127,10 +125,14 @@ test("Socket scan requests a report so findings can surface at all", () => {
 });
 
 test("findings warn and continue in non-interactive mode", () => {
-  const { status, stderr } = runShared(PRESCAN, {}, {
-    socketStdout: JSON.stringify({ ok: true, data: { healthy: false } }),
-    socketExit: 1,
-  });
+  const { status, stderr } = runShared(
+    PRESCAN,
+    {},
+    {
+      socketStdout: JSON.stringify({ ok: true, data: { healthy: false } }),
+      socketExit: 1,
+    },
+  );
   assert.equal(status, 0);
   assert.match(stderr, /policy violations/i);
   assert.match(stderr, /non-interactive/);
@@ -152,10 +154,14 @@ test("findings block under SAFE_PNPM_SOCKET_STRICT=1", () => {
 // A scan that could not run is not evidence of a problem, so by default it must
 // not break the install — the CVE and Shai Hulud layers have already run.
 test("a failed scan warns and continues by default", () => {
-  const { status, stderr } = runShared(PRESCAN, {}, {
-    socketStdout: JSON.stringify({ ok: false, cause: "401 Unauthorized" }),
-    socketExit: 1,
-  });
+  const { status, stderr } = runShared(
+    PRESCAN,
+    {},
+    {
+      socketStdout: JSON.stringify({ ok: false, cause: "401 Unauthorized" }),
+      socketExit: 1,
+    },
+  );
   assert.equal(status, 0);
   assert.match(stderr, /could not run/i);
   assert.match(stderr, /Continuing without Socket results/);
@@ -175,10 +181,14 @@ test("a failed scan blocks under SAFE_PNPM_SOCKET_STRICT=1", () => {
 });
 
 test("an unconfigured Socket (exit 2) warns with a login hint, not a findings claim", () => {
-  const { status, stderr } = runShared(PRESCAN, {}, {
-    socketStdout: "",
-    socketExit: 2,
-  });
+  const { status, stderr } = runShared(
+    PRESCAN,
+    {},
+    {
+      socketStdout: "",
+      socketExit: 2,
+    },
+  );
   assert.equal(status, 0);
   assert.match(stderr, /socket login/);
   assert.doesNotMatch(stderr, /policy violations/i);

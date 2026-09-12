@@ -108,7 +108,11 @@ for (const [manager, wrapperFile] of [
   test(`${manager}: phase 1 fetches with token + --ignore-scripts, no --network none`, () => {
     const { read } = runWrapper(manager, wrapperFile);
     const p1 = read("run1.args");
-    assert.match(p1, /--ignore-scripts/, "fetch must disable lifecycle scripts");
+    assert.match(
+      p1,
+      /--ignore-scripts/,
+      "fetch must disable lifecycle scripts",
+    );
     assert.match(p1, /-e NPM_TOKEN/, "fetch may carry the registry token");
     assert.doesNotMatch(p1, /--network none/, "fetch needs network");
   });
@@ -116,18 +120,42 @@ for (const [manager, wrapperFile] of [
   test(`${manager}: phase 2 builds with no token and --network none`, () => {
     const { read } = runWrapper(manager, wrapperFile);
     const p2 = read("run2.args");
-    assert.match(p2, /--network none/, "build phase must be offline by default");
-    assert.doesNotMatch(p2, /-e NPM_TOKEN/, "build phase must not carry the token");
-    assert.doesNotMatch(p2, /-e NODE_AUTH_TOKEN/, "build phase must not carry the token");
+    assert.match(
+      p2,
+      /--network none/,
+      "build phase must be offline by default",
+    );
+    assert.doesNotMatch(
+      p2,
+      /-e NPM_TOKEN/,
+      "build phase must not carry the token",
+    );
+    assert.doesNotMatch(
+      p2,
+      /-e NODE_AUTH_TOKEN/,
+      "build phase must not carry the token",
+    );
   });
 
   test(`${manager}: registry credentials are stripped before the build phase`, () => {
     const { read } = runWrapper(manager, wrapperFile);
     const p1npmrc = read("run1.npmrc");
     const p2npmrc = read("run2.npmrc");
-    assert.match(p1npmrc, /_authToken=SECRET-TOKEN-VALUE/, "fetch may see auth");
-    assert.doesNotMatch(p2npmrc, /SECRET-TOKEN-VALUE/, "build must not see auth");
-    assert.match(p2npmrc, /node-linker=hoisted/, "non-auth config is preserved");
+    assert.match(
+      p1npmrc,
+      /_authToken=SECRET-TOKEN-VALUE/,
+      "fetch may see auth",
+    );
+    assert.doesNotMatch(
+      p2npmrc,
+      /SECRET-TOKEN-VALUE/,
+      "build must not see auth",
+    );
+    assert.match(
+      p2npmrc,
+      /node-linker=hoisted/,
+      "non-auth config is preserved",
+    );
     assert.match(p2npmrc, /@acme:registry=/, "registry config is preserved");
   });
 

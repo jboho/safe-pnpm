@@ -61,7 +61,9 @@ const pwshAvailable =
   }).status === 0;
 
 for (const file of PS_WRAPPERS) {
-  test(`${file} parses without PowerShell errors`, { skip: !pwshAvailable }, () => {
+  test(`${file} parses without PowerShell errors`, {
+    skip: !pwshAvailable,
+  }, () => {
     const p = path.join(ASSETS_DIR, file).replace(/'/g, "''");
     const r = spawnSync(
       "pwsh",

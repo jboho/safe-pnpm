@@ -25,7 +25,9 @@ function classify(body, socketExit = 0) {
 }
 
 test("healthy report passes", () => {
-  const { code } = classify(JSON.stringify({ ok: true, data: { healthy: true } }));
+  const { code } = classify(
+    JSON.stringify({ ok: true, data: { healthy: true } }),
+  );
   assert.equal(code, PASS);
 });
 
