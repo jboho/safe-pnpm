@@ -82,6 +82,32 @@ When you run an install-class command:
 
 ---
 
+## Socket.dev Scanning
+
+[Socket](https://socket.dev) adds a third pre-install layer — behavioral analysis of package lifecycle scripts (suspicious network calls, obfuscation, typosquatting) — alongside the always-on CVE audit and Shai Hulud supply-chain scan. It is **opt-in**: authenticate once with `socket login`, then enable it per-command or per-session.
+
+```sh
+pnpm install --socket              # this invocation only
+npm install --socket
+yarn add lodash --socket
+
+export SAFE_PNPM_ENABLE_SOCKET=1   # every install-class command this session
+```
+
+Put `--socket` *after* the subcommand (`pnpm install --socket`, not `pnpm --socket install`) — safe-pnpm consumes the flag before the args reach the package manager.
+
+A scan that finds bad packages prompts (interactive) or warns and continues (non-interactive); a scan that *couldn't run* — no token, offline, quota exhausted — only warns, so an expired token never silently blocks you. In CI, set `SAFE_PNPM_SOCKET_STRICT=1` to turn both findings and scan failures into hard blocks; without it a pipeline whose Socket token has expired stays green while doing no behavioral scanning at all.
+
+```sh
+export SAFE_PNPM_SOCKET_STRICT=1   # CI: block on findings AND on scan failure
+```
+
+> The Socket layer shells out to a bundled Node classifier, so **`node` must be on `PATH` at install time** for it to run (the base install already requires Node.js 16+). If `node` is missing the layer is treated as a failure — warned by default, blocked under strict mode.
+
+See [docs/socket.md](./docs/socket.md) for the full outcome table, failure semantics, and account tiers.
+
+---
+
 ## Bypass
 
 To bypass the wrapper and run the native binary directly:
