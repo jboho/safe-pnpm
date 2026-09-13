@@ -52,6 +52,7 @@ assets/
   pnpm-wrapper.fish     pnpm shell function — fish
   pnpm-wrapper.ps1      pnpm shell function — PowerShell
   scan-shai-hulud.js    Shai Hulud 2 supply chain scanner (bundled)
+  socket-classify.js    Classifies `socket scan` output into pass / findings / failure
 docs/
   security.md           Threat model
   performance.md        Overhead numbers and tradeoffs
@@ -67,6 +68,8 @@ test/
 1. Test locally by sourcing the updated wrapper: `. ./assets/pnpm-wrapper.sh`
 2. Run `safe-pnpm update` to sync changes to `~/.safe-pnpm/` on your dev machine
 3. Verify with `pnpm --version` (pass-through) and `pnpm install` in a test project (Docker path)
+
+The opt-in Socket layer shells out to `assets/socket-classify.js` with the host `node`, so that path is a runtime dependency of the wrapper (not just the Docker image) — keep the classifier free of build steps and non-stdlib deps, and assume only `node` on `PATH`. See [docs/socket.md](./docs/socket.md).
 
 ## Submitting Changes
 
