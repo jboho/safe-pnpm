@@ -18,7 +18,27 @@ npm test
 
 Tests use Node.js's built-in `node:test` runner (no external test framework). Test files live in `test/` and follow the `*.test.js` naming convention.
 
-Tests cover the utility modules in `lib/util/`. The command modules (`lib/commands/`) are not unit tested — they depend on Docker, an interactive TTY, and the filesystem at `~/.safe-pnpm/`, making them better suited to manual integration testing.
+Coverage falls into three groups:
+
+- **Utility modules** (`lib/util/`) — plain unit tests: `colors.test.js`, `shell.test.js`, `versions.test.js`.
+- **Shell library** (`assets/_safe_pkg_shared.sh`) — the wrapper logic that runs on end-user machines, driven through bash: `socket.test.js`, `two-phase.test.js`, `wrappers.test.js`.
+- **Socket classifier** (`assets/socket-classify.js`) — the Node script that maps a Socket scan result onto pass / findings / failure: `socket-classify.test.js`.
+
+The command modules (`lib/commands/`) are not unit tested — they depend on Docker, an interactive TTY, and the filesystem at `~/.safe-pnpm/`, making them better suited to manual integration testing.
+
+### The Socket test suite
+
+The Socket layer is covered end to end without any Docker, network, or real Socket account, using two stubbing patterns:
+
+- **`test/socket.test.js`** exercises the shell library. Its `runShared` helper points `$HOME` at a throwaway temp directory, drops a stub `socket` binary and the real `socket-classify.js` into `~/.safe-pnpm/`, then sources `_safe_pkg_shared.sh` and runs a snippet. The stub records the arguments it was called with and emits whatever JSON and exit code the test supplies, so each scan outcome — healthy, findings, API error, unconfigured, not installed — is reproducible. Tests run without a TTY, i.e. the non-interactive path (warn-and-continue by default, block under `SAFE_PNPM_SOCKET_STRICT=1`).
+- **`test/socket-classify.test.js`** exercises the classifier directly. Its `classify` helper writes a JSON body to a temp file and runs `socket-classify.js <file> <socket-exit-code>`, asserting on the process exit code and the one-line reason on stderr.
+
+The classifier's exit codes are the contract between the two: `0` pass, `3` findings, `4` failed (see the header of `assets/socket-classify.js`).
+
+To add a new Socket case:
+
+1. If it's about how a raw scan result is interpreted (a new envelope shape, a new exit code), add it to `socket-classify.test.js` — write the JSON body and expected exit code/reason.
+2. If it's about how the wrapper reacts to that outcome (warning text, strict-mode blocking, whether the scan ran at all), add it to `socket.test.js` using `runShared` with the matching `socketStdout` / `socketExit` / `installSocket` options.
 
 ## Linting and Formatting
 
@@ -48,17 +68,21 @@ lib/
 assets/
   Dockerfile            Docker image definition
   entrypoint.sh         Sets NODE_EXTRA_CA_CERTS at container runtime
-  pnpm-wrapper.sh       pnpm shell function — bash/zsh
-  pnpm-wrapper.fish     pnpm shell function — fish
-  pnpm-wrapper.ps1      pnpm shell function — PowerShell
+  _safe_pkg_shared.sh   Shared prescan/dispatch/run logic sourced by the wrappers
+  pnpm-wrapper.sh       pnpm shell function — bash/zsh (also npm-, yarn-)
+  pnpm-wrapper.fish     pnpm shell function — fish (also npm-, yarn-)
+  pnpm-wrapper.ps1      pnpm shell function — PowerShell (also npm-, yarn-)
   scan-shai-hulud.js    Shai Hulud 2 supply chain scanner (bundled)
   socket-classify.js    Classifies `socket scan` output into pass / findings / failure
 docs/
   security.md           Threat model
   performance.md        Overhead numbers and tradeoffs
   socket.md             Socket.dev setup and tiers
+  private-registry.md   Token-safe private/scoped installs
 test/
-  *.test.js             Unit tests for lib/util/
+  colors|shell|versions.test.js   Unit tests for lib/util/
+  socket|two-phase|wrappers.test.js   Shell library (assets/_safe_pkg_shared.sh)
+  socket-classify.test.js         Socket result classifier (assets/socket-classify.js)
 ```
 
 ## Making Changes to the Wrapper

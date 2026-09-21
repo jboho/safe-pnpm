@@ -98,6 +98,17 @@ Put `--socket` *after* the subcommand (`pnpm install --socket`, not `pnpm --sock
 
 A scan that finds bad packages prompts (interactive) or warns and continues (non-interactive); a scan that *couldn't run* — no token, offline, quota exhausted — only warns, so an expired token never silently blocks you. In CI, set `SAFE_PNPM_SOCKET_STRICT=1` to turn both findings and scan failures into hard blocks; without it a pipeline whose Socket token has expired stays green while doing no behavioral scanning at all.
 
+What each outcome looks like on the console (the scan runs before the Docker install):
+
+```
+→ Socket behavioral scan...
+# healthy    — nothing else printed; the install proceeds
+# findings   — ⚠️  Socket reported policy violations for this dependency set. Continuing in non-interactive mode.
+# scan failed — ⚠️  Socket scan could not run: 401 Unauthorized. Continuing without Socket results.
+# under SAFE_PNPM_SOCKET_STRICT=1, either warning becomes:
+#             ✗ ... Blocking (SAFE_PNPM_SOCKET_STRICT=1).
+```
+
 ```sh
 export SAFE_PNPM_SOCKET_STRICT=1   # CI: block on findings AND on scan failure
 ```
