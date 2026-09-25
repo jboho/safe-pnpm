@@ -99,11 +99,13 @@ The opt-in Socket layer shells out to `assets/socket-classify.js` with the host 
 
 1. Branch from `main` using `chore/TICKET-description` or `feat/TICKET-description`
 2. Run `npm test && npm run check` before pushing
-3. Open a PR — the publish workflow fires on release creation, not on merge
+3. Open a PR — the publish workflow fires on a `v*` tag push, not on merge
 
 ## Publishing a New Version
 
 1. Bump the version in `package.json`
 2. Merge to `main`
-3. Create a GitHub Release tagged `vX.Y.Z`
-4. The `.github/workflows/publish.yml` workflow publishes to GitHub Packages automatically
+3. Create a GitHub Release tagged `vX.Y.Z` (the tag must match `package.json`'s version, or the workflow fails)
+4. The `.github/workflows/publish.yml` workflow publishes `@jboho/safe-pnpm` to the public npm registry
+
+Publishing uses [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/): npm accepts the workflow's GitHub identity, so there is no `NPM_TOKEN` secret. It depends on a trusted publisher entry on npmjs.com (package settings → Trusted Publisher: user `jboho`, repo `safe-pnpm`, workflow `publish.yml`). Renaming the repo or the workflow file breaks publishing until that entry is updated.

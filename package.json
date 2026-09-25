@@ -4,6 +4,10 @@
   "description": "Docker-based pnpm install isolation — protects developer machines from malicious npm lifecycle scripts",
   "author": "Jonathan Boho <jonathan@credstudios.com>",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jboho/safe-pnpm.git"
+  },
   "bin": {
     "safe-pnpm": "./bin/safe-pnpm.js"
   },
