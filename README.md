@@ -1,6 +1,6 @@
 # @jboho/safe-pnpm
 
-[![CI](https://github.com/jboho/safe-npm/actions/workflows/ci.yml/badge.svg)](https://github.com/jboho/safe-npm/actions/workflows/ci.yml)
+[![CI](https://github.com/jboho/safe-pnpm/actions/workflows/ci.yml/badge.svg)](https://github.com/jboho/safe-pnpm/actions/workflows/ci.yml)
 [![Node >=16](https://img.shields.io/badge/node-%3E%3D16-brightgreen.svg)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 
