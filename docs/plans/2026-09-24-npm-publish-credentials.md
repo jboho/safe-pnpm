@@ -20,15 +20,16 @@ The items asked for an npm Automation token stored as the `NPM_TOKEN` secret. Th
 
 - PR #12: repo renamed `jboho/safe-npm` → `jboho/safe-pnpm`; README badge updated.
 - PR #13 (merge `6cd320a`):
-  - `publish.yml`: `id-token: write`; publish step on Node 24 with npm >= 11.5.1; `--provenance`; no `NODE_AUTH_TOKEN`.
+  - `publish.yml`: `id-token: write`; publish step on Node 24 with npm >= 11.5.1; `--provenance` (made public-repo-only in a follow-up); no `NODE_AUTH_TOKEN`.
   - `package.json`: `repository` set to `git+https://github.com/jboho/safe-pnpm.git` (npm checks it matches).
   - `CONTRIBUTING.md`: publishing steps corrected (npm registry, fires on tag push, trusted publisher dependency).
 
 ## Remaining
 
 1. On npmjs.com → `@jboho/safe-pnpm` → Settings → Trusted Publisher, add GitHub Actions: user `jboho`, repo `safe-pnpm`, workflow `publish.yml`. Needs an account that can publish the `@jboho` scope.
-2. Optional, after one successful trusted publish: in the same settings page, set publishing access to disallow tokens, so only the workflow can publish.
-3. Next release: bump `package.json` version, merge, push tag `vX.Y.Z`. Confirm the run succeeds and the npm page shows provenance.
+2. The repo is private. Trusted publishing works from a private repo, but provenance does not, so `publish.yml` only asks for provenance when the repo is public. Making the repo public turns it on with no workflow change.
+3. Optional, after one successful trusted publish: in the same settings page, set publishing access to disallow tokens, so only the workflow can publish.
+4. Next release: bump `package.json` version, merge, push tag `vX.Y.Z`. Confirm the run succeeds and, once the repo is public, that the npm page shows provenance.
 
 ## Done when
 

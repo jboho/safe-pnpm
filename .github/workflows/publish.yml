@@ -44,4 +44,6 @@ jobs:
           scope: '@jboho'
       # Trusted publishing needs npm >= 11.5.1.
       - run: npm install -g npm@^11.5.1
-      - run: npm publish --access public --provenance
+      # Provenance is only supported from public repos; forcing it from a private
+      # repo fails the publish, so enable it only once the repo is public.
+      - run: npm publish --access public --provenance=${{ !github.event.repository.private }}
