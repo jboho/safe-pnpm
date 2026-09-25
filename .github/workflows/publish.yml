@@ -10,6 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # Trusted publishing: npm exchanges this run's OIDC token for a short-lived
+      # publish credential, so no NPM_TOKEN secret is stored or rotated.
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -31,12 +34,14 @@ jobs:
             exit 1
           fi
 
-      # Publish the scoped package publicly to the npm registry.
+      # Publish the scoped package publicly to the npm registry via trusted
+      # publishing (https://docs.npmjs.com/trusted-publishers/). Requires the
+      # trusted publisher configured on npmjs.com for jboho/safe-pnpm + publish.yml.
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
           scope: '@jboho'
-      - run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # Trusted publishing needs npm >= 11.5.1.
+      - run: npm install -g npm@^11.5.1
+      - run: npm publish --access public --provenance
