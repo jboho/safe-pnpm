@@ -59,6 +59,10 @@ function global:yarn {
     & docker @p1
     $rc = $LASTEXITCODE
 
+    # Known-malware check on the tree phase 1 resolved, before any package
+    # code runs. A hit discards the sandbox: nothing is built or copied back.
+    if ($rc -eq 0 -and -not (_Safe_Pkg_Malware_Scan (Join-Path $tmpDir.FullName 'yarn.lock'))) { $rc = 1 }
+
     if ($rc -eq 0) {
         $manifests = @('package.json','yarn.lock')
         _Safe_Pkg_Copy_Files -From $tmpDir.FullName -To $snapDir.FullName -RelPaths $manifests

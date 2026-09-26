@@ -38,7 +38,9 @@ function global:pnpm {
     $relPath = ""
     $d = (Get-Location).Path
     $root = [IO.Path]::GetPathRoot($d)
-    while ($d -ne $HOME -and $d -ne $root) {
+    # Split-Path returns "" above a Unix top-level dir (never "/"), so without
+    # the $d check a project outside $HOME loops forever.
+    while ($d -and $d -ne $HOME -and $d -ne $root) {
         if (Test-Path (Join-Path $d "pnpm-workspace.yaml")) {
             $workspaceRoot = $d
             $relPath = (Get-Location).Path.Substring($d.Length).TrimStart([char]'\', [char]'/')
@@ -86,6 +88,10 @@ function global:pnpm {
         $tokenEnv + @('safe-pnpm:latest','pnpm') + $passArgs + @('--ignore-scripts') + $storeFlag
     & docker @p1
     $rc = $LASTEXITCODE
+
+    # Known-malware check on the tree phase 1 resolved, before any package
+    # code runs. A hit discards the sandbox: nothing is built or copied back.
+    if ($rc -eq 0 -and -not (_Safe_Pkg_Malware_Scan (Join-Path $tmpDir.FullName 'pnpm-lock.yaml'))) { $rc = 1 }
 
     if ($rc -eq 0) {
         $manifests = @('package.json','pnpm-lock.yaml') + @($members | ForEach-Object { Join-Path $_ 'package.json' })

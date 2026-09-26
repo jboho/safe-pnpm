@@ -74,17 +74,18 @@ When you run an install-class command:
 | npm | `install`, `i`, `ci`, `update`, `uninstall`, `un` |
 | yarn | `install`, `add`, `remove`, `upgrade` (yarn v1 only) |
 
-1. **Pre-install scan** — manager-native audit (`pnpm audit`, `npm audit`, `yarn audit`), Shai Hulud 2 malicious package check, and [Socket behavioral analysis](./docs/socket.md) if configured.
+1. **Pre-install scan** — manager-native audit (`pnpm audit`, `npm audit`, `yarn audit`) and [Socket behavioral analysis](./docs/socket.md) if configured.
 2. **Copy only manifests** — `package.json`, the lockfile, workspace files, and `.npmrc` / `.yarnrc` go into a temp directory. Source files, `.env`, and secrets never leave the host.
 3. **Fetch in Docker** — ephemeral container, `--cap-drop ALL`, `--ignore-scripts`. Dependencies download with any registry token available but no package code running.
-4. **Build in Docker** — a second container with `--network none` and the token removed runs any lifecycle/build scripts against the downloaded store — nothing to steal, nowhere to send it. See [the two-phase model](./docs/security.md#two-phase-install).
-5. **Copy results back** — `node_modules` lands in your project; the lockfile and manifests come from a snapshot taken before any build script ran. The containers are discarded.
+4. **Malware check** — every version the fetch resolved, including packages being added, is checked against [OSV](https://osv.dev)'s malicious-package advisories. A hit stops the install before any package code runs. If OSV can't be reached the install warns and continues; `export SAFE_PNPM_OSV_STRICT=1` blocks instead. Packages in scopes your `.npmrc`/`.yarnrc` maps to a private registry are not sent to OSV. See [the two-phase model](./docs/security.md#two-phase-install).
+5. **Build in Docker** — a second container with `--network none` and the token removed runs any lifecycle/build scripts against the downloaded store — nothing to steal, nowhere to send it. See [the two-phase model](./docs/security.md#two-phase-install).
+6. **Copy results back** — `node_modules` lands in your project; the lockfile and manifests come from a snapshot taken before any build script ran. The containers are discarded.
 
 ---
 
 ## Socket.dev Scanning
 
-[Socket](https://socket.dev) adds a third pre-install layer — behavioral analysis of package lifecycle scripts (suspicious network calls, obfuscation, typosquatting) — alongside the always-on CVE audit and Shai Hulud supply-chain scan. It is **opt-in**: authenticate once with `socket login`, then enable it per-command or per-session.
+[Socket](https://socket.dev) adds a third layer — behavioral analysis of package lifecycle scripts (suspicious network calls, obfuscation, typosquatting) — alongside the always-on CVE audit and OSV malware check. It is **opt-in**: authenticate once with `socket login`, then enable it per-command or per-session.
 
 ```sh
 pnpm install --socket              # this invocation only

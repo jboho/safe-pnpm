@@ -102,6 +102,13 @@ function pnpm
         safe-pnpm:latest pnpm $pass_args --ignore-scripts $store_flag
     set -l rc $status
 
+    # Known-malware check on the tree phase 1 resolved, before any package
+    # code runs. A hit discards the sandbox: nothing is built or copied back.
+    if test $rc -eq 0
+        _safe_pkg_malware_scan "$tmpdir/pnpm-lock.yaml"
+        or set rc 1
+    end
+
     if test $rc -eq 0
         # Snapshot manifests and lockfile before phase 2. Phase 1 ran no package
         # code, so these hold only the package manager's own edits. Phase 2

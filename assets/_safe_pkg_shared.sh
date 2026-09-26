@@ -30,20 +30,6 @@ _safe_pkg_prescan() {
     }
   fi
 
-  local sha="$HOME/.safe-pnpm/scan-shai-hulud.js"
-  if [ -f "$sha" ]; then
-    echo "→ Supply chain scan (Shai Hulud 2)..." >&2
-    node "$sha" "$(pwd)" 2>/dev/null || {
-      if [ "$interactive" -eq 1 ]; then
-        printf "⚠️  Supply chain scan flagged issues. Continue anyway? [y/N] " >&2
-        read -r _ans
-        case "$_ans" in [Yy]*) ;; *) return 1 ;; esac
-      else
-        echo "⚠️  Supply chain scan flagged issues — continuing in non-interactive mode." >&2
-      fi
-    }
-  fi
-
   # Socket is opt-in: it needs an authenticated account and makes a network
   # call, so it only runs when the user enables it globally
   # (SAFE_PNPM_ENABLE_SOCKET=1) or per-invocation (`--socket`).
@@ -64,12 +50,12 @@ _safe_pkg_prescan() {
 #
 #     pass     — continue.
 #     findings — the scan ran and the report is unhealthy. Prompt when
-#                interactive; warn and continue when not, matching the audit and
-#                Shai Hulud layers.
+#                interactive; warn and continue when not, matching the audit
+#                layer.
 #     failure  — the scan could not run (no token, network/API error, crash).
-#                Warn and continue by default: Socket is an opt-in third layer
-#                and the CVE + supply chain layers have already run, so an
-#                expired token or an offline laptop should not break installs.
+#                Warn and continue by default: Socket is an opt-in layer on
+#                top of the audit and malware scans, so an expired token or an
+#                offline laptop should not break installs.
 #
 #   SAFE_PNPM_SOCKET_STRICT=1 turns both findings and failures into hard blocks,
 #   which is the setting for CI, where "the scan never ran" must not silently
@@ -134,6 +120,51 @@ _safe_pkg_socket_scan() {
       return 0
       ;;
   esac
+}
+
+# _safe_pkg_malware_scan lockfile
+#   Checks every name@version in the lockfile the fetch phase resolved against
+#   OSV's malicious-package advisories (malware-scan.js). It runs between the
+#   phases, so no package code has run yet and packages being added in this
+#   install are covered, not just the ones already locked.
+#
+#     pass     — continue.
+#     findings — always block. A MAL- advisory marks that exact version as
+#                malware; unlike an audit finding there is nothing to weigh.
+#     failure  — the scan could not run (OSV unreachable, unreadable lockfile,
+#                scanner not installed). Warn and continue, as the Socket layer
+#                does; SAFE_PNPM_OSV_STRICT=1 blocks instead, for CI.
+_safe_pkg_malware_scan() {
+  local lockfile="$1"
+  local scanner="$HOME/.safe-pnpm/malware-scan.js"
+  local reason verdict
+
+  if [ -f "$scanner" ]; then
+    echo "→ Malware scan (OSV)..." >&2
+    reason=$(node "$scanner" "$lockfile" 2>&1)
+    verdict=$?
+  else
+    reason="Malware scan not installed — run \`safe-pnpm setup\`."
+    verdict=4
+  fi
+
+  case "$verdict" in
+    0)
+      echo "✓ $reason" >&2
+      return 0
+      ;;
+    3)
+      echo "✗ $reason" >&2
+      echo "✗ safe-pnpm: install blocked; nothing was built or copied back." >&2
+      return 1
+      ;;
+  esac
+  if [ "${SAFE_PNPM_OSV_STRICT:-}" = "1" ]; then
+    echo "✗ $reason Blocking (SAFE_PNPM_OSV_STRICT=1)." >&2
+    return 1
+  fi
+  echo "⚠️  $reason Continuing without it." >&2
+  return 0
 }
 
 # _safe_pkg_dispatch manager lockfile workspace_file manifest_files [pkg-manager-args...]
@@ -302,6 +333,17 @@ _safe_pkg_run() {
   local phase1_rc=$?
   local rc=$phase1_rc
 
+  # Known-malware check on the tree phase 1 resolved, before any package code
+  # runs. A hit discards the sandbox: nothing is built or copied back.
+  local fetched=0
+  if [ "$phase1_rc" -eq 0 ]; then
+    if _safe_pkg_malware_scan "$tmpdir/$lockfile"; then
+      fetched=1
+    else
+      rc=1
+    fi
+  fi
+
   # pnpm `fetch` only populates the store and never builds node_modules; there
   # is nothing to run scripts for, so skip the build phase entirely.
   local run_build=1
@@ -313,7 +355,7 @@ _safe_pkg_run() {
   # package.json script or lockfile URL would run natively on the next host
   # command, so copy-back reads manifests from here, never from the sandbox.
   local m f
-  if [ "$phase1_rc" -eq 0 ]; then
+  if [ "$fetched" -eq 1 ]; then
     mkdir -p "$snapdir/tree"
     for f in package.json "$lockfile"; do
       [ -f "$tmpdir/$f" ] && cp "$tmpdir/$f" "$snapdir/tree/$f"
@@ -326,7 +368,7 @@ _safe_pkg_run() {
     done < "$snapdir/members"
   fi
 
-  if [ "$phase1_rc" -eq 0 ] && [ "$run_build" -eq 1 ] && [ -n "$phase2_cmd" ]; then
+  if [ "$fetched" -eq 1 ] && [ "$run_build" -eq 1 ] && [ -n "$phase2_cmd" ]; then
     # Strip registry credentials before any build script can run.
     _safe_pkg_strip_npmrc_auth "$tmpdir/.npmrc"
 
@@ -342,12 +384,13 @@ _safe_pkg_run() {
     rc=$?
   fi
 
-  # Copy results back whenever the fetch succeeded — the dependency tree exists
-  # even if a build script later failed, and the non-zero rc still surfaces. A
-  # failed fetch leaves a partial/empty tree, so nothing is copied there.
+  # Copy results back whenever the fetch succeeded and passed the malware scan —
+  # the dependency tree exists even if a build script later failed, and the
+  # non-zero rc still surfaces. A failed fetch leaves a partial/empty tree, so
+  # nothing is copied there.
   # Only node_modules at the root and in pre-existing workspace members come
   # back, so phase 2 cannot plant node_modules elsewhere in the project.
-  if [ "$phase1_rc" -eq 0 ]; then
+  if [ "$fetched" -eq 1 ]; then
     _safe_pkg_copy_modules "$tmpdir" "" "$workspace_root" || rc=1
     while IFS= read -r m; do
       _safe_pkg_copy_modules "$tmpdir" "$m" "$workspace_root" || rc=1

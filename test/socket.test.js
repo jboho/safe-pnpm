@@ -152,7 +152,8 @@ test("findings block under SAFE_PNPM_SOCKET_STRICT=1", () => {
 });
 
 // A scan that could not run is not evidence of a problem, so by default it must
-// not break the install — the CVE and Shai Hulud layers have already run.
+// not break the install — the CVE audit has already run and the malware check
+// still runs after the fetch.
 test("a failed scan warns and continues by default", () => {
   const { status, stderr } = runShared(
     PRESCAN,
