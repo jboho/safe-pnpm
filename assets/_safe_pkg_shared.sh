@@ -249,8 +249,12 @@ _safe_pkg_run() {
     done
   fi
 
-  local tmpdir
+  local tmpdir snapdir
   tmpdir=$(mktemp -d)
+  # Host-only, never mounted into a container: the workspace-member list and
+  # the post-fetch manifest snapshots that copy-back reads from.
+  snapdir=$(mktemp -d)
+  : > "$snapdir/members"
 
   (
     cd "$workspace_root" || exit 1
@@ -259,9 +263,10 @@ _safe_pkg_run() {
     done
     if [ -n "$workspace_file" ] && [ -f "$workspace_file" ]; then
       find . -name package.json -not -path "*/node_modules/*" -mindepth 2 | while read -r pkg; do
-        local_dir="$tmpdir/$(dirname "$pkg")"
-        mkdir -p "$local_dir"
-        cp "$pkg" "$local_dir/"
+        member="$(dirname "${pkg#./}")"
+        mkdir -p "$tmpdir/$member"
+        cp "$pkg" "$tmpdir/$member/"
+        printf '%s\n' "$member" >> "$snapdir/members"
       done
     fi
   )
@@ -302,6 +307,25 @@ _safe_pkg_run() {
   local run_build=1
   { [ "$manager" = "pnpm" ] && [ "$subcmd" = "fetch" ]; } && run_build=0
 
+  # Snapshot manifests and lockfile before phase 2. Phase 1 ran no package
+  # code, so these hold only the package manager's own edits (add/remove/
+  # update). Phase 2 build scripts can rewrite anything under /app; a rewritten
+  # package.json script or lockfile URL would run natively on the next host
+  # command, so copy-back reads manifests from here, never from the sandbox.
+  local m f
+  if [ "$phase1_rc" -eq 0 ]; then
+    mkdir -p "$snapdir/tree"
+    for f in package.json "$lockfile"; do
+      [ -f "$tmpdir/$f" ] && cp "$tmpdir/$f" "$snapdir/tree/$f"
+    done
+    while IFS= read -r m; do
+      if [ -f "$tmpdir/$m/package.json" ]; then
+        mkdir -p "$snapdir/tree/$m"
+        cp "$tmpdir/$m/package.json" "$snapdir/tree/$m/package.json"
+      fi
+    done < "$snapdir/members"
+  fi
+
   if [ "$phase1_rc" -eq 0 ] && [ "$run_build" -eq 1 ] && [ -n "$phase2_cmd" ]; then
     # Strip registry credentials before any build script can run.
     _safe_pkg_strip_npmrc_auth "$tmpdir/.npmrc"
@@ -321,30 +345,44 @@ _safe_pkg_run() {
   # Copy results back whenever the fetch succeeded — the dependency tree exists
   # even if a build script later failed, and the non-zero rc still surfaces. A
   # failed fetch leaves a partial/empty tree, so nothing is copied there.
+  # Only node_modules at the root and in pre-existing workspace members come
+  # back, so phase 2 cannot plant node_modules elsewhere in the project.
   if [ "$phase1_rc" -eq 0 ]; then
-    if [ -d "$tmpdir/node_modules" ]; then
-      rm -rf "${workspace_root}/node_modules"
-      cp -r "$tmpdir/node_modules" "${workspace_root}/node_modules"
-    fi
-    [ -f "$tmpdir/$lockfile" ] && cp "$tmpdir/$lockfile" "${workspace_root}/$lockfile"
-    # add/remove/update rewrite the manifest inside the sandbox; sync it back.
-    [ -f "$tmpdir/package.json" ] && cp "$tmpdir/package.json" "${workspace_root}/package.json"
-    if [ -n "$workspace_file" ] && [ -f "${workspace_root}/$workspace_file" ]; then
-      find "$tmpdir" -mindepth 2 -name node_modules -type d -not -path "*/.safe-store/*" | while read -r nm; do
-        rel="${nm#${tmpdir}/}"
-        rm -rf "${workspace_root}/${rel}"
-        mkdir -p "$(dirname "${workspace_root}/${rel}")"
-        cp -r "$nm" "${workspace_root}/${rel}"
-      done
-      # Sync back any workspace-member manifests the command may have rewritten.
-      find "$tmpdir" -mindepth 2 -name package.json -not -path "*/node_modules/*" -not -path "*/.safe-store/*" | while read -r pkg; do
-        rel="${pkg#${tmpdir}/}"
-        mkdir -p "$(dirname "${workspace_root}/${rel}")"
-        cp "$pkg" "${workspace_root}/${rel}"
-      done
-    fi
+    _safe_pkg_copy_modules "$tmpdir" "" "$workspace_root" || rc=1
+    while IFS= read -r m; do
+      _safe_pkg_copy_modules "$tmpdir" "$m" "$workspace_root" || rc=1
+    done < "$snapdir/members"
+    for f in package.json "$lockfile"; do
+      [ -f "$snapdir/tree/$f" ] && cp "$snapdir/tree/$f" "${workspace_root}/$f"
+    done
+    while IFS= read -r m; do
+      [ -f "$snapdir/tree/$m/package.json" ] && cp "$snapdir/tree/$m/package.json" "${workspace_root}/$m/package.json"
+    done < "$snapdir/members"
   fi
 
-  rm -rf "$tmpdir"
+  rm -rf "$tmpdir" "$snapdir"
   return $rc
+}
+
+# _safe_pkg_copy_modules tmpdir member workspace_root
+#
+# Copies <tmpdir>/<member>/node_modules to the same place under workspace_root
+# (member "" is the root). The sandbox tree is untrusted after phase 2, so the
+# source must resolve to exactly that path: a node_modules, or a member dir,
+# swapped for a symlink could otherwise pull in files from anywhere the link
+# points. Returns 1 when it refuses.
+_safe_pkg_copy_modules() {
+  local base="$1" member="$2" dest_root="$3"
+  local rel="${member:+$member/}node_modules"
+  local src="$base/$rel"
+  [ -e "$src" ] || [ -L "$src" ] || return 0
+  local want got
+  want="$(cd "$base" && pwd -P)/$rel"
+  got="$(cd "$src" 2>/dev/null && pwd -P)"
+  if [ ! -d "$src" ] || [ -L "$src" ] || [ "$got" != "$want" ]; then
+    echo "✗ safe-pnpm: sandbox $rel is not a plain directory; not copied back." >&2
+    return 1
+  fi
+  rm -rf "${dest_root:?}/$rel"
+  cp -r "$src" "${dest_root}/$rel"
 }

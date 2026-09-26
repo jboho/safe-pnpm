@@ -35,6 +35,9 @@ function global:npm {
     }
 
     $tmpDir = New-TemporaryFile | ForEach-Object { Remove-Item $_ -Force; New-Item -Type Directory $_ }
+    # Host-only, never mounted into a container: the post-fetch manifest
+    # snapshots that copy-back reads from.
+    $snapDir = New-TemporaryFile | ForEach-Object { Remove-Item $_ -Force; New-Item -Type Directory $_ }
 
     foreach ($f in @('package.json','package-lock.json','.npmrc')) {
         if (Test-Path $f) { Copy-Item $f $tmpDir.FullName }
@@ -56,6 +59,9 @@ function global:npm {
     $rc = $LASTEXITCODE
 
     if ($rc -eq 0) {
+        $manifests = @('package.json','package-lock.json')
+        _Safe_Pkg_Copy_Files -From $tmpDir.FullName -To $snapDir.FullName -RelPaths $manifests
+
         # Strip registry credentials before any build script can run.
         _Safe_Pkg_Strip_NpmrcAuth (Join-Path $tmpDir.FullName '.npmrc')
 
@@ -68,18 +74,10 @@ function global:npm {
         & docker @p2
         $rc = $LASTEXITCODE
 
-        $srcModules = Join-Path $tmpDir.FullName "node_modules"
-        if (Test-Path $srcModules) {
-            if (Test-Path "node_modules") { Remove-Item -Recurse -Force "node_modules" }
-            Copy-Item -Recurse $srcModules (Get-Location).Path
-        }
-        $srcLock = Join-Path $tmpDir.FullName "package-lock.json"
-        if (Test-Path $srcLock) { Copy-Item $srcLock (Get-Location).Path }
-        # add/remove/update rewrite the manifest inside the sandbox; sync it back.
-        $srcManifest = Join-Path $tmpDir.FullName "package.json"
-        if (Test-Path $srcManifest) { Copy-Item $srcManifest (Get-Location).Path }
+        if (-not (_Safe_Pkg_Copy_Modules -Base $tmpDir.FullName -Rel 'node_modules' -DestRoot (Get-Location).Path)) { $rc = 1 }
+        _Safe_Pkg_Copy_Files -From $snapDir.FullName -To (Get-Location).Path -RelPaths $manifests
     }
 
-    Remove-Item -Recurse -Force $tmpDir.FullName
+    Remove-Item -Recurse -Force $tmpDir.FullName, $snapDir.FullName
     $global:LASTEXITCODE = $rc
 }

@@ -58,6 +58,10 @@ function pnpm
     end
 
     set -l tmpdir (mktemp -d)
+    # Host-only, never mounted into a container: the post-fetch manifest
+    # snapshots that copy-back reads from.
+    set -l snapdir (mktemp -d)
+    set -l members
 
     pushd $workspace_root
     for f in package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc
@@ -67,9 +71,10 @@ function pnpm
     end
     if test -f pnpm-workspace.yaml
         for pkg in (find . -name package.json -not -path "*/node_modules/*" -mindepth 2)
-            set -l pkg_dir $tmpdir/(dirname $pkg)
-            mkdir -p $pkg_dir
-            cp $pkg $pkg_dir/
+            set -l member (dirname (string replace -r '^\./' '' -- $pkg))
+            mkdir -p $tmpdir/$member
+            cp $pkg $tmpdir/$member/
+            set members $members $member
         end
     end
     popd
@@ -98,6 +103,25 @@ function pnpm
     set -l rc $status
 
     if test $rc -eq 0
+        # Snapshot manifests and lockfile before phase 2. Phase 1 ran no package
+        # code, so these hold only the package manager's own edits. Phase 2
+        # build scripts can rewrite anything under /app; a rewritten
+        # package.json script or lockfile URL would run natively on the next
+        # host command, so copy-back reads manifests from here, never from the
+        # sandbox.
+        mkdir -p $snapdir/tree
+        for f in package.json pnpm-lock.yaml
+            if test -f "$tmpdir/$f"
+                cp "$tmpdir/$f" "$snapdir/tree/$f"
+            end
+        end
+        for m in $members
+            if test -f "$tmpdir/$m/package.json"
+                mkdir -p "$snapdir/tree/$m"
+                cp "$tmpdir/$m/package.json" "$snapdir/tree/$m/package.json"
+            end
+        end
+
         # `pnpm fetch` only populates the store; there is nothing to build.
         if test "$argv[1]" != "fetch"
             # Strip registry credentials before any build script can run.
@@ -117,33 +141,41 @@ function pnpm
             set rc $status
         end
 
-        if test -d "$tmpdir/node_modules"
-            rm -rf "$workspace_root/node_modules"
-            cp -r "$tmpdir/node_modules" "$workspace_root/node_modules"
-        end
-        if test -f "$tmpdir/pnpm-lock.yaml"
-            cp "$tmpdir/pnpm-lock.yaml" "$workspace_root/pnpm-lock.yaml"
-        end
-        # add/remove/update rewrite the manifest inside the sandbox; sync it back.
-        if test -f "$tmpdir/package.json"
-            cp "$tmpdir/package.json" "$workspace_root/package.json"
-        end
-        if test -f "$workspace_root/pnpm-workspace.yaml"
-            for nm in (find $tmpdir -mindepth 2 -name node_modules -type d -not -path "*/.safe-store/*")
-                set -l rel (string replace -- "$tmpdir/" "" $nm)
-                rm -rf "$workspace_root/$rel"
-                mkdir -p (dirname "$workspace_root/$rel")
-                cp -r $nm "$workspace_root/$rel"
+        # Only node_modules at the root and in pre-existing workspace members
+        # come back, so phase 2 cannot plant node_modules elsewhere in the
+        # project. A node_modules or member dir swapped for a symlink could
+        # pull in files from anywhere the link points, so each source must
+        # resolve to exactly its expected path.
+        set -l real_tmp (path resolve $tmpdir)
+        for m in "" $members
+            set -l rel node_modules
+            if test -n "$m"
+                set rel $m/node_modules
             end
-            # Sync back any workspace-member manifests the command may have rewritten.
-            for pkg in (find $tmpdir -mindepth 2 -name package.json -not -path "*/node_modules/*" -not -path "*/.safe-store/*")
-                set -l rel (string replace -- "$tmpdir/" "" $pkg)
-                mkdir -p (dirname "$workspace_root/$rel")
-                cp $pkg "$workspace_root/$rel"
+            set -l nm "$tmpdir/$rel"
+            if not test -e "$nm"; and not test -L "$nm"
+                continue
+            end
+            if test -L "$nm"; or not test -d "$nm"; or test (path resolve "$nm") != "$real_tmp/$rel"
+                echo "✗ safe-pnpm: sandbox $rel is not a plain directory; not copied back." >&2
+                set rc 1
+                continue
+            end
+            rm -rf "$workspace_root/$rel"
+            cp -r "$nm" "$workspace_root/$rel"
+        end
+        for f in package.json pnpm-lock.yaml
+            if test -f "$snapdir/tree/$f"
+                cp "$snapdir/tree/$f" "$workspace_root/$f"
+            end
+        end
+        for m in $members
+            if test -f "$snapdir/tree/$m/package.json"
+                cp "$snapdir/tree/$m/package.json" "$workspace_root/$m/package.json"
             end
         end
     end
 
-    rm -rf $tmpdir
+    rm -rf $tmpdir $snapdir
     return $rc
 end

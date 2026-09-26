@@ -100,3 +100,46 @@ function _Safe_Pkg_Strip_NpmrcAuth {
         Where-Object { $_ -notmatch '(?i)(_authtoken|_auth|_password|username)\s*=' } |
         Set-Content $Path
 }
+
+# Copies each relative file path that exists under From to the same path under
+# To. Used to snapshot manifests and lockfile after phase 1 and to restore them
+# after phase 2: phase 1 runs no package code, so the snapshot holds only the
+# package manager's own edits, while phase 2 build scripts can rewrite anything
+# under /app. A rewritten package.json script or lockfile URL would run natively
+# on the next host command, so copy-back never reads manifests from the sandbox.
+function _Safe_Pkg_Copy_Files {
+    param([string]$From, [string]$To, [string[]]$RelPaths)
+    foreach ($rel in $RelPaths) {
+        $src = Join-Path $From $rel
+        if (Test-Path -LiteralPath $src -PathType Leaf) {
+            $dest = Join-Path $To $rel
+            New-Item -Type Directory -Force (Split-Path $dest -Parent) | Out-Null
+            Copy-Item -LiteralPath $src $dest
+        }
+    }
+}
+
+# Copies <Base>/<Rel> (a node_modules) to <DestRoot>/<Rel>. The sandbox tree is
+# untrusted after phase 2, so every path component under Base must be a plain
+# directory: a node_modules, or a member dir, swapped for a link could otherwise
+# pull in files from anywhere the link points. Returns $false when it refuses.
+function _Safe_Pkg_Copy_Modules {
+    param([string]$Base, [string]$Rel, [string]$DestRoot)
+    $src = Join-Path $Base $Rel
+    if (-not (Get-Item -LiteralPath $src -Force -ErrorAction SilentlyContinue)) { return $true }
+    $p = $Base
+    foreach ($part in ($Rel -split '[\\/]')) {
+        $p = Join-Path $p $part
+        $i = Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+        if (-not $i -or -not $i.PSIsContainer -or $i.LinkType -or
+            ($i.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            Write-Host "✗ safe-pnpm: sandbox $Rel is not a plain directory; not copied back." -ForegroundColor Red
+            return $false
+        }
+    }
+    $dest = Join-Path $DestRoot $Rel
+    if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Recurse -Force }
+    New-Item -Type Directory -Force (Split-Path $dest -Parent) | Out-Null
+    Copy-Item -LiteralPath $src $dest -Recurse
+    return $true
+}
