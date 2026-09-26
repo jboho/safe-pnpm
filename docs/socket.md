@@ -1,12 +1,12 @@
 # Socket.dev Behavioral Scanning
 
-Socket analyzes packages for behavioral signals that go beyond name-matching: suspicious network calls in lifecycle scripts, obfuscated code, typosquatting indicators, new unmaintained packages, and more. It runs as a third pre-install layer alongside `pnpm audit` (CVE database) and the Shai Hulud 2 supply chain scan.
+Socket analyzes packages for behavioral signals that go beyond name-matching: suspicious network calls in lifecycle scripts, obfuscated code, typosquatting indicators, new unmaintained packages, and more. It runs as a third pre-install layer alongside `pnpm audit` (CVE database) and the OSV malware check.
 
 `@socketsecurity/cli` is bundled as a dependency and installed automatically with this package.
 
 ## Enabling the scan
 
-Socket is **opt-in**. It needs an authenticated account and makes a network call per install, so it stays off unless you turn it on — the `pnpm audit` (CVE) and Shai Hulud supply chain layers always run regardless.
+Socket is **opt-in**. It needs an authenticated account and makes a network call per install, so it stays off unless you turn it on — the `pnpm audit` (CVE) and OSV malware check always run regardless.
 
 First authenticate once:
 
@@ -45,9 +45,9 @@ A Socket run has three possible outcomes, and safe-pnpm treats them differently.
 | **Findings** | Scan completed, report is unhealthy — packages violate your org's policy at the report level | Interactive: prompt `Continue anyway? [y/N]`. Non-interactive: warn and continue | **Block** |
 | **Failure** | Scan could not run — no API token, network or API error, quota exhausted, CLI crash, Socket not installed | Warn and continue, naming the cause | **Block** |
 
-Findings follow the same convention as the `pnpm audit` and Shai Hulud layers: they prompt when there's a human to ask, and warn without blocking when there isn't.
+Findings follow the same convention as the `pnpm audit` layer: they prompt when there's a human to ask, and warn without blocking when there isn't.
 
-Failures are deliberately lenient by default and never prompt. Socket is an opt-in third layer, and by the time it runs the CVE audit and Shai Hulud supply chain scan have already completed. Breaking every install because a token expired or a laptop is offline costs more than it protects — so safe-pnpm tells you the layer didn't run and moves on.
+Failures are deliberately lenient by default and never prompt. Socket is an opt-in third layer: the CVE audit has already run, and the OSV malware check still runs after the fetch. Breaking every install because a token expired or a laptop is offline costs more than it protects — so safe-pnpm tells you the layer didn't run and moves on.
 
 ### Strict mode
 
@@ -84,12 +84,12 @@ Socket scanning requires the `full-scans:create` API permission. A free Socket a
 | | No token | Free account | Paid/Org account |
 |---|---|---|---|
 | CVE audit | ✓ | ✓ | ✓ |
-| Shai Hulud supply chain scan | ✓ | ✓ | ✓ |
+| OSV malware check | ✓ | ✓ | ✓ |
 | Socket behavioral analysis | — | ✓ | ✓ |
 | Org-level policy enforcement | — | — | ✓ |
 | Scan history & diff | — | — | ✓ |
 
-The Socket step only runs when you opt in (see [Enabling the scan](#enabling-the-scan)); the CVE audit and Shai Hulud supply chain layers always run.
+The Socket step only runs when you opt in (see [Enabling the scan](#enabling-the-scan)); the CVE audit and OSV malware check always run.
 
 ## Keeping Socket up to date
 

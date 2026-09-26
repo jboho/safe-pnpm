@@ -21,16 +21,6 @@ function _Safe_Pkg_Prescan {
         }
     }
 
-    $sha = Join-Path $HOME ".safe-pnpm\scan-shai-hulud.js"
-    if (Test-Path $sha) {
-        Write-Host "→ Supply chain scan (Shai Hulud 2)..." -ForegroundColor Cyan
-        node $sha (Get-Location).Path 2>$null | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            $ans = Read-Host "⚠️  Supply chain scan flagged issues. Continue anyway? [y/N]"
-            if ($ans -notmatch '^[Yy]') { return $false }
-        }
-    }
-
     # Socket is opt-in: enable globally with SAFE_PNPM_ENABLE_SOCKET=1 or
     # per-invocation with `--socket`.
     $socketEnabled = ($env:SAFE_PNPM_ENABLE_SOCKET -eq '1') -or $Socket
@@ -87,6 +77,40 @@ function _Safe_Pkg_Socket_Scan {
     }
 
     Write-Host "⚠️  $reason Continuing without Socket results." -ForegroundColor Yellow
+    return $true
+}
+
+# Checks the lockfile the fetch phase resolved against OSV's malicious-package
+# advisories. See _safe_pkg_shared.sh for the full rationale: findings always
+# block, because a MAL- advisory marks that exact version as malware; failures
+# (OSV unreachable, unreadable lockfile, scanner not installed) warn, and
+# SAFE_PNPM_OSV_STRICT=1 makes them block too.
+function _Safe_Pkg_Malware_Scan {
+    param([string]$Lockfile)
+    $scanner = Join-Path $HOME ".safe-pnpm\malware-scan.js"
+    $verdict = 4
+    $reason = "Malware scan not installed — run 'safe-pnpm setup'."
+
+    if (Test-Path $scanner) {
+        Write-Host "→ Malware scan (OSV)..." -ForegroundColor Cyan
+        $reason = (& node $scanner $Lockfile 2>&1 | Out-String).Trim()
+        $verdict = $LASTEXITCODE
+    }
+
+    if ($verdict -eq 0) {
+        Write-Host "✓ $reason" -ForegroundColor Green
+        return $true
+    }
+    if ($verdict -eq 3) {
+        Write-Host "✗ $reason" -ForegroundColor Red
+        Write-Host "✗ safe-pnpm: install blocked; nothing was built or copied back." -ForegroundColor Red
+        return $false
+    }
+    if ($env:SAFE_PNPM_OSV_STRICT -eq '1') {
+        Write-Host "✗ $reason Blocking (SAFE_PNPM_OSV_STRICT=1)." -ForegroundColor Red
+        return $false
+    }
+    Write-Host "⚠️  $reason Continuing without it." -ForegroundColor Yellow
     return $true
 }
 

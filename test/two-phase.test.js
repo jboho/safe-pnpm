@@ -1,9 +1,10 @@
-const { test } = require("node:test");
+const { test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { startOsvStub } = require("./helpers/osv-stub");
 
 const ASSETS_DIR = path.join(__dirname, "..", "assets");
 
@@ -12,6 +13,32 @@ const LOCKFILES = {
   pnpm: "pnpm-lock.yaml",
   yarn: "yarn.lock",
 };
+
+// Minimal lockfiles in the format each manager in the image writes, resolving
+// a single package at 1.0.0.
+const LOCK_WITH = {
+  npm: (name) =>
+    JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        "": { name: "fixture" },
+        [`node_modules/${name}`]: {
+          version: "1.0.0",
+          resolved: `https://registry.npmjs.org/${name}/-/${name}-1.0.0.tgz`,
+        },
+      },
+    }),
+  pnpm: (name) =>
+    `lockfileVersion: '9.0'\n\npackages:\n\n  ${name}@1.0.0:\n    resolution: {integrity: sha512-stub}\n`,
+  yarn: (name) =>
+    `# yarn lockfile v1\n\n\n${name}@^1.0.0:\n  version "1.0.0"\n  resolved "https://registry.yarnpkg.com/${name}/-/${name}-1.0.0.tgz"\n`,
+};
+
+let osv;
+before(async () => {
+  osv = await startOsvStub();
+});
+after(() => osv.stop());
 
 const shellAvailable = (sh) =>
   spawnSync(sh, ["--version"], { stdio: "pipe" }).status === 0;
@@ -31,6 +58,10 @@ const SHELLS = [
 // opts.workspace — add a pnpm-workspace.yaml and member packages/a
 // opts.phase2    — bash run by the stub during phase 2, with $src = the /app
 //                  mount; stands in for an untrusted build script
+// opts.phase1Lock — lockfile contents phase 1 writes (default a placeholder)
+// opts.osvApi    — install the malware scanner and point it at this OSV API;
+//                  without it the scanner is absent
+// opts.osvStrict — set SAFE_PNPM_OSV_STRICT=1
 function runWrapper(manager, wrapperFile, opts = {}) {
   const shell = opts.shell ?? "bash";
   const lockfile = LOCKFILES[manager];
@@ -41,6 +72,16 @@ function runWrapper(manager, wrapperFile, opts = {}) {
   fs.mkdirSync(bin);
   fs.mkdirSync(proj);
   fs.mkdirSync(log);
+  if (opts.phase1Lock !== undefined) {
+    fs.writeFileSync(path.join(log, "phase1-lock"), opts.phase1Lock);
+  }
+  if (opts.osvApi) {
+    fs.mkdirSync(path.join(root, ".safe-pnpm"));
+    fs.copyFileSync(
+      path.join(ASSETS_DIR, "malware-scan.js"),
+      path.join(root, ".safe-pnpm", "malware-scan.js"),
+    );
+  }
 
   fs.writeFileSync(
     path.join(proj, "package.json"),
@@ -96,7 +137,11 @@ if [ "$n" = "1" ]; then
   mkdir -p "$src/node_modules/dep"
   echo "module.exports=1" > "$src/node_modules/dep/index.js"
   echo '{"name":"fixture","version":"1.0.0","private":true,"dependencies":{"added-by-sandbox":"1.0.0"}}' > "$src/package.json"
-  echo "resolved-by-phase-1" > "$src/${lockfile}"
+  if [ -f "${log}/phase1-lock" ]; then
+    cp "${log}/phase1-lock" "$src/${lockfile}"
+  else
+    echo "resolved-by-phase-1" > "$src/${lockfile}"
+  fi
   if [ -d "$src/packages/a" ]; then
     echo '{"name":"a","version":"1.0.0","dependencies":{"member-dep":"1.0.0"}}' > "$src/packages/a/package.json"
     mkdir -p "$src/packages/a/node_modules/member-dep"
@@ -134,6 +179,8 @@ ${manager} install </dev/null >/dev/null 2>"${log}/stderr"
       HOME: root, // keep the prescan from finding a real ~/.safe-pnpm
       NPM_TOKEN: "SECRET-TOKEN-VALUE",
       NODE_AUTH_TOKEN: "SECRET-TOKEN-VALUE",
+      SAFE_PNPM_OSV_API: opts.osvApi ?? "",
+      SAFE_PNPM_OSV_STRICT: opts.osvStrict ? "1" : "",
     },
     stdio: "pipe",
   });
@@ -346,5 +393,113 @@ ln -s "$src/../outside" "$src/packages/a"
       !fs.existsSync(path.join(proj, "packages", "a", "node_modules")),
       "a member dir swapped for a symlink must not be copied back",
     );
+  });
+}
+
+// The malware scan reads the lockfile phase 1 resolved. The host project has no
+// lockfile, so the package exists only in the sandbox's resolution, as with
+// `add` or a first install.
+for (const { shell, ext, available } of SHELLS) {
+  for (const manager of ["npm", "pnpm", "yarn"]) {
+    test(`${manager} (${shell}): a known-malicious version resolved in phase 1 blocks the build and copy-back`, {
+      skip: !available,
+    }, () => {
+      const { proj, runCount, read, status } = runWrapper(
+        manager,
+        `${manager}-wrapper.${ext}`,
+        {
+          shell,
+          osvApi: `${osv.url}/ok`,
+          phase1Lock: LOCK_WITH[manager]("mal-pkg"),
+        },
+      );
+      assert.notEqual(status, 0, "a finding must fail the install");
+      assert.equal(runCount, 1, "the build phase must not run");
+      assert.match(read("stderr"), /mal-pkg@1\.0\.0 +MAL-/);
+      assert.match(read("stderr"), /install blocked/);
+      assert.ok(
+        !fs.existsSync(path.join(proj, "node_modules")),
+        "node_modules must not be copied back",
+      );
+      assert.ok(
+        !fs.existsSync(path.join(proj, LOCKFILES[manager])),
+        "the lockfile must not be copied back",
+      );
+      assert.doesNotMatch(
+        fs.readFileSync(path.join(proj, "package.json"), "utf8"),
+        /added-by-sandbox/,
+        "the manifest must not be copied back",
+      );
+    });
+  }
+
+  test(`pnpm (${shell}): a clean malware scan proceeds to the build`, {
+    skip: !available,
+  }, () => {
+    const { proj, runCount, read, status } = runWrapper(
+      "pnpm",
+      `pnpm-wrapper.${ext}`,
+      {
+        shell,
+        osvApi: `${osv.url}/ok`,
+        phase1Lock: LOCK_WITH.pnpm("left-pad"),
+      },
+    );
+    assert.equal(status, 0);
+    assert.equal(runCount, 2);
+    assert.match(read("stderr"), /1 package checked against OSV/);
+    assert.ok(fs.existsSync(path.join(proj, "node_modules", "dep")));
+  });
+
+  test(`pnpm (${shell}): a malware scan that cannot run warns and proceeds`, {
+    skip: !available,
+  }, () => {
+    const { runCount, read, status } = runWrapper(
+      "pnpm",
+      `pnpm-wrapper.${ext}`,
+      {
+        shell,
+        osvApi: `${osv.url}/http500`,
+        phase1Lock: LOCK_WITH.pnpm("mal-pkg"),
+      },
+    );
+    assert.equal(status, 0);
+    assert.equal(runCount, 2);
+    assert.match(
+      read("stderr"),
+      /could not run: OSV returned HTTP 500\. Continuing without it/,
+    );
+  });
+
+  test(`pnpm (${shell}): SAFE_PNPM_OSV_STRICT=1 blocks when the malware scan cannot run`, {
+    skip: !available,
+  }, () => {
+    const { proj, runCount, read, status } = runWrapper(
+      "pnpm",
+      `pnpm-wrapper.${ext}`,
+      {
+        shell,
+        osvApi: `${osv.url}/http500`,
+        osvStrict: true,
+        phase1Lock: LOCK_WITH.pnpm("left-pad"),
+      },
+    );
+    assert.notEqual(status, 0);
+    assert.equal(runCount, 1);
+    assert.match(read("stderr"), /Blocking \(SAFE_PNPM_OSV_STRICT=1\)/);
+    assert.ok(!fs.existsSync(path.join(proj, "node_modules")));
+  });
+
+  test(`pnpm (${shell}): a missing malware scanner warns and proceeds`, {
+    skip: !available,
+  }, () => {
+    const { runCount, read, status } = runWrapper(
+      "pnpm",
+      `pnpm-wrapper.${ext}`,
+      { shell },
+    );
+    assert.equal(status, 0);
+    assert.equal(runCount, 2);
+    assert.match(read("stderr"), /Malware scan not installed/);
   });
 }

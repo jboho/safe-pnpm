@@ -22,7 +22,7 @@ Inside the Docker container, **none of this is possible**. The container has no 
 | `.env` and secret theft | Yes — only `package.json` and lockfile enter the container |
 | Persistent host backdoors via manifests | Yes — the container is discarded, and manifests and the lockfile are restored from the pre-build snapshot, so build scripts cannot plant `scripts` entries or new dependencies |
 | Known CVE-listed packages | Yes — caught by `pnpm audit` pre-install |
-| Known malicious packages (Shai Hulud 2 campaign) | Yes — caught by live scan pre-install |
+| Known malicious packages | Yes — every version the fetch resolved is checked against [OSV](https://osv.dev)'s malicious-package advisories (`MAL-*`, which include the Shai-Hulud 2.0 IOC lists) before any package code runs; a hit blocks the install |
 | Behavioral anomalies (suspicious network calls, etc.) | Yes, with [Socket.dev](./socket.md) configured |
 
 ### What it doesn't protect
@@ -40,8 +40,9 @@ Inside the Docker container, **none of this is possible**. The container has no 
 Every install runs as two throwaway containers:
 
 1. **Fetch** — network on, registry token available, `--ignore-scripts`. Resolves and downloads every dependency into a store on the sandbox volume. No package code runs, so a token cannot be read or exfiltrated here.
-2. **Build** — `--network none`, token withheld, `.npmrc` credential lines stripped. Any lifecycle/build scripts run against the already-downloaded store with nothing to steal and nowhere to send it.
-3. **Copy-back** — `node_modules` returns to the host only at the project root and in workspace members that existed before the install; a `node_modules` that is a symlink or does not resolve to its expected path is refused and the install exits non-zero. `package.json`, the lockfile, and member manifests are copied back from a snapshot taken after the fetch phase, never from the build container.
+2. **Malware check** — on the host, every package version in the lockfile the fetch resolved (including anything `add` just pulled in) is checked against OSV's malicious-package advisories. A hit discards the sandbox: nothing is built or copied back. If the check can't run (offline, OSV down) the install warns and continues; set `SAFE_PNPM_OSV_STRICT=1` to block instead. Package names and versions are sent to `api.osv.dev`, except packages in scopes that `.npmrc`/`.yarnrc` map to a non-public registry. Unscoped private packages served through a `registry=` override are indistinguishable from public ones and are sent.
+3. **Build** — `--network none`, token withheld, `.npmrc` credential lines stripped. Any lifecycle/build scripts run against the already-downloaded store with nothing to steal and nowhere to send it.
+4. **Copy-back** — `node_modules` returns to the host only at the project root and in workspace members that existed before the install; a `node_modules` that is a symlink or does not resolve to its expected path is refused and the install exits non-zero. `package.json`, the lockfile, and member manifests are copied back from a snapshot taken after the fetch phase, never from the build container.
 
 Because the token and untrusted code are never present at the same time, private-registry installs no longer require the old `SAFE_PNPM_FORWARD_TOKENS` opt-in — see [private-registry.md](./private-registry.md). Set `SAFE_PNPM_BUILD_NETWORK=1` if a package's build genuinely needs network (e.g. `esbuild`, `sharp`); the token is still withheld in that phase.
 

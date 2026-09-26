@@ -24,22 +24,6 @@ function _safe_pkg_prescan --argument manager lockfile socket_flag
         end
     end
 
-    set -l sha "$HOME/.safe-pnpm/scan-shai-hulud.js"
-    if test -f $sha
-        echo "→ Supply chain scan (Shai Hulud 2)..." >&2
-        node $sha (pwd) >/dev/null 2>&1
-        if test $status -ne 0
-            if isatty stdin
-                read --prompt-str "⚠️  Supply chain scan flagged issues. Continue anyway? [y/N] " _ans
-                if not string match -qi 'y*' "$_ans"
-                    return 1
-                end
-            else
-                echo "⚠️  Supply chain scan flagged issues — continuing in non-interactive mode." >&2
-            end
-        end
-    end
-
     # Socket is opt-in: enable globally with SAFE_PNPM_ENABLE_SOCKET=1 or
     # per-invocation with `--socket`.
     set -l socket_enabled 0
@@ -109,5 +93,41 @@ function _safe_pkg_socket_scan
     end
 
     echo "⚠️  $reason Continuing without Socket results." >&2
+    return 0
+end
+
+# Checks the lockfile the fetch phase resolved against OSV's malicious-package
+# advisories. See _safe_pkg_shared.sh for the full rationale: findings always
+# block, because a MAL- advisory marks that exact version as malware; failures
+# (OSV unreachable, unreadable lockfile, scanner not installed) warn, and
+# SAFE_PNPM_OSV_STRICT=1 makes them block too.
+function _safe_pkg_malware_scan --argument lockfile
+    set -l scanner "$HOME/.safe-pnpm/malware-scan.js"
+    set -l reason
+    set -l verdict 4
+
+    if test -f $scanner
+        echo "→ Malware scan (OSV)..." >&2
+        # string collect keeps the multi-line findings list as one value.
+        set reason (node $scanner $lockfile 2>&1 | string collect)
+        set verdict $pipestatus[1]
+    else
+        set reason "Malware scan not installed — run `safe-pnpm setup`."
+    end
+
+    if test $verdict -eq 0
+        printf '✓ %s\n' $reason >&2
+        return 0
+    end
+    if test $verdict -eq 3
+        printf '✗ %s\n' $reason >&2
+        echo "✗ safe-pnpm: install blocked; nothing was built or copied back." >&2
+        return 1
+    end
+    if test "$SAFE_PNPM_OSV_STRICT" = "1"
+        echo "✗ $reason Blocking (SAFE_PNPM_OSV_STRICT=1)." >&2
+        return 1
+    end
+    echo "⚠️  $reason Continuing without it." >&2
     return 0
 end
