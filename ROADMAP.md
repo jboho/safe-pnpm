@@ -3,7 +3,7 @@
 > Goal: A Docker-based package-manager wrapper (pnpm/npm/yarn) that sandboxes install scripts and pre-scans for malicious packages and CVEs.
 
 ## Current next action
-- [ ] Start M3 (Release pipeline) — configure the npm trusted publisher, then cut the first tagged release (plan: docs/plans/2026-09-24-npm-publish-credentials.md)
+- [ ] Start M3 (Release pipeline) — configure the npm trusted publisher, then cut the first tagged release (plan: .ai/docs/plans/2026-09-24-npm-publish-credentials.md)
 
 ## Milestones
 - [x] M0 — Socket CLI wrap: accept a `--socket` flag, call `@socketsecurity/cli` for manifest analysis, gated on `SAFE_PNPM_ENABLE_SOCKET`

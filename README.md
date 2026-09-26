@@ -189,7 +189,7 @@ scripts on the host):
 
 - [Security model — what's protected and what isn't](./docs/security.md)
 - [Private registries — token-safe private/scoped installs](./docs/private-registry.md)
-- [ADR 0001 — two-phase install design and findings](./docs/decisions/0001-two-phase-private-registry.md)
+- [ADR 0001 — two-phase install design and findings](.ai/docs/decisions/0001-two-phase-private-registry.md)
 - [Performance — overhead numbers and when they matter](./docs/performance.md)
 - [Socket.dev behavioral scanning setup](./docs/socket.md)
 - [Contributing](./CONTRIBUTING.md)
