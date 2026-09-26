@@ -48,20 +48,26 @@ function global:pnpm {
     }
 
     $tmpDir = New-TemporaryFile | ForEach-Object { Remove-Item $_ -Force; New-Item -Type Directory $_ }
+    # Host-only, never mounted into a container: the post-fetch manifest
+    # snapshots that copy-back reads from.
+    $snapDir = New-TemporaryFile | ForEach-Object { Remove-Item $_ -Force; New-Item -Type Directory $_ }
 
     Push-Location $workspaceRoot
     foreach ($f in @('package.json','pnpm-lock.yaml','pnpm-workspace.yaml','.npmrc')) {
         if (Test-Path $f) { Copy-Item $f $tmpDir.FullName }
     }
+    $members = @()
     if (Test-Path "pnpm-workspace.yaml") {
-        Get-ChildItem -Recurse -Filter "package.json" |
+        $members = @(Get-ChildItem -Recurse -Filter "package.json" |
             Where-Object { $_.FullName -notmatch [regex]::Escape("node_modules") -and
                            $_.DirectoryName -ne $workspaceRoot } |
             ForEach-Object {
-                $dest = Join-Path $tmpDir.FullName ($_.DirectoryName.Substring($workspaceRoot.Length).TrimStart([char]'\', [char]'/'))
+                $member = $_.DirectoryName.Substring($workspaceRoot.Length).TrimStart([char]'\', [char]'/')
+                $dest = Join-Path $tmpDir.FullName $member
                 New-Item -Type Directory -Force $dest | Out-Null
                 Copy-Item $_.FullName $dest
-            }
+                $member
+            })
     }
     Pop-Location
 
@@ -82,6 +88,9 @@ function global:pnpm {
     $rc = $LASTEXITCODE
 
     if ($rc -eq 0) {
+        $manifests = @('package.json','pnpm-lock.yaml') + @($members | ForEach-Object { Join-Path $_ 'package.json' })
+        _Safe_Pkg_Copy_Files -From $tmpDir.FullName -To $snapDir.FullName -RelPaths $manifests
+
         # `pnpm fetch` only populates the store; there is nothing to build.
         if ($cmd -ne 'fetch') {
             # Strip registry credentials before any build script can run.
@@ -97,45 +106,15 @@ function global:pnpm {
             $rc = $LASTEXITCODE
         }
 
-        $srcModules = Join-Path $tmpDir.FullName "node_modules"
-        if (Test-Path $srcModules) {
-            $destModules = Join-Path $workspaceRoot "node_modules"
-            if (Test-Path $destModules) { Remove-Item -Recurse -Force $destModules }
-            Copy-Item -Recurse $srcModules $workspaceRoot
+        # Only node_modules at the root and in pre-existing workspace members
+        # come back, so phase 2 cannot plant node_modules elsewhere in the project.
+        $moduleDirs = @('node_modules') + @($members | ForEach-Object { Join-Path $_ 'node_modules' })
+        foreach ($rel in $moduleDirs) {
+            if (-not (_Safe_Pkg_Copy_Modules -Base $tmpDir.FullName -Rel $rel -DestRoot $workspaceRoot)) { $rc = 1 }
         }
-        $srcLock = Join-Path $tmpDir.FullName "pnpm-lock.yaml"
-        if (Test-Path $srcLock) { Copy-Item $srcLock $workspaceRoot }
-        # add/remove/update rewrite the manifest inside the sandbox; sync it back.
-        $srcManifest = Join-Path $tmpDir.FullName "package.json"
-        if (Test-Path $srcManifest) { Copy-Item $srcManifest $workspaceRoot }
-
-        if (Test-Path (Join-Path $workspaceRoot "pnpm-workspace.yaml")) {
-            $storeSep = [IO.Path]::DirectorySeparatorChar + '.safe-store' + [IO.Path]::DirectorySeparatorChar
-            Get-ChildItem -Recurse -Directory -Filter "node_modules" -Path $tmpDir.FullName |
-                Where-Object { $_.FullName -ne $srcModules -and
-                               $_.FullName -notmatch [regex]::Escape($storeSep) } |
-                ForEach-Object {
-                    $rel = $_.FullName.Substring($tmpDir.FullName.Length).TrimStart([char]'\', [char]'/')
-                    $dest = Join-Path $workspaceRoot $rel
-                    if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
-                    New-Item -Type Directory -Force (Split-Path $dest -Parent) | Out-Null
-                    Copy-Item -Recurse $_.FullName $dest
-                }
-            # Sync back any workspace-member manifests the command may have rewritten.
-            $nmSep = [IO.Path]::DirectorySeparatorChar + 'node_modules' + [IO.Path]::DirectorySeparatorChar
-            Get-ChildItem -Recurse -Filter "package.json" -Path $tmpDir.FullName |
-                Where-Object { $_.FullName -ne $srcManifest -and
-                               $_.FullName -notmatch [regex]::Escape($nmSep) -and
-                               $_.FullName -notmatch [regex]::Escape($storeSep) } |
-                ForEach-Object {
-                    $rel = $_.FullName.Substring($tmpDir.FullName.Length).TrimStart([char]'\', [char]'/')
-                    $dest = Join-Path $workspaceRoot $rel
-                    New-Item -Type Directory -Force (Split-Path $dest -Parent) | Out-Null
-                    Copy-Item $_.FullName $dest
-                }
-        }
+        _Safe_Pkg_Copy_Files -From $snapDir.FullName -To $workspaceRoot -RelPaths $manifests
     }
 
-    Remove-Item -Recurse -Force $tmpDir.FullName
+    Remove-Item -Recurse -Force $tmpDir.FullName, $snapDir.FullName
     $global:LASTEXITCODE = $rc
 }

@@ -78,7 +78,7 @@ When you run an install-class command:
 2. **Copy only manifests** — `package.json`, the lockfile, workspace files, and `.npmrc` / `.yarnrc` go into a temp directory. Source files, `.env`, and secrets never leave the host.
 3. **Fetch in Docker** — ephemeral container, `--cap-drop ALL`, `--ignore-scripts`. Dependencies download with any registry token available but no package code running.
 4. **Build in Docker** — a second container with `--network none` and the token removed runs any lifecycle/build scripts against the downloaded store — nothing to steal, nowhere to send it. See [the two-phase model](./docs/security.md#two-phase-install).
-5. **Copy results back** — `node_modules` and the updated lockfile land in your project. The containers are discarded.
+5. **Copy results back** — `node_modules` lands in your project; the lockfile and manifests come from a snapshot taken before any build script ran. The containers are discarded.
 
 ---
 

@@ -47,6 +47,9 @@ function yarn
     end
 
     set -l tmpdir (mktemp -d)
+    # Host-only, never mounted into a container: the post-fetch manifest
+    # snapshots that copy-back reads from.
+    set -l snapdir (mktemp -d)
 
     for f in package.json yarn.lock .yarnrc .npmrc
         if test -f $f
@@ -73,6 +76,18 @@ function yarn
     set -l rc $status
 
     if test $rc -eq 0
+        # Snapshot manifests and lockfile before phase 2. Phase 1 ran no package
+        # code, so these hold only the package manager's own edits. Phase 2
+        # build scripts can rewrite anything under /app; a rewritten
+        # package.json script or lockfile URL would run natively on the next
+        # host command, so copy-back reads manifests from here, never from the
+        # sandbox.
+        for f in package.json yarn.lock
+            if test -f "$tmpdir/$f"
+                cp "$tmpdir/$f" "$snapdir/$f"
+            end
+        end
+
         # Strip registry credentials before any build script can run.
         if test -f "$tmpdir/.npmrc"
             grep -viE '(_authtoken|_auth|_password|username)[[:space:]]*=' "$tmpdir/.npmrc" >"$tmpdir/.npmrc.clean" 2>/dev/null
@@ -89,19 +104,22 @@ function yarn
             safe-pnpm:latest yarn install --offline --force $store_flag
         set rc $status
 
-        if test -d "$tmpdir/node_modules"
+        # A node_modules swapped for a symlink could pull in files from anywhere
+        # the link points; copy back only a plain directory.
+        if test -L "$tmpdir/node_modules"; or begin; test -e "$tmpdir/node_modules"; and not test -d "$tmpdir/node_modules"; end
+            echo "✗ safe-pnpm: sandbox node_modules is not a plain directory; not copied back." >&2
+            set rc 1
+        else if test -d "$tmpdir/node_modules"
             rm -rf node_modules
             cp -r "$tmpdir/node_modules" node_modules
         end
-        if test -f "$tmpdir/yarn.lock"
-            cp "$tmpdir/yarn.lock" yarn.lock
-        end
-        # add/remove/upgrade rewrite the manifest inside the sandbox; sync it back.
-        if test -f "$tmpdir/package.json"
-            cp "$tmpdir/package.json" package.json
+        for f in package.json yarn.lock
+            if test -f "$snapdir/$f"
+                cp "$snapdir/$f" $f
+            end
         end
     end
 
-    rm -rf $tmpdir
+    rm -rf $tmpdir $snapdir
     return $rc
 end
