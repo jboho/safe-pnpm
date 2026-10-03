@@ -414,6 +414,12 @@ _safe_pkg_run() {
 # source must resolve to exactly that path: a node_modules, or a member dir,
 # swapped for a symlink could otherwise pull in files from anywhere the link
 # points. Returns 1 when it refuses.
+#
+# Links inside node_modules are copied as links (-R): pnpm's layout is built
+# from them. macOS `cp -r` (undocumented there) follows links instead, turning
+# each package into a plain copy cut off from its dependencies in .pnpm/, so
+# the first import of one fails. Linux `cp -r` keeps links, so Linux CI never
+# showed this. Kept links must stay inside the project; see link-check.js.
 _safe_pkg_copy_modules() {
   local base="$1" member="$2" dest_root="$3"
   local rel="${member:+$member/}node_modules"
@@ -426,6 +432,23 @@ _safe_pkg_copy_modules() {
     echo "✗ safe-pnpm: sandbox $rel is not a plain directory; not copied back." >&2
     return 1
   fi
+  _safe_pkg_links_ok "$base" "$rel" || return 1
   rm -rf "${dest_root:?}/$rel"
-  cp -r "$src" "${dest_root}/$rel"
+  cp -R "$src" "${dest_root}/$rel"
+}
+
+# _safe_pkg_links_ok base rel
+#
+# Fails closed: a missing checker or a tree it cannot read refuses copy-back.
+_safe_pkg_links_ok() {
+  local base="$1" rel="$2"
+  local checker="$HOME/.safe-pnpm/link-check.js"
+  if [ ! -f "$checker" ]; then
+    echo "✗ safe-pnpm: link check not installed — run \`safe-pnpm update\`; $rel not copied back." >&2
+    return 1
+  fi
+  if ! node "$checker" "$base" "$rel"; then
+    echo "✗ safe-pnpm: sandbox $rel has links that point outside the project; not copied back." >&2
+    return 1
+  fi
 }

@@ -116,8 +116,12 @@ function npm
             echo "✗ safe-pnpm: sandbox node_modules is not a plain directory; not copied back." >&2
             set rc 1
         else if test -d "$tmpdir/node_modules"
-            rm -rf node_modules
-            cp -r "$tmpdir/node_modules" node_modules
+            if _safe_pkg_links_ok $tmpdir node_modules
+                rm -rf node_modules
+                cp -R "$tmpdir/node_modules" node_modules
+            else
+                set rc 1
+            end
         end
         for f in package.json package-lock.json
             if test -f "$snapdir/$f"

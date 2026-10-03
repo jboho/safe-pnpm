@@ -168,8 +168,12 @@ function pnpm
                 set rc 1
                 continue
             end
+            if not _safe_pkg_links_ok $tmpdir $rel
+                set rc 1
+                continue
+            end
             rm -rf "$workspace_root/$rel"
-            cp -r "$nm" "$workspace_root/$rel"
+            cp -R "$nm" "$workspace_root/$rel"
         end
         for f in package.json pnpm-lock.yaml
             if test -f "$snapdir/tree/$f"

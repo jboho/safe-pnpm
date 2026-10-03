@@ -12,7 +12,7 @@ Measured on Apple Silicon with a warm Docker daemon:
 | Medium (100–350 packages) | ~15–30s |
 | Large (350+ packages) | ~45–90s |
 
-Most of the overhead on large projects is **copy-back** — moving `node_modules` out of the container and onto your local filesystem after the install completes. The install itself is fast; the `cp -r` is the bottleneck.
+Most of the overhead on large projects is **copy-back** — moving `node_modules` out of the container and onto your local filesystem after the install completes. The install itself is fast; the `cp -R` is the bottleneck.
 
 The malware check adds one request to OSV per 1,000 resolved packages, about a second each on a typical connection, plus one lookup per advisory it finds.
 
