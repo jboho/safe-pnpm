@@ -131,3 +131,18 @@ function _safe_pkg_malware_scan --argument lockfile
     echo "⚠️  $reason Continuing without it." >&2
     return 0
 end
+
+# Copy-back keeps links inside node_modules as links; every one must stay
+# inside the project. See _safe_pkg_copy_modules in _safe_pkg_shared.sh and
+# link-check.js. Fails closed: a missing checker refuses copy-back.
+function _safe_pkg_links_ok --argument base rel
+    set -l checker "$HOME/.safe-pnpm/link-check.js"
+    if not test -f $checker
+        echo "✗ safe-pnpm: link check not installed — run `safe-pnpm update`; $rel not copied back." >&2
+        return 1
+    end
+    if not node $checker $base $rel
+        echo "✗ safe-pnpm: sandbox $rel has links that point outside the project; not copied back." >&2
+        return 1
+    end
+end

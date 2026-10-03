@@ -62,6 +62,7 @@ const SHELLS = [
 // opts.osvApi    — install the malware scanner and point it at this OSV API;
 //                  without it the scanner is absent
 // opts.osvStrict — set SAFE_PNPM_OSV_STRICT=1
+// opts.noLinkCheck — leave link-check.js out of the fake ~/.safe-pnpm
 function runWrapper(manager, wrapperFile, opts = {}) {
   const shell = opts.shell ?? "bash";
   const lockfile = LOCKFILES[manager];
@@ -75,8 +76,14 @@ function runWrapper(manager, wrapperFile, opts = {}) {
   if (opts.phase1Lock !== undefined) {
     fs.writeFileSync(path.join(log, "phase1-lock"), opts.phase1Lock);
   }
+  fs.mkdirSync(path.join(root, ".safe-pnpm"));
+  if (!opts.noLinkCheck) {
+    fs.copyFileSync(
+      path.join(ASSETS_DIR, "link-check.js"),
+      path.join(root, ".safe-pnpm", "link-check.js"),
+    );
+  }
   if (opts.osvApi) {
-    fs.mkdirSync(path.join(root, ".safe-pnpm"));
     fs.copyFileSync(
       path.join(ASSETS_DIR, "malware-scan.js"),
       path.join(root, ".safe-pnpm", "malware-scan.js"),
@@ -392,6 +399,114 @@ ln -s "$src/../outside" "$src/packages/a"
     assert.ok(
       !fs.existsSync(path.join(proj, "packages", "a", "node_modules")),
       "a member dir swapped for a symlink must not be copied back",
+    );
+  });
+}
+
+// pnpm builds node_modules from relative symlinks into .pnpm/. Copy-back must
+// keep them as links: macOS `cp -r` follows them and leaves every package cut
+// off from its dependencies. Linux `cp -r` keeps links, so on Linux these pass
+// with or without the fix; macOS is where they guard against a regression.
+const PNPM_LAYOUT = `
+mkdir -p "$src/node_modules/.pnpm/real@1.0.0/node_modules/real"
+echo "module.exports=2" > "$src/node_modules/.pnpm/real@1.0.0/node_modules/real/index.js"
+ln -s .pnpm/real@1.0.0/node_modules/real "$src/node_modules/real"
+`;
+
+function assertLink(proj, rel, target) {
+  const p = path.join(proj, rel);
+  assert.ok(fs.lstatSync(p).isSymbolicLink(), `${rel} must stay a symlink`);
+  assert.equal(fs.readlinkSync(p), target);
+}
+
+for (const { shell, ext, available } of SHELLS) {
+  for (const manager of ["npm", "pnpm", "yarn"]) {
+    const wrapperFile = `${manager}-wrapper.${ext}`;
+
+    test(`${manager} (${shell}): symlinks inside node_modules are copied back as links`, {
+      skip: !available,
+    }, () => {
+      const { proj, read, status } = runWrapper(manager, wrapperFile, {
+        shell,
+        phase2: PNPM_LAYOUT,
+      });
+      assert.equal(status, 0, read("stderr"));
+      assertLink(
+        proj,
+        "node_modules/real",
+        ".pnpm/real@1.0.0/node_modules/real",
+      );
+      assert.equal(
+        fs
+          .readFileSync(
+            path.join(proj, "node_modules", "real", "index.js"),
+            "utf8",
+          )
+          .trim(),
+        "module.exports=2",
+        "the link must resolve inside the copied tree",
+      );
+    });
+
+    test(`${manager} (${shell}): a symlink pointing outside the project is refused`, {
+      skip: !available,
+    }, () => {
+      const { proj, read, status } = runWrapper(manager, wrapperFile, {
+        shell,
+        phase2: `${PNPM_LAYOUT}
+ln -s /etc "$src/node_modules/abs"
+ln -s ../../outside "$src/node_modules/real/up"
+`,
+      });
+      assert.notEqual(status, 0, "a refused copy-back must fail the install");
+      const err = read("stderr");
+      assert.match(err, /node_modules\/abs -> \/etc/);
+      assert.match(err, /points? outside the project/);
+      assert.ok(
+        !fs.existsSync(path.join(proj, "node_modules")),
+        "nothing from a tree with an escaping link is copied back",
+      );
+    });
+  }
+
+  test(`pnpm workspace (${shell}): workspace and member links are copied back as links`, {
+    skip: !available,
+  }, () => {
+    const { proj, read, status } = runWrapper("pnpm", `pnpm-wrapper.${ext}`, {
+      shell,
+      workspace: true,
+      phase2: `${PNPM_LAYOUT}
+ln -s ../packages/a "$src/node_modules/a"
+ln -s ../../../node_modules/.pnpm/real@1.0.0/node_modules/real "$src/packages/a/node_modules/real"
+`,
+    });
+    assert.equal(status, 0, read("stderr"));
+    assertLink(proj, "node_modules/a", "../packages/a");
+    assertLink(
+      proj,
+      "packages/a/node_modules/real",
+      "../../../node_modules/.pnpm/real@1.0.0/node_modules/real",
+    );
+    assert.ok(
+      fs.existsSync(
+        path.join(proj, "packages", "a", "node_modules", "real", "index.js"),
+      ),
+      "the member link must resolve to the root .pnpm store",
+    );
+  });
+
+  test(`pnpm (${shell}): a missing link checker refuses copy-back`, {
+    skip: !available,
+  }, () => {
+    const { proj, read, status } = runWrapper("pnpm", `pnpm-wrapper.${ext}`, {
+      shell,
+      noLinkCheck: true,
+    });
+    assert.notEqual(status, 0, "a refused copy-back must fail the install");
+    assert.match(read("stderr"), /link check not installed/);
+    assert.ok(
+      !fs.existsSync(path.join(proj, "node_modules")),
+      "copy-back must fail closed without the checker",
     );
   });
 }
