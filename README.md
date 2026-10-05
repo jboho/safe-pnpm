@@ -1,12 +1,51 @@
-# @jboho/safe-pnpm
+<!-- markdownlint-disable MD033 MD041 -->
 
-[![CI](https://github.com/jboho/safe-pnpm/actions/workflows/ci.yml/badge.svg)](https://github.com/jboho/safe-pnpm/actions/workflows/ci.yml)
-[![Node >=16](https://img.shields.io/badge/node-%3E%3D16-brightgreen.svg)](https://nodejs.org/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+<h1 align="center">safe-pnpm</h1>
 
-A Docker-based install isolation wrapper for **pnpm, npm, and yarn** that protects developer machines from malicious package lifecycle scripts (`postinstall`, `preinstall`, etc.).
+<p align="center">
+  <strong>Docker install isolation for pnpm, npm and yarn — lifecycle scripts never run on your host</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/jboho/safe-pnpm/actions/workflows/ci.yml"><img src="https://github.com/jboho/safe-pnpm/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
+  <a href="https://www.npmjs.com/package/@jboho/safe-pnpm"><img src="https://img.shields.io/npm/v/@jboho/safe-pnpm.svg" alt="npm version" /></a>
+  <a href="https://calver.org/"><img src="https://img.shields.io/badge/calver-YYYY.M.MICRO-228bff.svg" alt="CalVer" /></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D16-brightgreen.svg" alt="Node >=16" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-yellow.svg" alt="License: MIT" /></a>
+</p>
+
+<p align="center">
+  <sub>pnpm · npm · yarn · two-phase Docker install · OSV malware scan · optional Socket scan</sub>
+</p>
+
+---
+
+## Overview
+
+**safe-pnpm** wraps **pnpm, npm, and yarn** so that package lifecycle scripts (`postinstall`, `preinstall`, etc.) never run on your machine.
 
 When you run `pnpm install`, `npm install`, or `yarn install`, the wrapper pre-scans for known CVEs and malicious packages, runs the install inside an ephemeral Docker container that only sees your manifests and lockfile (never source files, `.env`, or credentials), then copies `node_modules` back. All non-install commands pass through instantly with no overhead.
+
+| Topic               | Links                                                              |
+| ------------------- | ------------------------------------------------------------------ |
+| **License**         | [MIT](LICENSE)                                                     |
+| **Security model**  | [docs/security.md](docs/security.md) · [SECURITY.md](SECURITY.md)  |
+| **Contributing**    | [CONTRIBUTING.md](CONTRIBUTING.md)                                 |
+| **Roadmap**         | [ROADMAP.md](ROADMAP.md)                                           |
+| **Socket scanning** | [docs/socket.md](docs/socket.md)                                   |
+| **Private registries** | [docs/private-registry.md](docs/private-registry.md)            |
+| **Performance**     | [docs/performance.md](docs/performance.md)                         |
+| **Versioning**      | [CalVer](https://calver.org/) `YYYY.M.MICRO`                       |
+
+## Status
+
+Published to npm as `@jboho/safe-pnpm` (first public release 2026.10.2, with provenance). Known gaps, tracked in [ROADMAP.md](ROADMAP.md) under M4:
+
+- The containers run as root inside Docker (`--cap-drop ALL` and `no-new-privileges` apply; no `USER` is set yet).
+- The CVE audit runs before the fetch, so a package passed to `add` is not covered by it. The OSV malware check does cover it.
+- PowerShell is the least-tested shell: its wrappers have parse tests only, and copy-back has no symlink containment check yet (sh and fish do).
+- Fish has no tests for the Socket-strict and malware-strict paths.
+- Requires Docker; developed and tested on macOS and Linux CI. Windows is not tested.
 
 ## Install
 
