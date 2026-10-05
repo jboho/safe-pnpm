@@ -10,14 +10,32 @@ function _Safe_Pkg_Prescan {
     if (Test-Path $Lockfile) {
         Write-Host "→ $Manager audit..." -ForegroundColor Cyan
         $mgr = (Get-Command $Manager -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
-        switch ($Manager) {
-            'pnpm' { & $mgr audit --audit-level moderate 2>$null | Out-Null }
-            'npm'  { & $mgr audit --audit-level moderate 2>$null | Out-Null }
-            'yarn' { & $mgr audit 2>$null | Out-Null }
-        }
-        if ($LASTEXITCODE -ne 0) {
-            $ans = Read-Host "⚠️  $Manager audit found issues. Continue anyway? [y/N]"
-            if ($ans -notmatch '^[Yy]') { return $false }
+        # Output is kept and shown on failure: a non-zero exit means either
+        # advisories or that the audit itself could not run (offline, registry
+        # error), and the user needs the text to tell which.
+        $auditOut = [IO.Path]::GetTempFileName()
+        try {
+            switch ($Manager) {
+                'pnpm' { & $mgr audit --audit-level moderate *> $auditOut }
+                'npm'  { & $mgr audit --audit-level moderate *> $auditOut }
+                'yarn' { & $mgr audit *> $auditOut }
+            }
+            $auditRc = $LASTEXITCODE
+            if ($auditRc -ne 0) {
+                Get-Content $auditOut -Tail 40 | ForEach-Object { [Console]::Error.WriteLine($_) }
+                if ($env:SAFE_PNPM_STRICT -eq '1') {
+                    Write-Host "✗ $Manager audit failed or found issues. Blocking (SAFE_PNPM_STRICT=1)." -ForegroundColor Red
+                    return $false
+                }
+                if (-not [Console]::IsInputRedirected) {
+                    $ans = Read-Host "⚠️  $Manager audit failed or found issues. Continue anyway? [y/N]"
+                    if ($ans -notmatch '^[Yy]') { return $false }
+                } else {
+                    Write-Host "⚠️  $Manager audit failed or found issues — continuing in non-interactive mode." -ForegroundColor Yellow
+                }
+            }
+        } finally {
+            Remove-Item $auditOut -Force -ErrorAction SilentlyContinue
         }
     }
 
@@ -37,7 +55,7 @@ function _Safe_Pkg_Prescan {
 # because a scan that never ran is not evidence of a problem.
 # SAFE_PNPM_SOCKET_STRICT=1 makes both block.
 function _Safe_Pkg_Socket_Scan {
-    $strict = ($env:SAFE_PNPM_SOCKET_STRICT -eq '1')
+    $strict = ($env:SAFE_PNPM_SOCKET_STRICT -eq '1') -or ($env:SAFE_PNPM_STRICT -eq '1')
     $socketCmd = Join-Path $HOME ".safe-pnpm\socket"
     $classifier = Join-Path $HOME ".safe-pnpm\socket-classify.js"
 
@@ -110,19 +128,61 @@ function _Safe_Pkg_Malware_Scan {
         Write-Host "✗ $reason Blocking (SAFE_PNPM_OSV_STRICT=1)." -ForegroundColor Red
         return $false
     }
+    if ($env:SAFE_PNPM_STRICT -eq '1') {
+        Write-Host "✗ $reason Blocking (SAFE_PNPM_STRICT=1)." -ForegroundColor Red
+        return $false
+    }
     Write-Host "⚠️  $reason Continuing without it." -ForegroundColor Yellow
     return $true
 }
 
-# Remove only credential-bearing lines from a copied .npmrc, leaving registry
-# URLs, scopes and hoisting config intact. Used between the fetch and build
-# phases so build-time lifecycle scripts never see a registry token.
+# Remove only credential-bearing lines from a copied .npmrc/.yarnrc, leaving
+# registry URLs, scopes and hoisting config intact. Used between the fetch and
+# build phases so build-time lifecycle scripts never see a registry token.
+# .yarnrc (v1) writes `_authToken "x"` with no `=`; .yarnrc.yml uses
+# npmAuthToken/npmAuthIdent keys with `:`.
 function _Safe_Pkg_Strip_NpmrcAuth {
     param([string]$Path)
     if (-not (Test-Path $Path)) { return }
-    (Get-Content $Path) |
-        Where-Object { $_ -notmatch '(?i)(_authtoken|_auth|_password|username)\s*=' } |
-        Set-Content $Path
+    $kept = @(Get-Content $Path |
+        Where-Object { $_ -notmatch '(?i)(_authtoken|_auth|_password|username|npmauthtoken|npmauthident)\s*[=:"\s]' })
+    # Set-Content with an empty pipeline leaves the file untouched, which would
+    # keep every credential when nothing else is in the file.
+    [IO.File]::WriteAllLines((Resolve-Path -LiteralPath $Path).Path, [string[]]$kept)
+}
+
+# Limits for both containers: no setuid escalation and a bounded process count
+# (a fork bomb in a build script would otherwise take down the Docker VM).
+# Memory is opt-in because legitimate builds vary widely in what they need.
+function _Safe_Pkg_Hardening {
+    $h = @('--security-opt','no-new-privileges','--pids-limit','1024')
+    if ($env:SAFE_PNPM_MEMORY) { $h += @('--memory',$env:SAFE_PNPM_MEMORY) }
+    return $h
+}
+
+# Docker is not running. Non-interactive (CI, scripts): fail closed, because
+# silently running native would execute untrusted lifecycle scripts on the host.
+# Interactive: ask. Mirrors the docker-down branch of _safe_pkg_run in
+# _safe_pkg_shared.sh.
+function _Safe_Pkg_Native_Fallback {
+    param([string]$Manager, [object[]]$PassArgs)
+    $exe = (Get-Command $Manager -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+    if ([Console]::IsInputRedirected) {
+        if ($env:SAFE_PNPM_ALLOW_NATIVE_FALLBACK -eq '1') {
+            Write-Host "⚠️  safe-pnpm: Docker not running — SAFE_PNPM_ALLOW_NATIVE_FALLBACK=1 set, running native $Manager." -ForegroundColor Yellow
+            & $exe @PassArgs
+            return
+        }
+        Write-Host "✗ safe-pnpm: Docker not running and no TTY — refusing native $Manager (set SAFE_PNPM_ALLOW_NATIVE_FALLBACK=1 to override)." -ForegroundColor Red
+        $global:LASTEXITCODE = 1
+        return
+    }
+    $ans = Read-Host "⚠️  safe-pnpm: Docker not running. Use native $Manager? [y/N]"
+    if ($ans -match '^[Yy]') {
+        & $exe @PassArgs
+    } else {
+        $global:LASTEXITCODE = 1
+    }
 }
 
 # Copies each relative file path that exists under From to the same path under

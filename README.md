@@ -120,16 +120,25 @@ See [docs/socket.md](./docs/socket.md) for the full outcome table, failure seman
 
 ---
 
+## Strict mode (CI)
+
+By default, a scan that could not run (offline, expired token, audit error) warns and the install continues. In CI, set one variable to block instead:
+
+```sh
+export SAFE_PNPM_STRICT=1   # block on audit, Socket and OSV findings or failures
+export SAFE_PNPM_MEMORY=2g  # optional: memory limit for both containers
+```
+
+`SAFE_PNPM_OSV_STRICT=1` and `SAFE_PNPM_SOCKET_STRICT=1` set the same behavior for a single layer.
+
+---
+
 ## Bypass
 
 To bypass the wrapper and run the native binary directly:
 
 ```sh
-\pnpm install         # bash/zsh
-\npm install
-\yarn install
-
-command pnpm install  # any POSIX shell (also fish)
+command pnpm install   # bash, zsh and fish
 command npm install
 command yarn install
 

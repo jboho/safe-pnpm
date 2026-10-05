@@ -35,7 +35,6 @@ The Docker daemon does a cold start on the first install of a terminal session (
 If you need native speed for a one-off install (e.g., quickly trying a package):
 
 ```sh
-\pnpm install         # bash/zsh/fish
-command pnpm install  # any POSIX shell
+command pnpm install  # bash, zsh and fish
 pnpm.cmd install      # PowerShell
 ```

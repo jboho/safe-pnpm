@@ -26,11 +26,7 @@ function global:pnpm {
 
     docker info 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        $ans = Read-Host "⚠️  safe-pnpm: Docker not running. Use native pnpm? [y/N]"
-        if ($ans -match '^[Yy]') {
-            $pnpmExe = (Get-Command pnpm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
-            & $pnpmExe @passArgs
-        }
+        _Safe_Pkg_Native_Fallback -Manager pnpm -PassArgs $passArgs
         return
     }
 
@@ -54,73 +50,80 @@ function global:pnpm {
     # snapshots that copy-back reads from.
     $snapDir = New-TemporaryFile | ForEach-Object { Remove-Item $_ -Force; New-Item -Type Directory $_ }
 
-    Push-Location $workspaceRoot
-    foreach ($f in @('package.json','pnpm-lock.yaml','pnpm-workspace.yaml','.npmrc')) {
-        if (Test-Path $f) { Copy-Item $f $tmpDir.FullName }
-    }
-    $members = @()
-    if (Test-Path "pnpm-workspace.yaml") {
-        $members = @(Get-ChildItem -Recurse -Filter "package.json" |
-            Where-Object { $_.FullName -notmatch [regex]::Escape("node_modules") -and
-                           $_.DirectoryName -ne $workspaceRoot } |
-            ForEach-Object {
-                $member = $_.DirectoryName.Substring($workspaceRoot.Length).TrimStart([char]'\', [char]'/')
-                $dest = Join-Path $tmpDir.FullName $member
-                New-Item -Type Directory -Force $dest | Out-Null
-                Copy-Item $_.FullName $dest
-                $member
-            })
-    }
-    Pop-Location
+    # tmpDir holds a copy of .npmrc (registry token); remove both dirs even if the
+    # run is interrupted with Ctrl-C.
+    try {
 
-    $workdir = if ($relPath) { "/app/$($relPath -replace '\\','/')" } else { "/app" }
-    # Per-manager store kept under /app so phase 2 resolves fully offline.
-    $storeFlag = @('--config.store-dir=/app/.safe-store')
+        Push-Location $workspaceRoot
+        foreach ($f in @('package.json','pnpm-lock.yaml','pnpm-workspace.yaml','.npmrc')) {
+            if (Test-Path $f) { Copy-Item $f $tmpDir.FullName }
+        }
+        $members = @()
+        if (Test-Path "pnpm-workspace.yaml") {
+            $members = @(Get-ChildItem -Recurse -Filter "package.json" |
+                Where-Object { $_.FullName -notmatch [regex]::Escape("node_modules") -and
+                               $_.DirectoryName -ne $workspaceRoot } |
+                ForEach-Object {
+                    $member = $_.DirectoryName.Substring($workspaceRoot.Length).TrimStart([char]'\', [char]'/')
+                    $dest = Join-Path $tmpDir.FullName $member
+                    New-Item -Type Directory -Force $dest | Out-Null
+                    Copy-Item $_.FullName $dest
+                    $member
+                })
+        }
+        Pop-Location
 
-    # Tokens are forwarded only into the fetch phase, where --ignore-scripts
-    # guarantees no package code runs. They are never present during phase 2.
-    $tokenEnv = @()
-    if ($env:NODE_AUTH_TOKEN) { $tokenEnv += @('-e','NODE_AUTH_TOKEN') }
-    if ($env:NPM_TOKEN)       { $tokenEnv += @('-e','NPM_TOKEN') }
+        $workdir = if ($relPath) { "/app/$($relPath -replace '\\','/')" } else { "/app" }
+        # Per-manager store kept under /app so phase 2 resolves fully offline.
+        $storeFlag = @('--config.store-dir=/app/.safe-store')
 
-    # Phase 1: fetch (network on, token available, scripts disabled).
-    $p1 = @('run','--rm','--cap-drop','ALL','-v',"$($tmpDir.FullName):/app",'-w',$workdir) +
-        $tokenEnv + @('safe-pnpm:latest','pnpm') + $passArgs + @('--ignore-scripts') + $storeFlag
-    & docker @p1
-    $rc = $LASTEXITCODE
+        # Tokens are forwarded only into the fetch phase, where --ignore-scripts
+        # guarantees no package code runs. They are never present during phase 2.
+        $tokenEnv = @()
+        if ($env:NODE_AUTH_TOKEN) { $tokenEnv += @('-e','NODE_AUTH_TOKEN') }
+        if ($env:NPM_TOKEN)       { $tokenEnv += @('-e','NPM_TOKEN') }
 
-    # Known-malware check on the tree phase 1 resolved, before any package
-    # code runs. A hit discards the sandbox: nothing is built or copied back.
-    if ($rc -eq 0 -and -not (_Safe_Pkg_Malware_Scan (Join-Path $tmpDir.FullName 'pnpm-lock.yaml'))) { $rc = 1 }
+        # Phase 1: fetch (network on, token available, scripts disabled).
+        $p1 = @('run','--rm','--cap-drop','ALL') + (_Safe_Pkg_Hardening) + @('-v',"$($tmpDir.FullName):/app",'-w',$workdir) +
+            $tokenEnv + @('safe-pnpm:latest','pnpm') + $passArgs + @('--ignore-scripts') + $storeFlag
+        & docker @p1
+        $rc = $LASTEXITCODE
 
-    if ($rc -eq 0) {
-        $manifests = @('package.json','pnpm-lock.yaml') + @($members | ForEach-Object { Join-Path $_ 'package.json' })
-        _Safe_Pkg_Copy_Files -From $tmpDir.FullName -To $snapDir.FullName -RelPaths $manifests
+        # Known-malware check on the tree phase 1 resolved, before any package
+        # code runs. A hit discards the sandbox: nothing is built or copied back.
+        if ($rc -eq 0 -and -not (_Safe_Pkg_Malware_Scan (Join-Path $tmpDir.FullName 'pnpm-lock.yaml'))) { $rc = 1 }
 
-        # `pnpm fetch` only populates the store; there is nothing to build.
-        if ($cmd -ne 'fetch') {
-            # Strip registry credentials before any build script can run.
-            _Safe_Pkg_Strip_NpmrcAuth (Join-Path $tmpDir.FullName '.npmrc')
+        if ($rc -eq 0) {
+            $manifests = @('package.json','pnpm-lock.yaml') + @($members | ForEach-Object { Join-Path $_ 'package.json' })
+            _Safe_Pkg_Copy_Files -From $tmpDir.FullName -To $snapDir.FullName -RelPaths $manifests
 
-            $netFlag = @('--network','none')
-            if ($env:SAFE_PNPM_BUILD_NETWORK -eq '1') { $netFlag = @() }
+            # `pnpm fetch` only populates the store; there is nothing to build.
+            if ($cmd -ne 'fetch') {
+                # Strip registry credentials before any build script can run.
+                _Safe_Pkg_Strip_NpmrcAuth (Join-Path $tmpDir.FullName '.npmrc')
+                _Safe_Pkg_Strip_NpmrcAuth (Join-Path $tmpDir.FullName '.yarnrc')
 
-            # Phase 2: build (no token, no .npmrc auth, network off by default).
-            $p2 = @('run','--rm','--cap-drop','ALL') + $netFlag +
-                @('-v',"$($tmpDir.FullName):/app",'-w',$workdir,'safe-pnpm:latest','pnpm','install','--offline','--trust-lockfile') + $storeFlag
-            & docker @p2
-            $rc = $LASTEXITCODE
+                $netFlag = @('--network','none')
+                if ($env:SAFE_PNPM_BUILD_NETWORK -eq '1') { $netFlag = @() }
+
+                # Phase 2: build (no token, no .npmrc auth, network off by default).
+                $p2 = @('run','--rm','--cap-drop','ALL') + (_Safe_Pkg_Hardening) + $netFlag +
+                    @('-v',"$($tmpDir.FullName):/app",'-w',$workdir,'safe-pnpm:latest','pnpm','install','--offline','--trust-lockfile') + $storeFlag
+                & docker @p2
+                $rc = $LASTEXITCODE
+            }
+
+            # Only node_modules at the root and in pre-existing workspace members
+            # come back, so phase 2 cannot plant node_modules elsewhere in the project.
+            $moduleDirs = @('node_modules') + @($members | ForEach-Object { Join-Path $_ 'node_modules' })
+            foreach ($rel in $moduleDirs) {
+                if (-not (_Safe_Pkg_Copy_Modules -Base $tmpDir.FullName -Rel $rel -DestRoot $workspaceRoot)) { $rc = 1 }
+            }
+            _Safe_Pkg_Copy_Files -From $snapDir.FullName -To $workspaceRoot -RelPaths $manifests
         }
 
-        # Only node_modules at the root and in pre-existing workspace members
-        # come back, so phase 2 cannot plant node_modules elsewhere in the project.
-        $moduleDirs = @('node_modules') + @($members | ForEach-Object { Join-Path $_ 'node_modules' })
-        foreach ($rel in $moduleDirs) {
-            if (-not (_Safe_Pkg_Copy_Modules -Base $tmpDir.FullName -Rel $rel -DestRoot $workspaceRoot)) { $rc = 1 }
-        }
-        _Safe_Pkg_Copy_Files -From $snapDir.FullName -To $workspaceRoot -RelPaths $manifests
+        $global:LASTEXITCODE = $rc
+    } finally {
+        Remove-Item -Recurse -Force $tmpDir.FullName, $snapDir.FullName -ErrorAction SilentlyContinue
     }
-
-    Remove-Item -Recurse -Force $tmpDir.FullName, $snapDir.FullName
-    $global:LASTEXITCODE = $rc
 }

@@ -5,7 +5,8 @@
 # Intercepts install-class pnpm commands and runs them in an isolated Docker
 # container that only sees package manifests (no source files, no .env).
 # All other commands pass through to native pnpm unchanged.
-# Escape hatch: \pnpm install bypasses to native pnpm.
+# Escape hatch: `command pnpm install` bypasses to native pnpm (a backslash only
+# bypasses aliases, not shell functions like this wrapper).
 
 [ -z "${_SAFE_PKG_SHARED_LOADED:-}" ] && \
   # shellcheck disable=SC1091

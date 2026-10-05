@@ -61,6 +61,7 @@ function pnpm
     # Host-only, never mounted into a container: the post-fetch manifest
     # snapshots that copy-back reads from.
     set -l snapdir (mktemp -d)
+    _safe_pkg_track $tmpdir $snapdir
     set -l members
 
     pushd $workspace_root
@@ -97,8 +98,16 @@ function pnpm
         set token_env $token_env -e NPM_TOKEN
     end
 
+    # Limits for both containers: no setuid escalation and a bounded process
+    # count (a fork bomb in a build script would otherwise take down the Docker
+    # VM). Memory is opt-in because legitimate builds vary widely in what they need.
+    set -l hardening --security-opt no-new-privileges --pids-limit 1024
+    if test -n "$SAFE_PNPM_MEMORY"
+        set hardening $hardening --memory $SAFE_PNPM_MEMORY
+    end
+
     # Phase 1: fetch (network on, token available, scripts disabled).
-    docker run --rm --cap-drop ALL -v "$tmpdir:/app" -w $workdir $token_env \
+    docker run --rm --cap-drop ALL $hardening -v "$tmpdir:/app" -w $workdir $token_env \
         safe-pnpm:latest pnpm $pass_args --ignore-scripts $store_flag
     set -l rc $status
 
@@ -132,10 +141,8 @@ function pnpm
         # `pnpm fetch` only populates the store; there is nothing to build.
         if test "$argv[1]" != "fetch"
             # Strip registry credentials before any build script can run.
-            if test -f "$tmpdir/.npmrc"
-                grep -viE '(_authtoken|_auth|_password|username)[[:space:]]*=' "$tmpdir/.npmrc" >"$tmpdir/.npmrc.clean" 2>/dev/null
-                mv "$tmpdir/.npmrc.clean" "$tmpdir/.npmrc"
-            end
+            _safe_pkg_strip_npmrc_auth "$tmpdir/.npmrc"
+            _safe_pkg_strip_npmrc_auth "$tmpdir/.yarnrc"
 
             set -l net_flag --network none
             if test "$SAFE_PNPM_BUILD_NETWORK" = 1
@@ -143,7 +150,7 @@ function pnpm
             end
 
             # Phase 2: build (no token, no .npmrc auth, network off by default).
-            docker run --rm --cap-drop ALL $net_flag -v "$tmpdir:/app" -w $workdir \
+            docker run --rm --cap-drop ALL $hardening $net_flag -v "$tmpdir:/app" -w $workdir \
                 safe-pnpm:latest pnpm install --offline --trust-lockfile $store_flag
             set rc $status
         end
@@ -187,6 +194,6 @@ function pnpm
         end
     end
 
-    rm -rf $tmpdir $snapdir
+    _safe_pkg_untrack $tmpdir $snapdir
     return $rc
 end
