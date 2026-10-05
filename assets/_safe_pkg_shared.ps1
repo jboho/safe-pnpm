@@ -225,7 +225,12 @@ function _Safe_Pkg_Copy_Modules {
     $dest = Join-Path $DestRoot $Rel
     if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Recurse -Force }
     New-Item -Type Directory -Force (Split-Path $dest -Parent) | Out-Null
-    _Safe_Pkg_Copy_Tree -From $src -To $dest
+    try {
+        _Safe_Pkg_Copy_Tree -From $src -To $dest
+    } catch {
+        Write-Host "✗ safe-pnpm: copying $Rel back failed: $($_.Exception.Message)" -ForegroundColor Red
+        return $false
+    }
     return $true
 }
 
@@ -235,9 +240,16 @@ function _Safe_Pkg_Links_Ok {
     param([string]$Base, [string]$Rel)
     $checker = Join-Path $HOME ".safe-pnpm\link-check.js"
     if (-not (Test-Path -LiteralPath $checker)) {
-        Write-Host "✗ safe-pnpm: link check not installed — run 'safe-pnpm setup'. $Rel not copied back." -ForegroundColor Red
+        Write-Host "✗ safe-pnpm: link check not installed — run 'safe-pnpm update'. $Rel not copied back." -ForegroundColor Red
         return $false
     }
+    # A missing `node` leaves $LASTEXITCODE at whatever an earlier native
+    # command set (often 0), which would read as a pass.
+    if (-not (Get-Command node -CommandType Application -ErrorAction SilentlyContinue)) {
+        Write-Host "✗ safe-pnpm: node not found; link check cannot run. $Rel not copied back." -ForegroundColor Red
+        return $false
+    }
+    $global:LASTEXITCODE = 1
     $out = (& node $checker $Base $Rel 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) {
         Write-Host "✗ safe-pnpm: $Rel not copied back. $out" -ForegroundColor Red
@@ -252,15 +264,15 @@ function _Safe_Pkg_Links_Ok {
 # links; _Safe_Pkg_Links_Ok has already vetted every target.
 function _Safe_Pkg_Copy_Tree {
     param([string]$From, [string]$To)
-    New-Item -Type Directory -Force $To | Out-Null
-    foreach ($i in (Get-ChildItem -LiteralPath $From -Force)) {
+    New-Item -Type Directory -Force $To -ErrorAction Stop | Out-Null
+    foreach ($i in (Get-ChildItem -LiteralPath $From -Force -ErrorAction Stop)) {
         $d = Join-Path $To $i.Name
         if ($i.LinkType -eq 'SymbolicLink' -or $i.LinkType -eq 'Junction') {
-            New-Item -ItemType SymbolicLink -Path $d -Target ([string]@($i.Target)[0]) | Out-Null
+            New-Item -ItemType SymbolicLink -Path $d -Target ([string]@($i.Target)[0]) -ErrorAction Stop | Out-Null
         } elseif ($i.PSIsContainer) {
             _Safe_Pkg_Copy_Tree -From $i.FullName -To $d
         } else {
-            Copy-Item -LiteralPath $i.FullName $d
+            Copy-Item -LiteralPath $i.FullName $d -ErrorAction Stop
         }
     }
 }

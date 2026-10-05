@@ -32,6 +32,7 @@ for (const [target, depth, why] of [
   ["/etc", 1, "absolute"],
   ["/Users/someone/.ssh", 3, "absolute"],
   ["C:\\Windows", 1, "absolute on Windows"],
+  ["..\\..\\..\\Windows", 1, "backslash separators"],
   ["../..", 1, "climbs above the project"],
   ["../../../outside", 2, "climbs above the project"],
   [".pnpm/../../..", 1, "`..` after a plain name"],
