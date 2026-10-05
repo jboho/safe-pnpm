@@ -221,9 +221,46 @@ function _Safe_Pkg_Copy_Modules {
             return $false
         }
     }
+    if (-not (_Safe_Pkg_Links_Ok -Base $Base -Rel $Rel)) { return $false }
     $dest = Join-Path $DestRoot $Rel
     if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Recurse -Force }
     New-Item -Type Directory -Force (Split-Path $dest -Parent) | Out-Null
-    Copy-Item -LiteralPath $src $dest -Recurse
+    _Safe_Pkg_Copy_Tree -From $src -To $dest
     return $true
+}
+
+# Fails closed, like _safe_pkg_links_ok in _safe_pkg_shared.sh: a missing
+# checker or an unreadable tree refuses copy-back. See link-check.js.
+function _Safe_Pkg_Links_Ok {
+    param([string]$Base, [string]$Rel)
+    $checker = Join-Path $HOME ".safe-pnpm\link-check.js"
+    if (-not (Test-Path -LiteralPath $checker)) {
+        Write-Host "✗ safe-pnpm: link check not installed — run 'safe-pnpm setup'. $Rel not copied back." -ForegroundColor Red
+        return $false
+    }
+    $out = (& node $checker $Base $Rel 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "✗ safe-pnpm: $Rel not copied back. $out" -ForegroundColor Red
+        return $false
+    }
+    return $true
+}
+
+# Copy-Item -Recurse follows symlinks (PowerShell 7.4, probed), turning each
+# link into a real copy of its target, and one aimed outside the tree into a
+# copy of host files. pnpm's layout is built from links, so recreate them as
+# links; _Safe_Pkg_Links_Ok has already vetted every target.
+function _Safe_Pkg_Copy_Tree {
+    param([string]$From, [string]$To)
+    New-Item -Type Directory -Force $To | Out-Null
+    foreach ($i in (Get-ChildItem -LiteralPath $From -Force)) {
+        $d = Join-Path $To $i.Name
+        if ($i.LinkType -eq 'SymbolicLink' -or $i.LinkType -eq 'Junction') {
+            New-Item -ItemType SymbolicLink -Path $d -Target ([string]@($i.Target)[0]) | Out-Null
+        } elseif ($i.PSIsContainer) {
+            _Safe_Pkg_Copy_Tree -From $i.FullName -To $d
+        } else {
+            Copy-Item -LiteralPath $i.FullName $d
+        }
+    }
 }
