@@ -40,6 +40,9 @@ function escapes(target, depth) {
   if (path.posix.isAbsolute(target) || path.win32.isAbsolute(target)) {
     return true;
   }
+  // The package managers never write a backslash; on a Windows host it would
+  // be read as a separator, which this `/`-only walk cannot follow.
+  if (target.includes("\\")) return true;
   let up = 0;
   let descended = false;
   for (const part of target.split("/")) {
