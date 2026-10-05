@@ -15,19 +15,33 @@ _safe_pkg_prescan() {
 
   if [ -f "$lockfile" ]; then
     echo "→ $manager audit..." >&2
+    # Output is kept and shown on failure: a non-zero exit means either
+    # advisories or that the audit itself could not run (offline, registry
+    # error), and the user needs the text to tell which.
+    local audit_out audit_rc
+    audit_out=$(mktemp) || return 1
     case "$manager" in
-      pnpm) command pnpm audit --audit-level moderate 2>/dev/null ;;
-      npm)  command npm  audit --audit-level moderate 2>/dev/null ;;
-      yarn) command yarn audit 2>/dev/null ;;
-    esac || {
-      if [ "$interactive" -eq 1 ]; then
-        printf "⚠️  %s audit found issues. Continue anyway? [y/N] " "$manager" >&2
-        read -r _ans
-        case "$_ans" in [Yy]*) ;; *) return 1 ;; esac
-      else
-        echo "⚠️  $manager audit found issues — continuing in non-interactive mode." >&2
+      pnpm) command pnpm audit --audit-level moderate >"$audit_out" 2>&1 ;;
+      npm)  command npm  audit --audit-level moderate >"$audit_out" 2>&1 ;;
+      yarn) command yarn audit >"$audit_out" 2>&1 ;;
+    esac
+    audit_rc=$?
+    if [ "$audit_rc" -ne 0 ]; then
+      tail -n 40 "$audit_out" >&2
+      if [ "${SAFE_PNPM_STRICT:-}" = "1" ]; then
+        rm -f "$audit_out"
+        echo "✗ $manager audit failed or found issues. Blocking (SAFE_PNPM_STRICT=1)." >&2
+        return 1
       fi
-    }
+      if [ "$interactive" -eq 1 ]; then
+        printf "⚠️  %s audit failed or found issues. Continue anyway? [y/N] " "$manager" >&2
+        read -r _ans
+        case "$_ans" in [Yy]*) ;; *) rm -f "$audit_out"; return 1 ;; esac
+      else
+        echo "⚠️  $manager audit failed or found issues — continuing in non-interactive mode." >&2
+      fi
+    fi
+    rm -f "$audit_out"
   fi
 
   # Socket is opt-in: it needs an authenticated account and makes a network
@@ -64,6 +78,7 @@ _safe_pkg_socket_scan() {
   local interactive="$1"
   local strict=0
   [ "${SAFE_PNPM_SOCKET_STRICT:-}" = "1" ] && strict=1
+  [ "${SAFE_PNPM_STRICT:-}" = "1" ] && strict=1
 
   local socket_cmd="$HOME/.safe-pnpm/socket"
   local classifier="$HOME/.safe-pnpm/socket-classify.js"
@@ -163,6 +178,10 @@ _safe_pkg_malware_scan() {
     echo "✗ $reason Blocking (SAFE_PNPM_OSV_STRICT=1)." >&2
     return 1
   fi
+  if [ "${SAFE_PNPM_STRICT:-}" = "1" ]; then
+    echo "✗ $reason Blocking (SAFE_PNPM_STRICT=1)." >&2
+    return 1
+  fi
   echo "⚠️  $reason Continuing without it." >&2
   return 0
 }
@@ -208,7 +227,9 @@ _safe_pkg_strip_npmrc_auth() {
   [ -f "$f" ] || return 0
   # Matches _authToken, _auth, _password, and username lines in any scope/host
   # form (e.g. //registry.example.com/:_authToken=...).
-  grep -viE '(_authtoken|_auth|_password|username)[[:space:]]*=' "$f" > "$f.clean" 2>/dev/null || : > "$f.clean"
+  # .yarnrc (v1) writes `_authToken "x"` with no `=`; .yarnrc.yml uses
+  # npmAuthToken/npmAuthIdent keys with `:`.
+  grep -viE '(_authtoken|_auth|_password|username|npmauthtoken|npmauthident)[[:space:]]*[=:"[:space:]]' "$f" > "$f.clean" 2>/dev/null || : > "$f.clean"
   mv "$f.clean" "$f"
 }
 
@@ -262,6 +283,34 @@ _safe_pkg_run() {
     return
   fi
 
+  local tmpdir snapdir
+  tmpdir=$(mktemp -d) || return 1
+  # Host-only, never mounted into a container: the workspace-member list and
+  # the post-fetch manifest snapshots that copy-back reads from.
+  snapdir=$(mktemp -d) || { rm -rf "$tmpdir"; return 1; }
+
+  # tmpdir holds a copy of .npmrc (registry token). Run the sandbox in a
+  # subshell whose EXIT trap removes both dirs, so Ctrl-C or a kill cannot
+  # leave the token on disk. A trap in this function would be global in bash.
+  (
+    # Expanded now, not at trap time: bash unwinds the function's locals before
+    # the EXIT trap fires, so a late $tmpdir would be empty and rm a no-op.
+    trap "rm -rf '$tmpdir' '$snapdir'" EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM HUP
+    _safe_pkg_sandbox "$tmpdir" "$snapdir" "$manager" "$lockfile" "$workspace_file" "$manifest_files" "$@"
+  )
+}
+
+# _safe_pkg_sandbox tmpdir snapdir manager lockfile workspace_file manifest_files [args...]
+#   Body of _safe_pkg_run; tmpdir/snapdir are created and removed by the caller.
+_safe_pkg_sandbox() {
+  [ -n "${ZSH_VERSION:-}" ] && setopt localoptions sh_word_split
+
+  local tmpdir="$1" snapdir="$2" manager="$3" lockfile="$4" workspace_file="$5" manifest_files="$6"
+  shift 6
+  local subcmd="${1:-}"
+
   local workspace_root _cwd rel_path d
   _cwd="$(pwd)"
   workspace_root="$_cwd"
@@ -280,11 +329,6 @@ _safe_pkg_run() {
     done
   fi
 
-  local tmpdir snapdir
-  tmpdir=$(mktemp -d)
-  # Host-only, never mounted into a container: the workspace-member list and
-  # the post-fetch manifest snapshots that copy-back reads from.
-  snapdir=$(mktemp -d)
   : > "$snapdir/members"
 
   (
@@ -317,6 +361,12 @@ _safe_pkg_run() {
     *)    store_flag=""; phase2_cmd="" ;;
   esac
 
+  # Limits for both containers: no setuid escalation and a bounded process
+  # count (a fork bomb in a build script would otherwise take down the Docker
+  # VM). Memory is opt-in because legitimate builds vary widely in what they need.
+  local hardening="--security-opt no-new-privileges --pids-limit 1024"
+  [ -n "${SAFE_PNPM_MEMORY:-}" ] && hardening="$hardening --memory ${SAFE_PNPM_MEMORY}"
+
   # Tokens are forwarded only into the fetch phase, where --ignore-scripts
   # guarantees no package code runs. They are never present during phase 2.
   local token_env=""
@@ -325,7 +375,7 @@ _safe_pkg_run() {
 
   # --- Phase 1: fetch (network on, token available, scripts disabled) ---
   # shellcheck disable=SC2086
-  docker run --rm --cap-drop ALL \
+  docker run --rm --cap-drop ALL $hardening \
     -v "${tmpdir}:/app" \
     -w "$workdir" \
     $token_env \
@@ -371,13 +421,14 @@ _safe_pkg_run() {
   if [ "$fetched" -eq 1 ] && [ "$run_build" -eq 1 ] && [ -n "$phase2_cmd" ]; then
     # Strip registry credentials before any build script can run.
     _safe_pkg_strip_npmrc_auth "$tmpdir/.npmrc"
+    _safe_pkg_strip_npmrc_auth "$tmpdir/.yarnrc"
 
     local net_flag="--network none"
     [ "${SAFE_PNPM_BUILD_NETWORK:-}" = "1" ] && net_flag=""
 
     # --- Phase 2: build (no token, no .npmrc auth, network off by default) ---
     # shellcheck disable=SC2086
-    docker run --rm --cap-drop ALL $net_flag \
+    docker run --rm --cap-drop ALL $hardening $net_flag \
       -v "${tmpdir}:/app" \
       -w "$workdir" \
       safe-pnpm:latest "$manager" $phase2_cmd
@@ -403,7 +454,6 @@ _safe_pkg_run() {
     done < "$snapdir/members"
   fi
 
-  rm -rf "$tmpdir" "$snapdir"
   return $rc
 }
 

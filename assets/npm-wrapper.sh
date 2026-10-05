@@ -5,7 +5,8 @@
 # Intercepts install-class npm commands and runs them in an isolated Docker
 # container that only sees package manifests (no source files, no .env).
 # All other commands pass through to native npm unchanged.
-# Escape hatch: \npm install bypasses to native npm.
+# Escape hatch: `command npm install` bypasses to native npm (a backslash only
+# bypasses aliases, not shell functions like this wrapper).
 
 [ -z "${_SAFE_PKG_SHARED_LOADED:-}" ] && \
   # shellcheck disable=SC1091

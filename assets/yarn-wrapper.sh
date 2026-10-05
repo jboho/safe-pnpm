@@ -5,7 +5,8 @@
 # Intercepts install-class yarn commands and runs them in an isolated Docker
 # container that only sees package manifests (no source files, no .env).
 # All other commands pass through to native yarn unchanged.
-# Escape hatch: \yarn install bypasses to native yarn.
+# Escape hatch: `command yarn install` bypasses to native yarn (a backslash only
+# bypasses aliases, not shell functions like this wrapper).
 # Note: yarn v1 only. berry (v2+) requires separate handling.
 
 [ -z "${_SAFE_PKG_SHARED_LOADED:-}" ] && \

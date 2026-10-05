@@ -4,24 +4,38 @@
 function _safe_pkg_prescan --argument manager lockfile socket_flag
     if test -f $lockfile
         echo "→ $manager audit..." >&2
+        # Output is kept and shown on failure: a non-zero exit means either
+        # advisories or that the audit itself could not run (offline, registry
+        # error), and the user needs the text to tell which.
+        set -l audit_out (mktemp)
+        or return 1
         switch $manager
             case pnpm
-                command pnpm audit --audit-level moderate >/dev/null 2>&1
+                command pnpm audit --audit-level moderate >$audit_out 2>&1
             case npm
-                command npm audit --audit-level moderate >/dev/null 2>&1
+                command npm audit --audit-level moderate >$audit_out 2>&1
             case yarn
-                command yarn audit >/dev/null 2>&1
+                command yarn audit >$audit_out 2>&1
         end
-        if test $status -ne 0
+        set -l audit_rc $status
+        if test $audit_rc -ne 0
+            tail -n 40 $audit_out >&2
+            if test "$SAFE_PNPM_STRICT" = "1"
+                rm -f $audit_out
+                echo "✗ $manager audit failed or found issues. Blocking (SAFE_PNPM_STRICT=1)." >&2
+                return 1
+            end
             if isatty stdin
-                read --prompt-str "⚠️  $manager audit found issues. Continue anyway? [y/N] " _ans
+                read --prompt-str "⚠️  $manager audit failed or found issues. Continue anyway? [y/N] " _ans
                 if not string match -qi 'y*' "$_ans"
+                    rm -f $audit_out
                     return 1
                 end
             else
-                echo "⚠️  $manager audit found issues — continuing in non-interactive mode." >&2
+                echo "⚠️  $manager audit failed or found issues — continuing in non-interactive mode." >&2
             end
         end
+        rm -f $audit_out
     end
 
     # Socket is opt-in: enable globally with SAFE_PNPM_ENABLE_SOCKET=1 or
@@ -43,7 +57,7 @@ end
 # evidence of a problem. SAFE_PNPM_SOCKET_STRICT=1 makes both block.
 function _safe_pkg_socket_scan
     set -l strict 0
-    if test "$SAFE_PNPM_SOCKET_STRICT" = "1"
+    if test "$SAFE_PNPM_SOCKET_STRICT" = "1"; or test "$SAFE_PNPM_STRICT" = "1"
         set strict 1
     end
 
@@ -128,6 +142,10 @@ function _safe_pkg_malware_scan --argument lockfile
         echo "✗ $reason Blocking (SAFE_PNPM_OSV_STRICT=1)." >&2
         return 1
     end
+    if test "$SAFE_PNPM_STRICT" = "1"
+        echo "✗ $reason Blocking (SAFE_PNPM_STRICT=1)." >&2
+        return 1
+    end
     echo "⚠️  $reason Continuing without it." >&2
     return 0
 end
@@ -145,4 +163,41 @@ function _safe_pkg_links_ok --argument base rel
         echo "✗ safe-pnpm: sandbox $rel has links that point outside the project; not copied back." >&2
         return 1
     end
+end
+
+# Remove only credential-bearing lines from a copied .npmrc/.yarnrc, leaving
+# registry URLs, scopes and hoisting config intact. Used between the fetch and
+# build phases so build-time lifecycle scripts never see a registry token.
+# .yarnrc (v1) writes `_authToken "x"` with no `=`; .yarnrc.yml uses
+# npmAuthToken/npmAuthIdent keys with `:`.
+function _safe_pkg_strip_npmrc_auth --argument f
+    test -f $f; or return 0
+    grep -viE '(_authtoken|_auth|_password|username|npmauthtoken|npmauthident)[[:space:]]*[=:"[:space:]]' $f >$f.clean 2>/dev/null
+    mv $f.clean $f
+end
+
+# The sandbox dirs hold a copy of .npmrc (registry token), so they must go away
+# on Ctrl-C or a kill as well as on a normal finish. Wrappers register their
+# dirs here; the handler below removes whatever is still registered. fish keeps
+# running the wrapper after a signal, but the interrupted docker run returns
+# non-zero, which skips the copy-back.
+set -g _safe_pkg_sandbox_dirs
+
+function _safe_pkg_track
+    set -g _safe_pkg_sandbox_dirs $_safe_pkg_sandbox_dirs $argv
+end
+
+function _safe_pkg_untrack
+    for d in $argv
+        rm -rf $d
+        set -l i (contains -i -- $d $_safe_pkg_sandbox_dirs)
+        and set -e _safe_pkg_sandbox_dirs[$i]
+    end
+end
+
+function _safe_pkg_sandbox_cleanup --on-signal INT --on-signal TERM --on-signal HUP --on-event fish_exit
+    for d in $_safe_pkg_sandbox_dirs
+        rm -rf $d
+    end
+    set -g _safe_pkg_sandbox_dirs
 end

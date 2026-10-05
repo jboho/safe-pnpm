@@ -5,18 +5,19 @@ on:
     tags:
       - 'v*'
 
+# Actions are pinned to commit SHAs (the comment is the tag they were resolved
+# from) so a moved or compromised tag cannot change what runs with id-token.
 jobs:
-  publish:
+  verify:
     runs-on: ubuntu-latest
+    # No id-token here: this job installs dependencies and runs repo code, which
+    # is exactly what must not be able to mint a publish credential.
     permissions:
       contents: read
-      # Trusted publishing: npm exchanges this run's OIDC token for a short-lived
-      # publish credential, so no NPM_TOKEN secret is stored or rotated.
-      id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
       - run: npm ci
@@ -34,16 +35,32 @@ jobs:
             exit 1
           fi
 
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Trusted publishing: npm exchanges this run's OIDC token for a short-lived
+      # publish credential, so no NPM_TOKEN secret is stored or rotated.
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
       # Publish the scoped package publicly to the npm registry via trusted
       # publishing (https://docs.npmjs.com/trusted-publishers/). Requires the
       # trusted publisher configured on npmjs.com for jboho/safe-pnpm + publish.yml.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
           scope: '@jboho'
-      # Trusted publishing needs npm >= 11.5.1.
-      - run: npm install -g npm@^11.5.1
+      # Trusted publishing needs npm >= 11.5.1. Pinned exactly: a floating range
+      # would run whatever npm published last inside the job that holds id-token.
+      - run: npm install -g npm@11.19.1
+      # No dependencies are installed in this job and lifecycle scripts are off,
+      # so nothing but the package's own files runs while id-token is available.
       # Provenance is only supported from public repos; forcing it from a private
       # repo fails the publish, so enable it only once the repo is public.
-      - run: npm publish --access public --provenance=${{ !github.event.repository.private }}
+      - run: npm publish --access public --ignore-scripts --provenance=${{ !github.event.repository.private }}

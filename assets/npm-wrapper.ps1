@@ -26,11 +26,7 @@ function global:npm {
 
     docker info 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        $ans = Read-Host "⚠️  safe-pnpm: Docker not running. Use native npm? [y/N]"
-        if ($ans -match '^[Yy]') {
-            $npmExe = (Get-Command npm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
-            & $npmExe @passArgs
-        }
+        _Safe_Pkg_Native_Fallback -Manager npm -PassArgs $passArgs
         return
     }
 
@@ -39,49 +35,56 @@ function global:npm {
     # snapshots that copy-back reads from.
     $snapDir = New-TemporaryFile | ForEach-Object { Remove-Item $_ -Force; New-Item -Type Directory $_ }
 
-    foreach ($f in @('package.json','package-lock.json','.npmrc')) {
-        if (Test-Path $f) { Copy-Item $f $tmpDir.FullName }
-    }
+    # tmpDir holds a copy of .npmrc (registry token); remove both dirs even if the
+    # run is interrupted with Ctrl-C.
+    try {
 
-    # Per-manager cache kept under /app so phase 2 resolves fully offline.
-    $storeFlag = @('--cache','/app/.safe-store')
+        foreach ($f in @('package.json','package-lock.json','.npmrc')) {
+            if (Test-Path $f) { Copy-Item $f $tmpDir.FullName }
+        }
 
-    # Tokens are forwarded only into the fetch phase, where --ignore-scripts
-    # guarantees no package code runs. They are never present during phase 2.
-    $tokenEnv = @()
-    if ($env:NODE_AUTH_TOKEN) { $tokenEnv += @('-e','NODE_AUTH_TOKEN') }
-    if ($env:NPM_TOKEN)       { $tokenEnv += @('-e','NPM_TOKEN') }
+        # Per-manager cache kept under /app so phase 2 resolves fully offline.
+        $storeFlag = @('--cache','/app/.safe-store')
 
-    # Phase 1: fetch (network on, token available, scripts disabled).
-    $p1 = @('run','--rm','--cap-drop','ALL','-v',"$($tmpDir.FullName):/app",'-w','/app') +
-        $tokenEnv + @('safe-pnpm:latest','npm') + $passArgs + @('--ignore-scripts') + $storeFlag
-    & docker @p1
-    $rc = $LASTEXITCODE
+        # Tokens are forwarded only into the fetch phase, where --ignore-scripts
+        # guarantees no package code runs. They are never present during phase 2.
+        $tokenEnv = @()
+        if ($env:NODE_AUTH_TOKEN) { $tokenEnv += @('-e','NODE_AUTH_TOKEN') }
+        if ($env:NPM_TOKEN)       { $tokenEnv += @('-e','NPM_TOKEN') }
 
-    # Known-malware check on the tree phase 1 resolved, before any package
-    # code runs. A hit discards the sandbox: nothing is built or copied back.
-    if ($rc -eq 0 -and -not (_Safe_Pkg_Malware_Scan (Join-Path $tmpDir.FullName 'package-lock.json'))) { $rc = 1 }
-
-    if ($rc -eq 0) {
-        $manifests = @('package.json','package-lock.json')
-        _Safe_Pkg_Copy_Files -From $tmpDir.FullName -To $snapDir.FullName -RelPaths $manifests
-
-        # Strip registry credentials before any build script can run.
-        _Safe_Pkg_Strip_NpmrcAuth (Join-Path $tmpDir.FullName '.npmrc')
-
-        $netFlag = @('--network','none')
-        if ($env:SAFE_PNPM_BUILD_NETWORK -eq '1') { $netFlag = @() }
-
-        # Phase 2: build (no token, no .npmrc auth, network off by default).
-        $p2 = @('run','--rm','--cap-drop','ALL') + $netFlag +
-            @('-v',"$($tmpDir.FullName):/app",'-w','/app','safe-pnpm:latest','npm','rebuild') + $storeFlag
-        & docker @p2
+        # Phase 1: fetch (network on, token available, scripts disabled).
+        $p1 = @('run','--rm','--cap-drop','ALL') + (_Safe_Pkg_Hardening) + @('-v',"$($tmpDir.FullName):/app",'-w','/app') +
+            $tokenEnv + @('safe-pnpm:latest','npm') + $passArgs + @('--ignore-scripts') + $storeFlag
+        & docker @p1
         $rc = $LASTEXITCODE
 
-        if (-not (_Safe_Pkg_Copy_Modules -Base $tmpDir.FullName -Rel 'node_modules' -DestRoot (Get-Location).Path)) { $rc = 1 }
-        _Safe_Pkg_Copy_Files -From $snapDir.FullName -To (Get-Location).Path -RelPaths $manifests
-    }
+        # Known-malware check on the tree phase 1 resolved, before any package
+        # code runs. A hit discards the sandbox: nothing is built or copied back.
+        if ($rc -eq 0 -and -not (_Safe_Pkg_Malware_Scan (Join-Path $tmpDir.FullName 'package-lock.json'))) { $rc = 1 }
 
-    Remove-Item -Recurse -Force $tmpDir.FullName, $snapDir.FullName
-    $global:LASTEXITCODE = $rc
+        if ($rc -eq 0) {
+            $manifests = @('package.json','package-lock.json')
+            _Safe_Pkg_Copy_Files -From $tmpDir.FullName -To $snapDir.FullName -RelPaths $manifests
+
+            # Strip registry credentials before any build script can run.
+            _Safe_Pkg_Strip_NpmrcAuth (Join-Path $tmpDir.FullName '.npmrc')
+            _Safe_Pkg_Strip_NpmrcAuth (Join-Path $tmpDir.FullName '.yarnrc')
+
+            $netFlag = @('--network','none')
+            if ($env:SAFE_PNPM_BUILD_NETWORK -eq '1') { $netFlag = @() }
+
+            # Phase 2: build (no token, no .npmrc auth, network off by default).
+            $p2 = @('run','--rm','--cap-drop','ALL') + (_Safe_Pkg_Hardening) + $netFlag +
+                @('-v',"$($tmpDir.FullName):/app",'-w','/app','safe-pnpm:latest','npm','rebuild') + $storeFlag
+            & docker @p2
+            $rc = $LASTEXITCODE
+
+            if (-not (_Safe_Pkg_Copy_Modules -Base $tmpDir.FullName -Rel 'node_modules' -DestRoot (Get-Location).Path)) { $rc = 1 }
+            _Safe_Pkg_Copy_Files -From $snapDir.FullName -To (Get-Location).Path -RelPaths $manifests
+        }
+
+        $global:LASTEXITCODE = $rc
+    } finally {
+        Remove-Item -Recurse -Force $tmpDir.FullName, $snapDir.FullName -ErrorAction SilentlyContinue
+    }
 }
