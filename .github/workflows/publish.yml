@@ -63,4 +63,4 @@ jobs:
       # so nothing but the package's own files runs while id-token is available.
       # Provenance is only supported from public repos; forcing it from a private
       # repo fails the publish, so enable it only once the repo is public.
-      - run: npm publish --access public --ignore-scripts --provenance=${{ !github.event.repository.private }}
+      - run: npm publish --access public --ignore-scripts --loglevel=verbose --provenance=${{ !github.event.repository.private }}
