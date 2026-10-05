@@ -43,8 +43,7 @@ Published to npm as `@jboho/safe-pnpm` (first public release 2026.10.2, with pro
 
 - The containers run as root inside Docker (`--cap-drop ALL` and `no-new-privileges` apply; no `USER` is set yet).
 - The CVE audit runs before the fetch, so a package passed to `add` is not covered by it. The OSV malware check does cover it.
-- PowerShell is the least-tested shell: its wrappers have parse tests only, and copy-back has no symlink containment check yet (sh and fish do).
-- Fish has no tests for the Socket-strict and malware-strict paths.
+- PowerShell is the least-tested shell: copy-back and its link check are tested on Linux pwsh only, and the wrapper files have parse tests only.
 - Requires Docker; developed and tested on macOS and Linux CI. Windows is not tested.
 
 ## Install
