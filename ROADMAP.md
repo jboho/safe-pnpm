@@ -3,7 +3,7 @@
 > Goal: A Docker-based package-manager wrapper (pnpm/npm/yarn) that sandboxes install scripts and pre-scans for malicious packages and CVEs.
 
 ## Current next action
-- [ ] M4 hardening follow-ups (below), remaining: non-root containers, then the CVE audit after phase 1
+- [ ] M4 hardening follow-ups (below), remaining: the CVE audit after phase 1 (branch `feat/audit-after-fetch`)
 
 ## Milestones
 - [x] M0 — Socket CLI wrap: accept a `--socket` flag, call `@socketsecurity/cli` for manifest analysis, gated on `SAFE_PNPM_ENABLE_SOCKET`
@@ -15,7 +15,7 @@
   - [x] First tag-triggered publish succeeds: `v2026.10.2`, run 37359540942 (attempt 3), df9e421
   - [x] Make the GitHub repo public: 2026-10-05; 2026.10.2 carries npm provenance (SLSA v1)
 - [ ] M4 — Hardening follow-ups
-  - [x] Run the containers as a non-root user (no `USER` in `assets/Dockerfile` today; see docs/security.md)
+  - [x] Run the containers as a non-root user: host uid/gid via `--user` (PR #37), default user kept under rootless Docker and Podman (PR #38); shipped in 2026.10.3. Windows PowerShell still runs as root; rootless is untested against a real daemon (see README)
   - [x] PowerShell wrappers: add the copy-back link check that sh and fish have (`_safe_pkg_shared.ps1`), and commit behavioral tests for the ps1 paths
   - [x] Tests for the fish Socket-strict and malware-strict paths
   - [ ] Run the CVE audit after phase 1 so a package passed to `add` is audited too (OSV already covers malware for it)
