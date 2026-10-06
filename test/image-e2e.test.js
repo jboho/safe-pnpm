@@ -101,12 +101,14 @@ for (const manager of ["npm", "pnpm", "yarn"]) {
     assert.equal(runs.length, 2, "fetch and build phases both ran");
     const user = `--user ${process.getuid()}:${process.getgid()}`;
     for (const line of runs) {
-      assert.ok(line.includes(user), `expected ${user} in: ${line}`);
-      assert.match(line, /-e HOME=\/app\/\.safe-home/);
+      assert.ok(` ${line} `.includes(` ${user} `), `expected ${user} in: ${line}`);
+      assert.ok(` ${line} `.includes(" -e HOME=/app/.safe-home "), `expected HOME in: ${line}`);
     }
     // On Linux a root container leaves root-owned files the host user cannot
     // delete, so the sandbox would outlive the install.
-    const sandbox = runs[0].match(/-v (\S+):\/app/)[1];
+    const mount = runs[0].match(/-v (\S+):\/app /);
+    assert.ok(mount, `no /app mount in: ${runs[0]}`);
+    const sandbox = mount[1];
     assert.equal(fs.existsSync(sandbox), false, "sandbox removed");
   });
 }
