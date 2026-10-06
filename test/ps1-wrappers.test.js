@@ -10,6 +10,7 @@ const {
   PODMAN_CLI,
   PODMAN_CLI_NOT_ROOTLESS,
   WRONG_CASE_ROOTLESS,
+  ROOTFUL_DOCKER_HOST_TRUE,
   UNREADABLE,
   infoStubSh,
 } = require("./helpers/docker-info-stub");
@@ -138,6 +139,7 @@ for (const [label, dockerInfo] of [
 for (const [label, dockerInfo] of [
   ["a wrong-case SecurityOptions element", WRONG_CASE_ROOTLESS],
   ["the Podman CLI answering false", PODMAN_CLI_NOT_ROOTLESS],
+  ["a rootful daemon while the Podman query says true", ROOTFUL_DOCKER_HOST_TRUE],
   ["an unreadable daemon", UNREADABLE],
 ]) {
   test(`ps1 npm: ${label} is not rootless`, { skip }, () => {

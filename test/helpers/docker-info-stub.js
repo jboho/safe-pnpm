@@ -18,6 +18,12 @@ const PODMAN_CLI_NOT_ROOTLESS = {
 const WRONG_CASE_ROOTLESS = {
   security: { out: '["NAME=ROOTLESS"]', code: 0 },
 };
+// The daemon answered SecurityOptions without "name=rootless", so the Podman
+// query must not be consulted even though it would say true.
+const ROOTFUL_DOCKER_HOST_TRUE = {
+  security: { out: '["name=seccomp,profile=builtin","name=cgroupns"]', code: 0 },
+  host: { out: "true", code: 0 },
+};
 const UNREADABLE = {
   security: { out: "", code: 1 },
   host: { out: "", code: 1 },
@@ -50,6 +56,7 @@ module.exports = {
   PODMAN_CLI,
   PODMAN_CLI_NOT_ROOTLESS,
   WRONG_CASE_ROOTLESS,
+  ROOTFUL_DOCKER_HOST_TRUE,
   UNREADABLE,
   infoStubSh,
 };

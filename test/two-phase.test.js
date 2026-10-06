@@ -9,6 +9,7 @@ const {
   ROOTLESS_DOCKER,
   PODMAN_CLI,
   PODMAN_CLI_NOT_ROOTLESS,
+  ROOTFUL_DOCKER_HOST_TRUE,
   UNREADABLE,
   infoStubSh,
 } = require("./helpers/docker-info-stub");
@@ -690,6 +691,21 @@ for (const { shell, ext, available } of SHELLS) {
     const { read, runCount } = runWrapper("npm", `npm-wrapper.${ext}`, {
       shell,
       dockerInfo: PODMAN_CLI_NOT_ROOTLESS,
+    });
+    assert.equal(runCount, 2);
+    const user = `--user ${process.getuid()}:${process.getgid()}`;
+    for (const n of [1, 2]) {
+      const args = ` ${read(`run${n}.args`).trim()} `;
+      assert.ok(args.includes(` ${user} `), `run ${n} must pass ${user}`);
+      assert.ok(args.includes(" -e HOME=/app/.safe-home "), `run ${n} must set HOME`);
+    }
+  });
+
+  // The Podman query is only a fallback for a failed SecurityOptions query.
+  test(`npm (${shell}): a rootful daemon keeps --user even if the Podman query says true`, { skip: !available }, () => {
+    const { read, runCount } = runWrapper("npm", `npm-wrapper.${ext}`, {
+      shell,
+      dockerInfo: ROOTFUL_DOCKER_HOST_TRUE,
     });
     assert.equal(runCount, 2);
     const user = `--user ${process.getuid()}:${process.getgid()}`;

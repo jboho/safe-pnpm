@@ -242,14 +242,15 @@ _safe_pkg_strip_npmrc_auth() {
 # Host.Security.Rootless asked. An unreadable answer counts as not rootless,
 # so --user stays the default.
 _safe_pkg_docker_rootless() {
-  local opts
+  local opts podman
   if opts=$(docker info --format '{{json .SecurityOptions}}' 2>/dev/null); then
     case "$opts" in *'"name=rootless"'*) return 0 ;; esac
     return 1
   fi
-  opts=$(docker info --format '{{.Host.Security.Rootless}}' 2>/dev/null) || return 1
-  opts=${opts%"${opts##*[![:space:]]}"}
-  [ "$opts" = "true" ]
+  podman=$(docker info --format '{{.Host.Security.Rootless}}' 2>/dev/null) || return 1
+  podman=${podman#"${podman%%[![:space:]]*}"}
+  podman=${podman%"${podman##*[![:space:]]}"}
+  [ "$podman" = "true" ]
 }
 
 # Prints the flags that make both containers run as the invoking user.
@@ -402,7 +403,8 @@ _safe_pkg_sandbox() {
   local hardening="--security-opt no-new-privileges --pids-limit 1024"
   [ -n "${SAFE_PNPM_MEMORY:-}" ] && hardening="$hardening --memory ${SAFE_PNPM_MEMORY}"
 
-  # Both containers run as the invoking user, not root. Files they create in
+  # Both containers run as the invoking user, not root (except under rootless
+  # Docker or Podman, see _safe_pkg_docker_rootless). Files they create in
   # the sandbox are then owned by that user, so cleanup can delete them on
   # Linux (Docker Desktop on macOS hides root ownership), and a process that
   # escapes the container is an ordinary user. The image has no home dir for

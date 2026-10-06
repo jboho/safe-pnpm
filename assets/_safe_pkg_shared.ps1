@@ -176,8 +176,9 @@ function _Safe_Pkg_Docker_Rootless {
     }
 }
 
-# Both containers run as the invoking user, not root, so their files are owned
-# by that user and an escape lands as an ordinary user. The image has no home
+# Both containers run as the invoking user, not root (except under rootless
+# Docker or Podman, see _Safe_Pkg_Docker_Rootless), so their files are owned by
+# that user and an escape lands as an ordinary user. The image has no home
 # dir for an arbitrary uid, so HOME points inside the sandbox mount. Windows has
 # no uid to pass, so there they still run as root. `id` is resolved as an
 # executable because a profile alias or function would shadow it, and a
