@@ -233,6 +233,21 @@ _safe_pkg_strip_npmrc_auth() {
   mv "$f.clean" "$f"
 }
 
+# Prints the flags that make both containers run as the invoking user.
+# `command id` skips any alias or function named id, and a non-numeric
+# result is refused: docker reads `--user :` as root.
+_safe_pkg_user_flags() {
+  local u g
+  u=$(command id -u 2>/dev/null); g=$(command id -g 2>/dev/null)
+  case "$u" in ''|*[!0-9]*) u="" ;; esac
+  case "$g" in ''|*[!0-9]*) g="" ;; esac
+  if [ -z "$u" ] || [ -z "$g" ]; then
+    echo "✗ safe-pnpm: could not read your user id (id -u / id -g); refusing to run the install container as root." >&2
+    return 1
+  fi
+  echo "--user $u:$g -e HOME=/app/.safe-home"
+}
+
 # _safe_pkg_run manager lockfile workspace_file manifest_files [pkg-manager-args...]
 #   manager        — binary name (pnpm, npm, yarn)
 #   lockfile       — lock file name (e.g. pnpm-lock.yaml)
@@ -372,7 +387,8 @@ _safe_pkg_sandbox() {
   # Linux (Docker Desktop on macOS hides root ownership), and a process that
   # escapes the container is an ordinary user. The image has no home dir for
   # an arbitrary uid, so HOME points inside the sandbox mount.
-  local user_flags="--user $(id -u):$(id -g) -e HOME=/app/.safe-home"
+  local user_flags
+  user_flags=$(_safe_pkg_user_flags) || return 1
 
   # Tokens are forwarded only into the fetch phase, where --ignore-scripts
   # guarantees no package code runs. They are never present during phase 2.

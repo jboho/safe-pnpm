@@ -45,6 +45,14 @@ function npm
         return
     end
 
+    # Both containers run as the invoking user, not root. Files they create in
+    # the sandbox are then owned by that user, so cleanup can delete them on
+    # Linux (Docker Desktop on macOS hides root ownership), and a process that
+    # escapes the container is an ordinary user. The image has no home dir for
+    # an arbitrary uid, so HOME points inside the sandbox mount.
+    set -l user_flags (_safe_pkg_user_flags)
+    or return 1
+
     set -l tmpdir (mktemp -d)
     # Host-only, never mounted into a container: the post-fetch manifest
     # snapshots that copy-back reads from.
@@ -77,13 +85,6 @@ function npm
     if test -n "$SAFE_PNPM_MEMORY"
         set hardening $hardening --memory $SAFE_PNPM_MEMORY
     end
-
-    # Both containers run as the invoking user, not root. Files they create in
-    # the sandbox are then owned by that user, so cleanup can delete them on
-    # Linux (Docker Desktop on macOS hides root ownership), and a process that
-    # escapes the container is an ordinary user. The image has no home dir for
-    # an arbitrary uid, so HOME points inside the sandbox mount.
-    set -l user_flags --user (id -u):(id -g) -e HOME=/app/.safe-home
 
     # Phase 1: fetch (network on, token available, scripts disabled).
     docker run --rm --cap-drop ALL $hardening $user_flags -v "$tmpdir:/app" -w /app $token_env \

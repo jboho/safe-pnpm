@@ -63,6 +63,7 @@ const SHELLS = [
 //                  without it the scanner is absent
 // opts.osvStrict — set SAFE_PNPM_OSV_STRICT=1
 // opts.noLinkCheck — leave link-check.js out of the fake ~/.safe-pnpm
+// opts.emptyId   — put an `id` on PATH that prints nothing, like a shadowed one
 function runWrapper(manager, wrapperFile, opts = {}) {
   const shell = opts.shell ?? "bash";
   const lockfile = LOCKFILES[manager];
@@ -105,6 +106,9 @@ function runWrapper(manager, wrapperFile, opts = {}) {
       "",
     ].join("\n"),
   );
+  if (opts.emptyId) {
+    fs.writeFileSync(path.join(bin, "id"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  }
   if (opts.workspace) {
     fs.writeFileSync(
       path.join(proj, "pnpm-workspace.yaml"),
@@ -192,11 +196,13 @@ ${manager} install </dev/null >/dev/null 2>"${log}/stderr"
     stdio: "pipe",
   });
 
-  const runCount = Number(
-    fs.readFileSync(path.join(log, "count"), "utf8").trim(),
-  );
+  // The stub writes `count` on its first run, so no file means no docker run.
+  const countFile = path.join(log, "count");
+  const runCount = fs.existsSync(countFile)
+    ? Number(fs.readFileSync(countFile, "utf8").trim())
+    : 0;
   const read = (f) => fs.readFileSync(path.join(log, f), "utf8");
-  return { root, proj, log, runCount, read, status: r.status };
+  return { root, proj, log, runCount, read, status: r.status, procStderr: r.stderr.toString() };
 }
 
 for (const [manager, wrapperFile] of [
@@ -630,6 +636,23 @@ for (const { shell, ext, available } of SHELLS) {
         assert.ok(args.includes(` ${user} `), `run ${n} must pass ${user}`);
         assert.ok(args.includes(" -e HOME=/app/.safe-home "), `run ${n} must set HOME`);
       }
+    });
+  }
+}
+
+for (const { shell, ext, available } of SHELLS) {
+  for (const manager of ["npm", "pnpm", "yarn"]) {
+    test(`${manager} (${shell}): an unreadable uid refuses the install before any container`, { skip: !available }, () => {
+      const { proj, runCount, read, status, procStderr } = runWrapper(manager, `${manager}-wrapper.${ext}`, {
+        shell,
+        emptyId: true,
+      });
+      assert.notEqual(status, 0);
+      assert.equal(runCount, 0);
+      // fish command substitutions write to the shell's own stderr, bypassing
+      // the wrapper call's 2> redirect, so look at both streams.
+      assert.match(read("stderr") + procStderr, /could not read your user id/);
+      assert.ok(!fs.existsSync(path.join(proj, "node_modules")), "nothing copied back");
     });
   }
 }
