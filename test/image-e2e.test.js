@@ -68,8 +68,11 @@ function install(manager) {
     path.join(proj, "package.json"),
     JSON.stringify({ name: "e2e", version: "1.0.0", private: true }),
   );
-  const script = `source "${ASSETS_DIR}/_safe_pkg_shared.sh"; source "${ASSETS_DIR}/${manager}-wrapper.sh"; cd "${proj}"; ${manager} install </dev/null`;
-  const r = spawnSync("bash", ["-c", script], {
+  // Paths go in as positional arguments, not into the script text, so a
+  // TMPDIR containing quotes or `$` can't change what bash runs.
+  const script =
+    'source "$1/_safe_pkg_shared.sh"; source "$1/$2-wrapper.sh"; cd "$3"; "$2" install </dev/null';
+  const r = spawnSync("bash", ["-c", script, "bash", ASSETS_DIR, manager, proj], {
     encoding: "utf8",
     env: {
       ...process.env,
