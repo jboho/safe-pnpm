@@ -168,8 +168,8 @@ function _Safe_Pkg_Hardening {
 # non-numeric result is refused: docker reads `--user :` as root.
 function _Safe_Pkg_User {
     if ($IsWindows -or $env:OS -eq 'Windows_NT') { return @() }
-    $idExe = (Get-Command id -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
-    $u = "$(& $idExe -u)"; $g = "$(& $idExe -g)"
+    $idExe = (Get-Command id -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+    if ($idExe) { $u = "$(& $idExe -u)"; $g = "$(& $idExe -g)" } else { $u = ''; $g = '' }
     if ($u -notmatch '^\d+$' -or $g -notmatch '^\d+$') {
         throw 'safe-pnpm: could not read your user id (id -u / id -g); refusing to run the install container as root.'
     }

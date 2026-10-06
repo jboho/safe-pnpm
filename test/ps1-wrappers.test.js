@@ -26,7 +26,8 @@ after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 // logs each run's argv to /w/docker.log and, on the first run, writes a
 // node_modules and a lockfile into the sandbox the way a real fetch would.
 // emptyId puts an `id` on PATH that prints nothing, like a shadowed one.
-function runPs1(manager, { env = {}, emptyId = false } = {}) {
+// noId leaves only /w/bin (the docker stub) on PATH, so no `id` resolves.
+function runPs1(manager, { env = {}, emptyId = false, noId = false } = {}) {
   const root = fs.mkdtempSync(path.join(tmp, `${manager}-`));
   const bin = path.join(root, "bin");
   const proj = path.join(root, "proj");
@@ -61,7 +62,10 @@ function runPs1(manager, { env = {}, emptyId = false } = {}) {
     "registry=https://registry.npmjs.org/\n",
   );
   const envArgs = Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
-  const script = `$env:PATH = '/w/bin:' + $env:PATH; . "$HOME/.safe-pnpm/${manager}-wrapper.ps1"; Set-Location /w/proj; ${manager} install; "RC=$LASTEXITCODE"`;
+  const pathSetup = noId
+    ? "$env:PATH = '/w/bin';"
+    : "$env:PATH = '/w/bin:' + $env:PATH;";
+  const script = `${pathSetup} . "$HOME/.safe-pnpm/${manager}-wrapper.ps1"; Set-Location /w/proj; ${manager} install; "RC=$LASTEXITCODE"`;
   const r = spawnSync(
     "docker",
     [
@@ -108,10 +112,18 @@ for (const manager of ["npm", "pnpm", "yarn"]) {
     const { out, runs, proj } = runPs1(manager, { emptyId: true });
     assert.equal(runs.length, 0, out);
     assert.match(out, /could not read your user id/);
-    assert.doesNotMatch(out, /RC=0/);
+    assert.match(out, /RC=1/);
     assert.ok(!fs.existsSync(path.join(proj, "node_modules")), "nothing copied back");
   });
 }
+
+test("ps1: a missing id refuses with the safe-pnpm message", { skip }, () => {
+  const { out, runs } = runPs1("npm", { noId: true });
+  assert.equal(runs.length, 0, out);
+  assert.match(out, /could not read your user id/);
+  assert.match(out, /RC=1/);
+  assert.doesNotMatch(out, /is not recognized/);
+});
 
 // Windows has no uid to pass, so the helper returns nothing there and the
 // containers keep running as root (a documented gap).
