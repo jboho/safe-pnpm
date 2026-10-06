@@ -160,6 +160,13 @@ function _Safe_Pkg_Hardening {
     return $h
 }
 
+# Both containers run as the invoking user, not root (see _safe_pkg_shared.sh).
+# Windows has no uid to pass, so there they still run as root.
+function _Safe_Pkg_User {
+    if ($IsWindows -or $env:OS -eq 'Windows_NT') { return @() }
+    return @('--user', "$(id -u):$(id -g)", '-e', 'HOME=/app/.safe-home')
+}
+
 # Docker is not running. Non-interactive (CI, scripts): fail closed, because
 # silently running native would execute untrusted lifecycle scripts on the host.
 # Interactive: ask. Mirrors the docker-down branch of _safe_pkg_run in
