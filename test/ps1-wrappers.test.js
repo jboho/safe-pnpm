@@ -25,7 +25,8 @@ after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 // container, with the host dir `root` mounted at /w. A stub `docker` in /w/bin
 // logs each run's argv to /w/docker.log and, on the first run, writes a
 // node_modules and a lockfile into the sandbox the way a real fetch would.
-function runPs1(manager, { env = {} } = {}) {
+// emptyId puts an `id` on PATH that prints nothing, like a shadowed one.
+function runPs1(manager, { env = {}, emptyId = false } = {}) {
   const root = fs.mkdtempSync(path.join(tmp, `${manager}-`));
   const bin = path.join(root, "bin");
   const proj = path.join(root, "proj");
@@ -48,6 +49,9 @@ function runPs1(manager, { env = {} } = {}) {
     ].join("\n"),
     { mode: 0o755 },
   );
+  if (emptyId) {
+    fs.writeFileSync(path.join(bin, "id"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  }
   fs.writeFileSync(
     path.join(proj, "package.json"),
     JSON.stringify({ name: "x", version: "1.0.0" }),
@@ -96,6 +100,16 @@ for (const manager of ["npm", "pnpm", "yarn"]) {
       fs.existsSync(path.join(proj, "node_modules", "dep", "index.js")),
       "copy-back ran",
     );
+  });
+}
+
+for (const manager of ["npm", "pnpm", "yarn"]) {
+  test(`ps1 ${manager}: an unreadable uid refuses the install before any container`, { skip }, () => {
+    const { out, runs, proj } = runPs1(manager, { emptyId: true });
+    assert.equal(runs.length, 0, out);
+    assert.match(out, /could not read your user id/);
+    assert.doesNotMatch(out, /RC=0/);
+    assert.ok(!fs.existsSync(path.join(proj, "node_modules")), "nothing copied back");
   });
 }
 
