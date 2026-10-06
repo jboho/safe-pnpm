@@ -5,6 +5,12 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { startOsvStub } = require("./helpers/osv-stub");
+const {
+  ROOTLESS_DOCKER,
+  PODMAN_CLI,
+  UNREADABLE,
+  infoStubSh,
+} = require("./helpers/docker-info-stub");
 
 const ASSETS_DIR = path.join(__dirname, "..", "assets");
 
@@ -64,6 +70,9 @@ const SHELLS = [
 // opts.osvStrict — set SAFE_PNPM_OSV_STRICT=1
 // opts.noLinkCheck — leave link-check.js out of the fake ~/.safe-pnpm
 // opts.emptyId   — put an `id` on PATH that prints nothing, like a shadowed one
+// opts.dockerInfo — canned answers for the `docker info --format` rootless
+//                  queries (see helpers/docker-info-stub.js); default exits 0
+//                  with no output
 function runWrapper(manager, wrapperFile, opts = {}) {
   const shell = opts.shell ?? "bash";
   const lockfile = LOCKFILES[manager];
@@ -123,7 +132,7 @@ function runWrapper(manager, wrapperFile, opts = {}) {
 
   const stub = `#!/usr/bin/env bash
 cmd="$1"
-if [ "$cmd" = "info" ]; then exit 0; fi
+${infoStubSh(opts.dockerInfo)}
 if [ "$cmd" != "run" ]; then exit 0; fi
 
 # Find the host side of the -v SRC:/app mount.
@@ -629,6 +638,41 @@ for (const { shell, ext, available } of SHELLS) {
   for (const manager of ["npm", "pnpm", "yarn"]) {
     test(`${manager} (${shell}): both containers run as the host user`, { skip: !available }, () => {
       const { read, runCount } = runWrapper(manager, `${manager}-wrapper.${ext}`, { shell });
+      assert.equal(runCount, 2);
+      const user = `--user ${process.getuid()}:${process.getgid()}`;
+      for (const n of [1, 2]) {
+        const args = ` ${read(`run${n}.args`).trim()} `;
+        assert.ok(args.includes(` ${user} `), `run ${n} must pass ${user}`);
+        assert.ok(args.includes(" -e HOME=/app/.safe-home "), `run ${n} must set HOME`);
+      }
+    });
+  }
+}
+
+const ROOTLESS_CASES = [
+  ["rootless Docker", ROOTLESS_DOCKER],
+  ["the Podman CLI", PODMAN_CLI],
+];
+
+for (const { shell, ext, available } of SHELLS) {
+  for (const manager of ["npm", "pnpm", "yarn"]) {
+    for (const [label, dockerInfo] of ROOTLESS_CASES) {
+      test(`${manager} (${shell}): ${label} keeps the default container user`, { skip: !available }, () => {
+        const { read, runCount } = runWrapper(manager, `${manager}-wrapper.${ext}`, { shell, dockerInfo });
+        assert.equal(runCount, 2);
+        for (const n of [1, 2]) {
+          const args = ` ${read(`run${n}.args`).trim()} `;
+          assert.ok(!args.includes(" --user "), `run ${n} must not pass --user: ${args}`);
+          assert.ok(!args.includes("HOME=/app/.safe-home"), `run ${n} must not set HOME: ${args}`);
+        }
+      });
+    }
+
+    test(`${manager} (${shell}): an unreadable daemon is not rootless`, { skip: !available }, () => {
+      const { read, runCount } = runWrapper(manager, `${manager}-wrapper.${ext}`, {
+        shell,
+        dockerInfo: UNREADABLE,
+      });
       assert.equal(runCount, 2);
       const user = `--user ${process.getuid()}:${process.getgid()}`;
       for (const n of [1, 2]) {

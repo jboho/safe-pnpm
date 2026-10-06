@@ -233,6 +233,25 @@ _safe_pkg_strip_npmrc_auth() {
   mv "$f.clean" "$f"
 }
 
+# Under rootless Docker or Podman, container uid 0 maps to the invoking user
+# but any other uid maps to a subordinate uid, so files the container writes
+# into the bind-mounted sandbox could not be deleted by that user. There the
+# containers keep their default user: root in them is unprivileged on the
+# host. Rootless iff SecurityOptions lists "name=rootless". Only when that
+# query fails (Podman's own CLI has no such field) is Podman's
+# Host.Security.Rootless asked. An unreadable answer counts as not rootless,
+# so --user stays the default.
+_safe_pkg_docker_rootless() {
+  local opts
+  if opts=$(docker info --format '{{json .SecurityOptions}}' 2>/dev/null); then
+    case "$opts" in *'"name=rootless"'*) return 0 ;; esac
+    return 1
+  fi
+  opts=$(docker info --format '{{.Host.Security.Rootless}}' 2>/dev/null) || return 1
+  opts=${opts%"${opts##*[![:space:]]}"}
+  [ "$opts" = "true" ]
+}
+
 # Prints the flags that make both containers run as the invoking user.
 # `command id` skips any alias or function named id, and a non-numeric
 # result is refused: docker reads `--user :` as root.
@@ -245,6 +264,7 @@ _safe_pkg_user_flags() {
     echo "✗ safe-pnpm: could not read your user id (id -u / id -g); refusing to run the install container as root." >&2
     return 1
   fi
+  if _safe_pkg_docker_rootless; then return 0; fi
   echo "--user $u:$g -e HOME=/app/.safe-home"
 }
 

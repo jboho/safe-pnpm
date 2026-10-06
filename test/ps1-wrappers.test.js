@@ -5,6 +5,12 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { IMAGE, hasDocker, buildPwshImage } = require("./helpers/pwsh-image");
+const {
+  ROOTLESS_DOCKER,
+  PODMAN_CLI,
+  UNREADABLE,
+  infoStubSh,
+} = require("./helpers/docker-info-stub");
 
 const ASSETS = path.join(__dirname, "..", "assets");
 const skip = hasDocker ? false : "docker not available";
@@ -27,7 +33,9 @@ after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 // node_modules and a lockfile into the sandbox the way a real fetch would.
 // emptyId puts an `id` on PATH that prints nothing, like a shadowed one.
 // noId leaves only /w/bin (the docker stub) on PATH, so no `id` resolves.
-function runPs1(manager, { env = {}, emptyId = false, noId = false } = {}) {
+// dockerInfo sets the stub's answers to the `docker info --format` rootless
+// queries (see helpers/docker-info-stub.js).
+function runPs1(manager, { env = {}, emptyId = false, noId = false, dockerInfo } = {}) {
   const root = fs.mkdtempSync(path.join(tmp, `${manager}-`));
   const bin = path.join(root, "bin");
   const proj = path.join(root, "proj");
@@ -40,7 +48,7 @@ function runPs1(manager, { env = {}, emptyId = false, noId = false } = {}) {
     path.join(bin, "docker"),
     [
       "#!/bin/sh",
-      '[ "$1" = info ] && exit 0',
+      infoStubSh(dockerInfo),
       'echo "$@" >> /w/docker.log',
       'src=""; prev=""; for a in "$@"; do [ "$prev" = "-v" ] && src="${a%%:/app}"; prev="$a"; done',
       "n=$(grep -c '' /w/docker.log)",
@@ -106,6 +114,33 @@ for (const manager of ["npm", "pnpm", "yarn"]) {
     );
   });
 }
+
+// All three wrappers call the same _Safe_Pkg_User, so these run on npm only.
+for (const [label, dockerInfo] of [
+  ["rootless Docker", ROOTLESS_DOCKER],
+  ["the Podman CLI", PODMAN_CLI],
+]) {
+  test(`ps1 npm: ${label} keeps the default container user`, { skip }, () => {
+    const { out, runs } = runPs1("npm", { dockerInfo });
+    assert.match(out, /RC=0/);
+    assert.equal(runs.length, 2, out);
+    for (const line of runs) {
+      assert.ok(!` ${line} `.includes(" --user "), `unexpected --user in: ${line}`);
+      assert.ok(!line.includes("HOME=/app/.safe-home"), `unexpected HOME in: ${line}`);
+    }
+  });
+}
+
+test("ps1 npm: an unreadable daemon is not rootless", { skip }, () => {
+  const { out, runs } = runPs1("npm", { dockerInfo: UNREADABLE });
+  assert.match(out, /RC=0/);
+  assert.equal(runs.length, 2, out);
+  const user = `--user ${process.getuid()}:${process.getgid()}`;
+  for (const line of runs) {
+    assert.ok(` ${line} `.includes(` ${user} `), `expected ${user} in: ${line}`);
+    assert.ok(` ${line} `.includes(" -e HOME=/app/.safe-home "), `expected HOME in: ${line}`);
+  }
+});
 
 for (const manager of ["npm", "pnpm", "yarn"]) {
   test(`ps1 ${manager}: an unreadable uid refuses the install before any container`, { skip }, () => {

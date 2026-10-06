@@ -160,6 +160,21 @@ function _Safe_Pkg_Hardening {
     return $h
 }
 
+# See _safe_pkg_docker_rootless in _safe_pkg_shared.sh. $LASTEXITCODE separates
+# a failed query from an empty answer, and a docker that cannot be run counts
+# as not rootless.
+function _Safe_Pkg_Docker_Rootless {
+    try {
+        $opts = & docker info --format '{{json .SecurityOptions}}' 2>$null
+        if ($LASTEXITCODE -eq 0) { return ("$opts" -like '*"name=rootless"*') }
+        $podman = & docker info --format '{{.Host.Security.Rootless}}' 2>$null
+        if ($LASTEXITCODE -ne 0) { return $false }
+        return ("$podman".Trim() -eq 'true')
+    } catch {
+        return $false
+    }
+}
+
 # Both containers run as the invoking user, not root, so their files are owned
 # by that user and an escape lands as an ordinary user. The image has no home
 # dir for an arbitrary uid, so HOME points inside the sandbox mount. Windows has
@@ -173,6 +188,7 @@ function _Safe_Pkg_User {
     if ($u -notmatch '^\d+$' -or $g -notmatch '^\d+$') {
         throw 'safe-pnpm: could not read your user id (id -u / id -g); refusing to run the install container as root.'
     }
+    if (_Safe_Pkg_Docker_Rootless) { return @() }
     return @('--user', "${u}:${g}", '-e', 'HOME=/app/.safe-home')
 }
 
