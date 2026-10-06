@@ -57,7 +57,8 @@ function pnpm
         set d (dirname $d)
     end
 
-    # Both containers run as the invoking user, not root. Files they create in
+    # Both containers run as the invoking user, not root (except under rootless
+    # Docker or Podman, see _safe_pkg_docker_rootless). Files they create in
     # the sandbox are then owned by that user, so cleanup can delete them on
     # Linux (Docker Desktop on macOS hides root ownership), and a process that
     # escapes the container is an ordinary user. The image has no home dir for

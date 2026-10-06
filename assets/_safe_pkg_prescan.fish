@@ -165,6 +165,21 @@ function _safe_pkg_links_ok --argument base rel
     end
 end
 
+# See _safe_pkg_docker_rootless in _safe_pkg_shared.sh. `set -l` keeps the
+# status of the command substitution, which is how a failed query is told
+# apart from an empty answer.
+function _safe_pkg_docker_rootless
+    set -l opts (docker info --format '{{json .SecurityOptions}}' 2>/dev/null)
+    if test $status -eq 0
+        string match -q -- '*"name=rootless"*' "$opts"
+        return
+    end
+    set -l rootless (docker info --format '{{.Host.Security.Rootless}}' 2>/dev/null)
+    or return 1
+    set rootless (string trim -- "$rootless")
+    test "$rootless" = true
+end
+
 # Prints the flags that make both containers run as the invoking user, one
 # per line. See _safe_pkg_user_flags in _safe_pkg_shared.sh. When the helper
 # runs inside a command substitution, as the wrappers call it, fish writes its
@@ -176,6 +191,9 @@ function _safe_pkg_user_flags
     if not string match -qr '^[0-9]+$' -- "$u"; or not string match -qr '^[0-9]+$' -- "$g"
         echo "✗ safe-pnpm: could not read your user id (id -u / id -g); refusing to run the install container as root." >&2
         return 1
+    end
+    if _safe_pkg_docker_rootless
+        return 0
     end
     printf '%s\n' --user "$u:$g" -e HOME=/app/.safe-home
 end
