@@ -166,7 +166,10 @@ function _safe_pkg_links_ok --argument base rel
 end
 
 # Prints the flags that make both containers run as the invoking user, one
-# per line. See _safe_pkg_user_flags in _safe_pkg_shared.sh.
+# per line. See _safe_pkg_user_flags in _safe_pkg_shared.sh. When the helper
+# runs inside a command substitution, as the wrappers call it, fish writes its
+# refusal message to the shell's stderr, so a caller's `2>` redirect does not
+# capture it; the message still shows on screen.
 function _safe_pkg_user_flags
     set -l u (command id -u 2>/dev/null)
     set -l g (command id -g 2>/dev/null)
