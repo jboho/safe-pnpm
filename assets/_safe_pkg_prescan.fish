@@ -165,6 +165,21 @@ function _safe_pkg_links_ok --argument base rel
     end
 end
 
+# Prints the flags that make both containers run as the invoking user, one
+# per line. See _safe_pkg_user_flags in _safe_pkg_shared.sh. When the helper
+# runs inside a command substitution, as the wrappers call it, fish writes its
+# refusal message to the shell's stderr, so a caller's `2>` redirect does not
+# capture it; the message still shows on screen.
+function _safe_pkg_user_flags
+    set -l u (command id -u 2>/dev/null)
+    set -l g (command id -g 2>/dev/null)
+    if not string match -qr '^[0-9]+$' -- "$u"; or not string match -qr '^[0-9]+$' -- "$g"
+        echo "✗ safe-pnpm: could not read your user id (id -u / id -g); refusing to run the install container as root." >&2
+        return 1
+    end
+    printf '%s\n' --user "$u:$g" -e HOME=/app/.safe-home
+end
+
 # Remove only credential-bearing lines from a copied .npmrc/.yarnrc, leaving
 # registry URLs, scopes and hoisting config intact. Used between the fetch and
 # build phases so build-time lifecycle scripts never see a registry token.

@@ -4,27 +4,15 @@ const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { IMAGE, hasDocker, buildPwshImage } = require("./helpers/pwsh-image");
 
 const ASSETS = path.join(__dirname, "..", "assets");
-const IMAGE = "safe-pnpm-pwsh-test";
-// The powershell image is amd64-only, so the node binary must match.
-const DOCKERFILE = [
-  "FROM --platform=linux/amd64 mcr.microsoft.com/powershell:lts-debian-12",
-  "COPY --from=docker.io/library/node:22 /usr/local/bin/node /usr/local/bin/node",
-].join("\n");
-
-const hasDocker = spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0;
 const skip = hasDocker ? false : "docker not available";
 
 let tmp;
 before(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "safe-pnpm-ps1-"));
-  if (!hasDocker) return;
-  const b = spawnSync("docker", ["build", "-q", "--platform", "linux/amd64", "-t", IMAGE, "-"], {
-    input: DOCKERFILE,
-    encoding: "utf8",
-  });
-  assert.equal(b.status, 0, b.stderr);
+  if (hasDocker) buildPwshImage();
 });
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 

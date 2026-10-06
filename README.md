@@ -41,9 +41,11 @@ When you run `pnpm install`, `npm install`, or `yarn install`, the wrapper pre-s
 
 Published to npm as `@jboho/safe-pnpm` (first public release 2026.10.2, with provenance). Known gaps, tracked in [ROADMAP.md](ROADMAP.md) under M4:
 
-- The containers run as root inside Docker (`--cap-drop ALL` and `no-new-privileges` apply; no `USER` is set yet).
+- On Windows the PowerShell wrappers still run the containers as root inside Docker (`--cap-drop ALL` and `no-new-privileges` apply). macOS and Linux run them as your user.
+- Rootless Docker or Podman on Linux is untested with the host-user containers and will likely fail with permission errors on the sandbox mount.
+- Unless your uid is 1000 (the image's `node` user), it has no user name inside the image, so a build script that looks up the current user (`whoami`, `os.userInfo()`) gets an error.
 - The CVE audit runs before the fetch, so a package passed to `add` is not covered by it. The OSV malware check does cover it.
-- PowerShell is the least-tested shell: copy-back and its link check are tested on Linux pwsh only, and the wrapper files have parse tests only.
+- PowerShell is the least-tested shell: the wrappers and copy-back are tested on Linux pwsh only.
 - Requires Docker; developed and tested on macOS and Linux CI. Windows is not tested.
 
 ## Install
@@ -114,7 +116,7 @@ When you run an install-class command:
 
 1. **Pre-install scan** — manager-native audit (`pnpm audit`, `npm audit`, `yarn audit`) and [Socket behavioral analysis](./docs/socket.md) if configured.
 2. **Copy only manifests** — `package.json`, the lockfile, workspace files, and `.npmrc` / `.yarnrc` go into a temp directory. Source files, `.env`, and secrets never leave the host.
-3. **Fetch in Docker** — ephemeral container, `--cap-drop ALL`, `--ignore-scripts`. Dependencies download with any registry token available but no package code running.
+3. **Fetch in Docker** — ephemeral container running as your user, `--cap-drop ALL`, `--ignore-scripts`. Dependencies download with any registry token available but no package code running.
 4. **Malware check** — every version the fetch resolved, including packages being added, is checked against [OSV](https://osv.dev)'s malicious-package advisories. A hit stops the install before any package code runs. If OSV can't be reached the install warns and continues; `export SAFE_PNPM_OSV_STRICT=1` blocks instead. Packages in scopes your `.npmrc`/`.yarnrc` maps to a private registry are not sent to OSV. See [the two-phase model](./docs/security.md#two-phase-install).
 5. **Build in Docker** — a second container with `--network none` and the token removed runs any lifecycle/build scripts against the downloaded store — nothing to steal, nowhere to send it. See [the two-phase model](./docs/security.md#two-phase-install).
 6. **Copy results back** — `node_modules` lands in your project; the lockfile and manifests come from a snapshot taken before any build script ran. The containers are discarded.

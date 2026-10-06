@@ -160,6 +160,22 @@ function _Safe_Pkg_Hardening {
     return $h
 }
 
+# Both containers run as the invoking user, not root, so their files are owned
+# by that user and an escape lands as an ordinary user. The image has no home
+# dir for an arbitrary uid, so HOME points inside the sandbox mount. Windows has
+# no uid to pass, so there they still run as root. `id` is resolved as an
+# executable because a profile alias or function would shadow it, and a
+# non-numeric result is refused: docker reads `--user :` as root.
+function _Safe_Pkg_User {
+    if ($IsWindows -or $env:OS -eq 'Windows_NT') { return @() }
+    $idExe = (Get-Command id -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+    if ($idExe) { $u = "$(& $idExe -u)"; $g = "$(& $idExe -g)" } else { $u = ''; $g = '' }
+    if ($u -notmatch '^\d+$' -or $g -notmatch '^\d+$') {
+        throw 'safe-pnpm: could not read your user id (id -u / id -g); refusing to run the install container as root.'
+    }
+    return @('--user', "${u}:${g}", '-e', 'HOME=/app/.safe-home')
+}
+
 # Docker is not running. Non-interactive (CI, scripts): fail closed, because
 # silently running native would execute untrusted lifecycle scripts on the host.
 # Interactive: ask. Mirrors the docker-down branch of _safe_pkg_run in
