@@ -162,14 +162,15 @@ function _Safe_Pkg_Hardening {
 
 # See _safe_pkg_docker_rootless in _safe_pkg_shared.sh. $LASTEXITCODE separates
 # a failed query from an empty answer, and a docker that cannot be run counts
-# as not rootless.
+# as not rootless. -clike and -ceq, because -like and -eq ignore case and the
+# daemon's answers are exact.
 function _Safe_Pkg_Docker_Rootless {
     try {
         $opts = & docker info --format '{{json .SecurityOptions}}' 2>$null
-        if ($LASTEXITCODE -eq 0) { return ("$opts" -like '*"name=rootless"*') }
+        if ($LASTEXITCODE -eq 0) { return ("$opts" -clike '*"name=rootless"*') }
         $podman = & docker info --format '{{.Host.Security.Rootless}}' 2>$null
         if ($LASTEXITCODE -ne 0) { return $false }
-        return ("$podman".Trim() -eq 'true')
+        return ("$podman".Trim() -ceq 'true')
     } catch {
         return $false
     }

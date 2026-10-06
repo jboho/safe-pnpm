@@ -10,6 +10,14 @@ const PODMAN_CLI = {
   security: { out: "", code: 1 },
   host: { out: "true", code: 0 },
 };
+const PODMAN_CLI_NOT_ROOTLESS = {
+  security: { out: "", code: 1 },
+  host: { out: "false", code: 0 },
+};
+// Same words in the wrong case: not the daemon's exact element.
+const WRONG_CASE_ROOTLESS = {
+  security: { out: '["NAME=ROOTLESS"]', code: 0 },
+};
 const UNREADABLE = {
   security: { out: "", code: 1 },
   host: { out: "", code: 1 },
@@ -37,4 +45,11 @@ function infoStubSh(info = {}) {
   ].join("\n");
 }
 
-module.exports = { ROOTLESS_DOCKER, PODMAN_CLI, UNREADABLE, infoStubSh };
+module.exports = {
+  ROOTLESS_DOCKER,
+  PODMAN_CLI,
+  PODMAN_CLI_NOT_ROOTLESS,
+  WRONG_CASE_ROOTLESS,
+  UNREADABLE,
+  infoStubSh,
+};

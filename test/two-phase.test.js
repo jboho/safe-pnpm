@@ -8,6 +8,7 @@ const { startOsvStub } = require("./helpers/osv-stub");
 const {
   ROOTLESS_DOCKER,
   PODMAN_CLI,
+  PODMAN_CLI_NOT_ROOTLESS,
   UNREADABLE,
   infoStubSh,
 } = require("./helpers/docker-info-stub");
@@ -682,6 +683,36 @@ for (const { shell, ext, available } of SHELLS) {
       }
     });
   }
+}
+
+for (const { shell, ext, available } of SHELLS) {
+  test(`npm (${shell}): the Podman CLI answering false keeps --user`, { skip: !available }, () => {
+    const { read, runCount } = runWrapper("npm", `npm-wrapper.${ext}`, {
+      shell,
+      dockerInfo: PODMAN_CLI_NOT_ROOTLESS,
+    });
+    assert.equal(runCount, 2);
+    const user = `--user ${process.getuid()}:${process.getgid()}`;
+    for (const n of [1, 2]) {
+      const args = ` ${read(`run${n}.args`).trim()} `;
+      assert.ok(args.includes(` ${user} `), `run ${n} must pass ${user}`);
+      assert.ok(args.includes(" -e HOME=/app/.safe-home "), `run ${n} must set HOME`);
+    }
+  });
+
+  // The uid check runs before the rootless query, so a rootless daemon cannot
+  // let an unreadable uid through.
+  test(`npm (${shell}): an unreadable uid still refuses under rootless Docker`, { skip: !available }, () => {
+    const { proj, runCount, read, status, procStderr } = runWrapper("npm", `npm-wrapper.${ext}`, {
+      shell,
+      emptyId: true,
+      dockerInfo: ROOTLESS_DOCKER,
+    });
+    assert.notEqual(status, 0);
+    assert.equal(runCount, 0);
+    assert.match(read("stderr") + procStderr, /could not read your user id/);
+    assert.ok(!fs.existsSync(path.join(proj, "node_modules")), "nothing copied back");
+  });
 }
 
 for (const { shell, ext, available } of SHELLS) {

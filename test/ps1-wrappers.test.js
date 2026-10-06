@@ -8,6 +8,8 @@ const { IMAGE, hasDocker, buildPwshImage } = require("./helpers/pwsh-image");
 const {
   ROOTLESS_DOCKER,
   PODMAN_CLI,
+  PODMAN_CLI_NOT_ROOTLESS,
+  WRONG_CASE_ROOTLESS,
   UNREADABLE,
   infoStubSh,
 } = require("./helpers/docker-info-stub");
@@ -131,15 +133,31 @@ for (const [label, dockerInfo] of [
   });
 }
 
-test("ps1 npm: an unreadable daemon is not rootless", { skip }, () => {
-  const { out, runs } = runPs1("npm", { dockerInfo: UNREADABLE });
-  assert.match(out, /RC=0/);
-  assert.equal(runs.length, 2, out);
-  const user = `--user ${process.getuid()}:${process.getgid()}`;
-  for (const line of runs) {
-    assert.ok(` ${line} `.includes(` ${user} `), `expected ${user} in: ${line}`);
-    assert.ok(` ${line} `.includes(" -e HOME=/app/.safe-home "), `expected HOME in: ${line}`);
-  }
+// PowerShell's -like and -eq ignore case, so the match must be case-sensitive
+// to agree with the sh and fish helpers.
+for (const [label, dockerInfo] of [
+  ["a wrong-case SecurityOptions element", WRONG_CASE_ROOTLESS],
+  ["the Podman CLI answering false", PODMAN_CLI_NOT_ROOTLESS],
+  ["an unreadable daemon", UNREADABLE],
+]) {
+  test(`ps1 npm: ${label} is not rootless`, { skip }, () => {
+    const { out, runs } = runPs1("npm", { dockerInfo });
+    assert.match(out, /RC=0/);
+    assert.equal(runs.length, 2, out);
+    const user = `--user ${process.getuid()}:${process.getgid()}`;
+    for (const line of runs) {
+      assert.ok(` ${line} `.includes(` ${user} `), `expected ${user} in: ${line}`);
+      assert.ok(` ${line} `.includes(" -e HOME=/app/.safe-home "), `expected HOME in: ${line}`);
+    }
+  });
+}
+
+test("ps1 npm: an unreadable uid still refuses under rootless Docker", { skip }, () => {
+  const { out, runs, proj } = runPs1("npm", { emptyId: true, dockerInfo: ROOTLESS_DOCKER });
+  assert.equal(runs.length, 0, out);
+  assert.match(out, /could not read your user id/);
+  assert.match(out, /RC=1/);
+  assert.ok(!fs.existsSync(path.join(proj, "node_modules")), "nothing copied back");
 });
 
 for (const manager of ["npm", "pnpm", "yarn"]) {
