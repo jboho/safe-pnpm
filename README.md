@@ -42,7 +42,7 @@ When you run `pnpm install`, `npm install`, or `yarn install`, the wrapper pre-s
 Published to npm as `@jboho/safe-pnpm` (first public release 2026.10.2, with provenance). Known gaps, tracked in [ROADMAP.md](ROADMAP.md) under M4:
 
 - On Windows the PowerShell wrappers still run the containers as root inside Docker (`--cap-drop ALL` and `no-new-privileges` apply). macOS and Linux run them as your user.
-- Rootless Docker or Podman on Linux is untested with the host-user containers and will likely fail with permission errors on the sandbox mount.
+- Rootless Docker and Podman are detected from `docker info`, and there the containers keep their default user, which is your own user on the host. This is not tested against a real rootless daemon.
 - Unless your uid is 1000 (the image's `node` user), it has no user name inside the image, so a build script that looks up the current user (`whoami`, `os.userInfo()`) gets an error.
 - The CVE audit runs before the fetch, so a package passed to `add` is not covered by it. The OSV malware check does cover it.
 - PowerShell is the least-tested shell: the wrappers and copy-back are tested on Linux pwsh only.
