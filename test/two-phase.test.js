@@ -618,3 +618,18 @@ for (const { shell, ext, available } of SHELLS) {
     assert.match(read("stderr"), /Malware scan not installed/);
   });
 }
+
+for (const { shell, ext, available } of SHELLS) {
+  for (const manager of ["npm", "pnpm", "yarn"]) {
+    test(`${manager} (${shell}): both containers run as the host user`, { skip: !available }, () => {
+      const { read, runCount } = runWrapper(manager, `${manager}-wrapper.${ext}`, { shell });
+      assert.equal(runCount, 2);
+      const user = `--user ${process.getuid()}:${process.getgid()}`;
+      for (const n of [1, 2]) {
+        const args = ` ${read(`run${n}.args`).trim()} `;
+        assert.ok(args.includes(` ${user} `), `run ${n} must pass ${user}`);
+        assert.ok(args.includes(" -e HOME=/app/.safe-home "), `run ${n} must set HOME`);
+      }
+    });
+  }
+}

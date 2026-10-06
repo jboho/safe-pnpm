@@ -79,8 +79,15 @@ function yarn
         set hardening $hardening --memory $SAFE_PNPM_MEMORY
     end
 
+    # Both containers run as the invoking user, not root. Files they create in
+    # the sandbox are then owned by that user, so cleanup can delete them on
+    # Linux (Docker Desktop on macOS hides root ownership), and a process that
+    # escapes the container is an ordinary user. The image has no home dir for
+    # an arbitrary uid, so HOME points inside the sandbox mount.
+    set -l user_flags --user (id -u):(id -g) -e HOME=/app/.safe-home
+
     # Phase 1: fetch (network on, token available, scripts disabled).
-    docker run --rm --cap-drop ALL $hardening -v "$tmpdir:/app" -w /app $token_env \
+    docker run --rm --cap-drop ALL $hardening $user_flags -v "$tmpdir:/app" -w /app $token_env \
         safe-pnpm:latest yarn $pass_args --ignore-scripts $store_flag
     set -l rc $status
 
@@ -114,7 +121,7 @@ function yarn
         end
 
         # Phase 2: build (no token, no .npmrc auth, network off by default).
-        docker run --rm --cap-drop ALL $hardening $net_flag -v "$tmpdir:/app" -w /app \
+        docker run --rm --cap-drop ALL $hardening $user_flags $net_flag -v "$tmpdir:/app" -w /app \
             safe-pnpm:latest yarn install --offline --force $store_flag
         set rc $status
 

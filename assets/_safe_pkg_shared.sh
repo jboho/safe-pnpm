@@ -367,6 +367,13 @@ _safe_pkg_sandbox() {
   local hardening="--security-opt no-new-privileges --pids-limit 1024"
   [ -n "${SAFE_PNPM_MEMORY:-}" ] && hardening="$hardening --memory ${SAFE_PNPM_MEMORY}"
 
+  # Both containers run as the invoking user, not root. Files they create in
+  # the sandbox are then owned by that user, so cleanup can delete them on
+  # Linux (Docker Desktop on macOS hides root ownership), and a process that
+  # escapes the container is an ordinary user. The image has no home dir for
+  # an arbitrary uid, so HOME points inside the sandbox mount.
+  local user_flags="--user $(id -u):$(id -g) -e HOME=/app/.safe-home"
+
   # Tokens are forwarded only into the fetch phase, where --ignore-scripts
   # guarantees no package code runs. They are never present during phase 2.
   local token_env=""
@@ -375,7 +382,7 @@ _safe_pkg_sandbox() {
 
   # --- Phase 1: fetch (network on, token available, scripts disabled) ---
   # shellcheck disable=SC2086
-  docker run --rm --cap-drop ALL $hardening \
+  docker run --rm --cap-drop ALL $hardening $user_flags \
     -v "${tmpdir}:/app" \
     -w "$workdir" \
     $token_env \
@@ -428,7 +435,7 @@ _safe_pkg_sandbox() {
 
     # --- Phase 2: build (no token, no .npmrc auth, network off by default) ---
     # shellcheck disable=SC2086
-    docker run --rm --cap-drop ALL $hardening $net_flag \
+    docker run --rm --cap-drop ALL $hardening $user_flags $net_flag \
       -v "${tmpdir}:/app" \
       -w "$workdir" \
       safe-pnpm:latest "$manager" $phase2_cmd
