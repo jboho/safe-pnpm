@@ -68,14 +68,18 @@ function install(manager) {
     path.join(proj, "package.json"),
     JSON.stringify({ name: "e2e", version: "1.0.0", private: true }),
   );
-  // Paths go in as positional arguments, not into the script text, so a
-  // TMPDIR containing quotes or `$` can't change what bash runs.
+  // Paths go in through the environment, not the script text or argv, so a
+  // TMPDIR containing quotes or `$` can't change what bash runs. CodeQL
+  // counts every `bash -c` argv element as command text, so argv isn't enough.
   const script =
-    'source "$1/_safe_pkg_shared.sh"; source "$1/$2-wrapper.sh"; cd "$3"; "$2" install </dev/null';
-  const r = spawnSync("bash", ["-c", script, "bash", ASSETS_DIR, manager, proj], {
+    'source "$SAFE_E2E_ASSETS/_safe_pkg_shared.sh"; source "$SAFE_E2E_ASSETS/$SAFE_E2E_MANAGER-wrapper.sh"; cd "$SAFE_E2E_PROJ"; "$SAFE_E2E_MANAGER" install </dev/null';
+  const r = spawnSync("bash", ["-c", script], {
     encoding: "utf8",
     env: {
       ...process.env,
+      SAFE_E2E_ASSETS: ASSETS_DIR,
+      SAFE_E2E_MANAGER: manager,
+      SAFE_E2E_PROJ: proj,
       PATH: `${bin}:${process.env.PATH}`,
       HOME: home,
       // HOME moved, so point the docker CLI back at the real context config.
