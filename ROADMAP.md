@@ -18,7 +18,7 @@
   - [x] Run the containers as a non-root user: host uid/gid via `--user` (PR #37), default user kept under rootless Docker and Podman (PR #38); shipped in 2026.10.3. Windows PowerShell still runs as root; rootless is untested against a real daemon (see README)
   - [x] PowerShell wrappers: add the copy-back link check that sh and fish have (`_safe_pkg_shared.ps1`), and commit behavioral tests for the ps1 paths
   - [x] Tests for the fish Socket-strict and malware-strict paths
-  - [ ] Run the CVE audit after phase 1 so a package passed to `add` is audited too (OSV already covers malware for it)
+  - [x] Run the CVE audit after phase 1 so a package passed to `add` is audited too (OSV already covers malware for it)
 
 ## Notes
 - docs/socket.md (Socket.dev integration design)
