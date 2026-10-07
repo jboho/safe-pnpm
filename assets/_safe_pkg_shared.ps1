@@ -4,40 +4,62 @@
 if ($global:_SafePkgSharedLoaded) { return }
 $global:_SafePkgSharedLoaded = $true
 
-function _Safe_Pkg_Prescan {
-    param([string]$Manager, [string]$Lockfile, [switch]$Socket)
+# Runs the manager's CVE audit on the tree phase 1 resolved, so a package
+# passed to `add` is covered. Returns $false to block. See _safe_pkg_shared.sh
+# for the full rationale. It runs on the host, so it audits a throwaway copy of
+# the post-fetch snapshot plus the registry config (.npmrc from the sandbox, and
+# .yarnrc without its yarn-path line), never the project. pnpm also skips the
+# project's .pnpmfile.cjs, which would otherwise run on the host.
+function _Safe_Pkg_Audit {
+    param([string]$Manager, [string]$Lockfile, [string]$SnapDir, [string]$TmpDir)
+    if (-not (Test-Path -LiteralPath (Join-Path $SnapDir $Lockfile) -PathType Leaf)) { return $true }
 
-    if (Test-Path $Lockfile) {
+    $mgr = (Get-Command $Manager -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+    $auditDir = New-Item -Type Directory (Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName()))
+    $auditOut = [IO.Path]::GetTempFileName()
+    try {
+        Copy-Item -Recurse -Path (Join-Path $SnapDir '*') -Destination $auditDir.FullName
+        $npmrc = Join-Path $TmpDir '.npmrc'
+        if (Test-Path -LiteralPath $npmrc -PathType Leaf) { Copy-Item -LiteralPath $npmrc (Join-Path $auditDir.FullName '.npmrc') }
+        $yarnrc = Join-Path $TmpDir '.yarnrc'
+        if (Test-Path -LiteralPath $yarnrc -PathType Leaf) {
+            Get-Content -LiteralPath $yarnrc | Where-Object { $_ -notmatch '^\s*"?yarn-path' } |
+                Set-Content (Join-Path $auditDir.FullName '.yarnrc')
+        }
+
         Write-Host "→ $Manager audit..." -ForegroundColor Cyan
-        $mgr = (Get-Command $Manager -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
-        # Output is kept and shown on failure: a non-zero exit means either
-        # advisories or that the audit itself could not run (offline, registry
-        # error), and the user needs the text to tell which.
-        $auditOut = [IO.Path]::GetTempFileName()
+        Push-Location $auditDir.FullName
         try {
             switch ($Manager) {
-                'pnpm' { & $mgr audit --audit-level moderate *> $auditOut }
+                'pnpm' { & $mgr audit --audit-level moderate --config.ignore-pnpmfile=true *> $auditOut }
                 'npm'  { & $mgr audit --audit-level moderate *> $auditOut }
                 'yarn' { & $mgr audit *> $auditOut }
             }
             $auditRc = $LASTEXITCODE
-            if ($auditRc -ne 0) {
-                Get-Content $auditOut -Tail 40 | ForEach-Object { [Console]::Error.WriteLine($_) }
-                if ($env:SAFE_PNPM_STRICT -eq '1') {
-                    Write-Host "✗ $Manager audit failed or found issues. Blocking (SAFE_PNPM_STRICT=1)." -ForegroundColor Red
-                    return $false
-                }
-                if (-not [Console]::IsInputRedirected) {
-                    $ans = Read-Host "⚠️  $Manager audit failed or found issues. Continue anyway? [y/N]"
-                    if ($ans -notmatch '^[Yy]') { return $false }
-                } else {
-                    Write-Host "⚠️  $Manager audit failed or found issues — continuing in non-interactive mode." -ForegroundColor Yellow
-                }
-            }
         } finally {
-            Remove-Item $auditOut -Force -ErrorAction SilentlyContinue
+            Pop-Location
         }
+        if ($auditRc -ne 0) {
+            Get-Content $auditOut -Tail 40 | ForEach-Object { [Console]::Error.WriteLine($_) }
+            if ($env:SAFE_PNPM_STRICT -eq '1') {
+                Write-Host "✗ $Manager audit failed or found issues. Blocking (SAFE_PNPM_STRICT=1)." -ForegroundColor Red
+                return $false
+            }
+            if (-not [Console]::IsInputRedirected) {
+                $ans = Read-Host "⚠️  $Manager audit failed or found issues. Continue anyway? [y/N]"
+                if ($ans -notmatch '^[Yy]') { return $false }
+            } else {
+                Write-Host "⚠️  $Manager audit failed or found issues — continuing in non-interactive mode." -ForegroundColor Yellow
+            }
+        }
+        return $true
+    } finally {
+        Remove-Item -Recurse -Force $auditDir.FullName, $auditOut -ErrorAction SilentlyContinue
     }
+}
+
+function _Safe_Pkg_Prescan {
+    param([string]$Manager, [string]$Lockfile, [switch]$Socket)
 
     # Socket is opt-in: enable globally with SAFE_PNPM_ENABLE_SOCKET=1 or
     # per-invocation with `--socket`.

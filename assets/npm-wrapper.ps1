@@ -72,6 +72,12 @@ function global:npm {
             $manifests = @('package.json','package-lock.json')
             _Safe_Pkg_Copy_Files -From $tmpDir.FullName -To $snapDir.FullName -RelPaths $manifests
 
+            # CVE audit on the resolved tree, after the snapshot and before any
+            # build script. A block discards the sandbox like a malware hit does.
+            if (-not (_Safe_Pkg_Audit npm 'package-lock.json' $snapDir.FullName $tmpDir.FullName)) { $rc = 1 }
+        }
+
+        if ($rc -eq 0) {
             # Strip registry credentials before any build script can run.
             _Safe_Pkg_Strip_NpmrcAuth (Join-Path $tmpDir.FullName '.npmrc')
             _Safe_Pkg_Strip_NpmrcAuth (Join-Path $tmpDir.FullName '.yarnrc')
