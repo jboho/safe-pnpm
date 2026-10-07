@@ -27,12 +27,12 @@ const sandbox = ({ auditRc = 0, dockerHook = "" } = {}) => {
   }
   fs.writeFileSync(
     path.join(bin, "docker"),
-    `#!/bin/sh\n[ "$1" = info ] && exit 0\necho "$@" >> "${root}/docker.log"\n${dockerHook}\nexit 0\n`,
+    `#!/bin/sh\n[ "$1" = info ] && exit 0\necho "$@" >> "${root}/docker.log"\necho "DOCKER $1" >> "${root}/events.log"\n${dockerHook}\nexit 0\n`,
     { mode: 0o755 },
   );
   fs.writeFileSync(
     path.join(bin, "npm"),
-    `#!/bin/sh\necho "audit-stub: 1 high severity vulnerability"\nexit ${auditRc}\n`,
+    `#!/bin/sh\necho "AUDIT cwd=$PWD" >> "${root}/events.log"\ncat package-lock.json >> "${root}/events.log" 2>/dev/null\necho "audit-stub: 1 high severity vulnerability"\nexit ${auditRc}\n`,
     { mode: 0o755 },
   );
   fs.writeFileSync(
@@ -51,6 +51,13 @@ const sandbox = ({ auditRc = 0, dockerHook = "" } = {}) => {
     SAFE_PNPM_STRICT: "",
     SAFE_PNPM_MEMORY: "",
   };
+  const events = () => {
+    try {
+      return fs.readFileSync(path.join(root, "events.log"), "utf8");
+    } catch {
+      return "";
+    }
+  };
   const dockerLog = () => {
     try {
       return fs.readFileSync(path.join(root, "docker.log"), "utf8");
@@ -58,11 +65,11 @@ const sandbox = ({ auditRc = 0, dockerHook = "" } = {}) => {
       return "";
     }
   };
-  return { root, proj, env, dockerLog };
+  return { root, proj, env, dockerLog, events };
 };
 
 const RUN =
-  'source "$HOME/.safe-pnpm/_safe_pkg_shared.sh"; _safe_pkg_dispatch npm package-lock.json "" "package.json .npmrc" install';
+  'source "$HOME/.safe-pnpm/_safe_pkg_shared.sh"; _safe_pkg_dispatch npm package-lock.json "" "package.json package-lock.json .npmrc" install';
 
 for (const shell of SHELLS) {
   test(`audit failure warns and continues by default (${shell})`, () => {
@@ -78,7 +85,7 @@ for (const shell of SHELLS) {
     assert.ok(sb.dockerLog().includes("install"), "install still ran");
   });
 
-  test(`SAFE_PNPM_STRICT=1 blocks on audit failure before any container (${shell})`, () => {
+  test(`SAFE_PNPM_STRICT=1 blocks on audit failure before the build container (${shell})`, () => {
     const sb = sandbox({ auditRc: 1 });
     const r = spawnSync(shell, ["-c", RUN], {
       cwd: sb.proj,
@@ -88,7 +95,45 @@ for (const shell of SHELLS) {
     });
     assert.notEqual(r.status, 0);
     assert.match(r.stderr, /Blocking \(SAFE_PNPM_STRICT=1\)/);
-    assert.equal(sb.dockerLog(), "", "no container started");
+    const runs = sb.dockerLog().split("\n").filter((l) => l.startsWith("run"));
+    assert.equal(runs.length, 1, "only the fetch container started");
+  });
+
+  test(`audit runs after the fetch, before the build container (${shell})`, () => {
+    const sb = sandbox();
+    spawnSync(shell, ["-c", RUN], {
+      cwd: sb.proj,
+      env: sb.env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const order = sb
+      .events()
+      .split("\n")
+      .filter((l) => /^(DOCKER run|AUDIT)/.test(l))
+      .map((l) => l.split(" ")[0] + (l.startsWith("DOCKER") ? ":run" : ""));
+    assert.deepEqual(order, ["DOCKER:run", "AUDIT", "DOCKER:run"]);
+  });
+
+  test(`audit sees a package added by the fetch and never runs in the project (${shell})`, () => {
+    // Phase 1 stands in for `add left-pad`: it writes the new lockfile into
+    // the sandbox mount, which the project's own lockfile never had.
+    const hook =
+      '[ "$1" = run ] && d=$(echo "$@" | sed -n "s/.*-v \\([^ ]*\\):\\/app.*/\\1/p") && echo \'{"added":"left-pad"}\' > "$d/package-lock.json"';
+    const sb = sandbox({ dockerHook: hook });
+    spawnSync(shell, ["-c", RUN], {
+      cwd: sb.proj,
+      env: sb.env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const ev = sb.events();
+    assert.match(ev, /left-pad/, "audit read the post-fetch lockfile");
+    assert.doesNotMatch(
+      ev,
+      new RegExp(`cwd=${sb.proj.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`),
+      "audit did not run in the project dir",
+    );
   });
 
   test(`both containers run with no-new-privileges and a pids limit (${shell})`, () => {
