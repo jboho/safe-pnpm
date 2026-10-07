@@ -94,7 +94,8 @@ for (const shell of SHELLS) {
       stdio: ["ignore", "pipe", "pipe"],
     });
     assert.notEqual(r.status, 0);
-    assert.match(r.stderr, /Blocking \(SAFE_PNPM_STRICT=1\)/);
+    assert.match(sb.events(), /^AUDIT /m, "audit ran");
+    assert.match(r.stderr, /audit failed or found issues\. Blocking \(SAFE_PNPM_STRICT=1\)/);
     const runs = sb.dockerLog().split("\n").filter((l) => l.startsWith("run"));
     assert.equal(runs.length, 1, "only the fetch container started");
   });

@@ -23,12 +23,12 @@ const sandbox = ({ auditRc = 0, dockerHook = "" } = {}) => {
   }
   fs.writeFileSync(
     path.join(bin, "docker"),
-    `#!/bin/sh\n[ "$1" = info ] && exit 0\necho "$@" >> "${root}/docker.log"\n${dockerHook}\nexit 0\n`,
+    `#!/bin/sh\n[ "$1" = info ] && exit 0\necho "$@" >> "${root}/docker.log"\necho "DOCKER $1" >> "${root}/events.log"\n${dockerHook}\nexit 0\n`,
     { mode: 0o755 },
   );
   fs.writeFileSync(
     path.join(bin, "npm"),
-    `#!/bin/sh\necho "audit-stub: 1 high severity vulnerability"\nexit ${auditRc}\n`,
+    `#!/bin/sh\necho "AUDIT cwd=$PWD" >> "${root}/events.log"\ncat package-lock.json >> "${root}/events.log" 2>/dev/null\necho "audit-stub: 1 high severity vulnerability"\nexit ${auditRc}\n`,
     { mode: 0o755 },
   );
   fs.writeFileSync(
@@ -47,6 +47,13 @@ const sandbox = ({ auditRc = 0, dockerHook = "" } = {}) => {
     SAFE_PNPM_STRICT: "",
     SAFE_PNPM_MEMORY: "",
   };
+  const events = () => {
+    try {
+      return fs.readFileSync(path.join(root, "events.log"), "utf8");
+    } catch {
+      return "";
+    }
+  };
   const dockerLog = () => {
     try {
       return fs.readFileSync(path.join(root, "docker.log"), "utf8");
@@ -54,7 +61,7 @@ const sandbox = ({ auditRc = 0, dockerHook = "" } = {}) => {
       return "";
     }
   };
-  return { root, proj, env, dockerLog };
+  return { root, proj, env, dockerLog, events };
 };
 
 const RUN = (proj) => `
@@ -80,13 +87,38 @@ test("fish: audit failure shows output and continues by default", opts, () => {
   assert.ok(sb.dockerLog().includes("install"), "install still ran");
 });
 
-test("fish: SAFE_PNPM_STRICT=1 blocks on audit failure before any container", opts, () => {
+test("fish: SAFE_PNPM_STRICT=1 blocks on audit failure before the build container", opts, () => {
   const sb = sandbox({ auditRc: 1 });
   const r = runFish(sb, { SAFE_PNPM_STRICT: "1" });
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /audit-stub: 1 high severity/);
   assert.match(r.stderr, /npm audit failed or found issues\. Blocking \(SAFE_PNPM_STRICT=1\)/);
-  assert.equal(sb.dockerLog(), "", "no container started");
+  assert.match(sb.events(), /^AUDIT /m, "audit ran");
+  const runs = sb.dockerLog().split("\n").filter((l) => l.startsWith("run"));
+  assert.equal(runs.length, 1, "only the fetch container started");
+});
+
+test("fish: audit runs after the fetch, before the build container", opts, () => {
+  const sb = sandbox();
+  runFish(sb);
+  const order = sb
+    .events()
+    .split("\n")
+    .filter((l) => /^(DOCKER run|AUDIT)/.test(l))
+    .map((l) => (l.startsWith("DOCKER") ? "DOCKER:run" : "AUDIT"));
+  assert.deepEqual(order, ["DOCKER:run", "AUDIT", "DOCKER:run"]);
+});
+
+test("fish: audit sees a package added by the fetch and never runs in the project", opts, () => {
+  // Phase 1 stands in for `add left-pad`: it writes the new lockfile into the
+  // sandbox mount, which the project's own lockfile never had.
+  const hook =
+    '[ "$1" = run ] && d=$(echo "$@" | sed -n "s/.*-v \\([^ ]*\\):\\/app.*/\\1/p") && echo \'{"added":"left-pad"}\' > "$d/package-lock.json"';
+  const sb = sandbox({ dockerHook: hook });
+  runFish(sb);
+  const ev = sb.events();
+  assert.match(ev, /left-pad/, "audit read the post-fetch lockfile");
+  assert.ok(!ev.includes(`cwd=${sb.proj}\n`), "audit did not run in the project dir");
 });
 
 test("fish: both containers run with no-new-privileges and a pids limit", opts, () => {

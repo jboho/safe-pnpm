@@ -38,7 +38,7 @@ after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 // noId leaves only /w/bin (the docker stub) on PATH, so no `id` resolves.
 // dockerInfo sets the stub's answers to the `docker info --format` rootless
 // queries (see helpers/docker-info-stub.js).
-function runPs1(manager, { env = {}, emptyId = false, noId = false, dockerInfo } = {}) {
+function runPs1(manager, { env = {}, emptyId = false, noId = false, dockerInfo, auditRc = 0 } = {}) {
   const root = fs.mkdtempSync(path.join(tmp, `${manager}-`));
   const bin = path.join(root, "bin");
   const proj = path.join(root, "proj");
@@ -53,10 +53,24 @@ function runPs1(manager, { env = {}, emptyId = false, noId = false, dockerInfo }
       "#!/bin/sh",
       infoStubSh(dockerInfo),
       'echo "$@" >> /w/docker.log',
+      'echo "DOCKER $1" >> /w/events.log',
       'src=""; prev=""; for a in "$@"; do [ "$prev" = "-v" ] && src="${a%%:/app}"; prev="$a"; done',
       "n=$(grep -c '' /w/docker.log)",
       `if [ "$n" = 1 ]; then mkdir -p "$src/node_modules/dep"; echo x > "$src/node_modules/dep/index.js"; echo resolved-by-phase-1 > "$src/${LOCKFILES[manager]}"; fi`,
       "exit 0",
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  // Stands in for `<manager> audit`; logs where it ran and what lockfile it saw.
+  fs.writeFileSync(
+    path.join(bin, manager),
+    [
+      "#!/bin/sh",
+      'echo "AUDIT cwd=$PWD" >> /w/events.log',
+      `cat ${LOCKFILES[manager]} >> /w/events.log 2>/dev/null`,
+      'echo "audit-stub: 1 high severity vulnerability"',
+      `exit ${auditRc}`,
       "",
     ].join("\n"),
     { mode: 0o755 },
@@ -115,6 +129,33 @@ for (const manager of ["npm", "pnpm", "yarn"]) {
       fs.existsSync(path.join(proj, "node_modules", "dep", "index.js")),
       "copy-back ran",
     );
+  });
+}
+
+for (const manager of ["npm", "pnpm", "yarn"]) {
+  test(`ps1 ${manager}: audit runs after the fetch, before the build container`, { skip }, () => {
+    const { out, read } = runPs1(manager);
+    const order = read("events.log")
+      .split("\n")
+      .filter((l) => /^(DOCKER run|AUDIT)/.test(l))
+      .map((l) => (l.startsWith("DOCKER") ? "DOCKER:run" : "AUDIT"));
+    assert.deepEqual(order, ["DOCKER:run", "AUDIT", "DOCKER:run"], out);
+  });
+
+  test(`ps1 ${manager}: audit reads the post-fetch lockfile, outside the project`, { skip }, () => {
+    const { out, read } = runPs1(manager);
+    const ev = read("events.log");
+    assert.match(ev, /resolved-by-phase-1/, out);
+    assert.ok(!ev.includes("cwd=/w/proj\n"), "audit did not run in the project dir");
+  });
+
+  test(`ps1 ${manager}: SAFE_PNPM_STRICT=1 blocks on audit failure before the build container`, { skip }, () => {
+    const { out, runs, read } = runPs1(manager, { auditRc: 1, env: { SAFE_PNPM_STRICT: "1" } });
+    // Strict also blocks on a failed OSV scan, so require the audit's own text.
+    assert.match(read("events.log"), /^AUDIT /m, "audit ran");
+    assert.match(out, /audit failed or found issues\. Blocking \(SAFE_PNPM_STRICT=1\)/, out);
+    assert.doesNotMatch(out, /RC=0/, out);
+    assert.equal(runs.length, 1, "only the fetch container started");
   });
 }
 
