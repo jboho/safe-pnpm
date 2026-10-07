@@ -47,6 +47,9 @@ function runPs1(manager, { env = {}, emptyId = false, noId = false, dockerInfo, 
   for (const f of ["_safe_pkg_shared.ps1", `${manager}-wrapper.ps1`, "link-check.js"]) {
     fs.copyFileSync(path.join(ASSETS, f), path.join(safe, f));
   }
+  // A scanner that always reports clean, so SAFE_PNPM_STRICT=1 (which also
+  // blocks a scan that could not run) reaches the audit under test.
+  fs.writeFileSync(path.join(safe, "malware-scan.js"), 'console.log("clean");\n');
   fs.writeFileSync(
     path.join(bin, "docker"),
     [
@@ -69,6 +72,7 @@ function runPs1(manager, { env = {}, emptyId = false, noId = false, dockerInfo, 
       "#!/bin/sh",
       'echo "AUDIT cwd=$PWD" >> /w/events.log',
       `cat ${LOCKFILES[manager]} >> /w/events.log 2>/dev/null`,
+      "echo >> /w/events.log",
       'echo "audit-stub: 1 high severity vulnerability"',
       `exit ${auditRc}`,
       "",

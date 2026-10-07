@@ -13,37 +13,6 @@ _safe_pkg_prescan() {
   local interactive=0
   [ -t 0 ] && interactive=1
 
-  if [ -f "$lockfile" ]; then
-    echo "→ $manager audit..." >&2
-    # Output is kept and shown on failure: a non-zero exit means either
-    # advisories or that the audit itself could not run (offline, registry
-    # error), and the user needs the text to tell which.
-    local audit_out audit_rc
-    audit_out=$(mktemp) || return 1
-    case "$manager" in
-      pnpm) command pnpm audit --audit-level moderate >"$audit_out" 2>&1 ;;
-      npm)  command npm  audit --audit-level moderate >"$audit_out" 2>&1 ;;
-      yarn) command yarn audit >"$audit_out" 2>&1 ;;
-    esac
-    audit_rc=$?
-    if [ "$audit_rc" -ne 0 ]; then
-      tail -n 40 "$audit_out" >&2
-      if [ "${SAFE_PNPM_STRICT:-}" = "1" ]; then
-        rm -f "$audit_out"
-        echo "✗ $manager audit failed or found issues. Blocking (SAFE_PNPM_STRICT=1)." >&2
-        return 1
-      fi
-      if [ "$interactive" -eq 1 ]; then
-        printf "⚠️  %s audit failed or found issues. Continue anyway? [y/N] " "$manager" >&2
-        read -r _ans
-        case "$_ans" in [Yy]*) ;; *) rm -f "$audit_out"; return 1 ;; esac
-      else
-        echo "⚠️  $manager audit failed or found issues — continuing in non-interactive mode." >&2
-      fi
-    fi
-    rm -f "$audit_out"
-  fi
-
   # Socket is opt-in: it needs an authenticated account and makes a network
   # call, so it only runs when the user enables it globally
   # (SAFE_PNPM_ENABLE_SOCKET=1) or per-invocation (`--socket`).
@@ -54,6 +23,58 @@ _safe_pkg_prescan() {
   if [ "$socket_enabled" -eq 1 ]; then
     _safe_pkg_socket_scan "$interactive" || return 1
   fi
+}
+
+# _safe_pkg_audit manager lockfile snapdir tmpdir
+#   Runs the manager's CVE audit on the tree phase 1 resolved, so a package
+#   passed to `add` is covered. Returns 1 to block. A non-zero exit means either
+#   advisories or that the audit itself could not run (offline, registry
+#   error); the output is shown so the user can tell which. Interactive runs
+#   prompt, non-interactive runs warn and continue, SAFE_PNPM_STRICT=1 blocks.
+#
+#   Runs on the host, so it never touches the project: it audits a throwaway
+#   copy of the post-fetch snapshot plus the registry config (.npmrc from the
+#   sandbox, and .yarnrc without its yarn-path line). pnpm also skips the
+#   project's .pnpmfile.cjs, which would otherwise run on the host.
+_safe_pkg_audit() {
+  local manager="$1" lockfile="$2" snapdir="$3" tmpdir="$4"
+  [ -f "$snapdir/tree/$lockfile" ] || return 0
+
+  local interactive=0
+  [ -t 0 ] && interactive=1
+
+  local auditdir audit_out audit_rc
+  auditdir=$(mktemp -d) || return 1
+  audit_out=$(mktemp) || { rm -rf "$auditdir"; return 1; }
+  cp -R "$snapdir/tree/." "$auditdir/"
+  [ -f "$tmpdir/.npmrc" ] && cp "$tmpdir/.npmrc" "$auditdir/.npmrc"
+  [ -f "$tmpdir/.yarnrc" ] && command grep -v '^[[:space:]]*"\{0,1\}yarn-path' "$tmpdir/.yarnrc" > "$auditdir/.yarnrc"
+
+  echo "→ $manager audit..." >&2
+  case "$manager" in
+    pnpm) (cd "$auditdir" && command pnpm audit --audit-level moderate --config.ignore-pnpmfile=true) >"$audit_out" 2>&1 ;;
+    npm)  (cd "$auditdir" && command npm  audit --audit-level moderate) >"$audit_out" 2>&1 ;;
+    yarn) (cd "$auditdir" && command yarn audit) >"$audit_out" 2>&1 ;;
+  esac
+  audit_rc=$?
+  rm -rf "$auditdir"
+
+  if [ "$audit_rc" -ne 0 ]; then
+    tail -n 40 "$audit_out" >&2
+    if [ "${SAFE_PNPM_STRICT:-}" = "1" ]; then
+      rm -f "$audit_out"
+      echo "✗ $manager audit failed or found issues. Blocking (SAFE_PNPM_STRICT=1)." >&2
+      return 1
+    fi
+    if [ "$interactive" -eq 1 ]; then
+      printf "⚠️  %s audit failed or found issues. Continue anyway? [y/N] " "$manager" >&2
+      read -r _ans
+      case "$_ans" in [Yy]*) ;; *) rm -f "$audit_out"; return 1 ;; esac
+    else
+      echo "⚠️  $manager audit failed or found issues — continuing in non-interactive mode." >&2
+    fi
+  fi
+  rm -f "$audit_out"
 }
 
 # _safe_pkg_socket_scan interactive
@@ -461,6 +482,13 @@ _safe_pkg_sandbox() {
         cp "$tmpdir/$m/package.json" "$snapdir/tree/$m/package.json"
       fi
     done < "$snapdir/members"
+  fi
+
+  # CVE audit on the resolved tree, after the snapshot and before any build
+  # script. A block discards the sandbox like a malware hit does.
+  if [ "$fetched" -eq 1 ] && ! _safe_pkg_audit "$manager" "$lockfile" "$snapdir" "$tmpdir"; then
+    fetched=0
+    rc=1
   fi
 
   if [ "$fetched" -eq 1 ] && [ "$run_build" -eq 1 ] && [ -n "$phase2_cmd" ]; then

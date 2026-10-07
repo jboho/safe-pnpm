@@ -2,42 +2,6 @@
 # Place in ~/.config/fish/functions/ — fish autoloads it when _safe_pkg_prescan is first called.
 
 function _safe_pkg_prescan --argument manager lockfile socket_flag
-    if test -f $lockfile
-        echo "→ $manager audit..." >&2
-        # Output is kept and shown on failure: a non-zero exit means either
-        # advisories or that the audit itself could not run (offline, registry
-        # error), and the user needs the text to tell which.
-        set -l audit_out (mktemp)
-        or return 1
-        switch $manager
-            case pnpm
-                command pnpm audit --audit-level moderate >$audit_out 2>&1
-            case npm
-                command npm audit --audit-level moderate >$audit_out 2>&1
-            case yarn
-                command yarn audit >$audit_out 2>&1
-        end
-        set -l audit_rc $status
-        if test $audit_rc -ne 0
-            tail -n 40 $audit_out >&2
-            if test "$SAFE_PNPM_STRICT" = "1"
-                rm -f $audit_out
-                echo "✗ $manager audit failed or found issues. Blocking (SAFE_PNPM_STRICT=1)." >&2
-                return 1
-            end
-            if isatty stdin
-                read --prompt-str "⚠️  $manager audit failed or found issues. Continue anyway? [y/N] " _ans
-                if not string match -qi 'y*' "$_ans"
-                    rm -f $audit_out
-                    return 1
-                end
-            else
-                echo "⚠️  $manager audit failed or found issues — continuing in non-interactive mode." >&2
-            end
-        end
-        rm -f $audit_out
-    end
-
     # Socket is opt-in: enable globally with SAFE_PNPM_ENABLE_SOCKET=1 or
     # per-invocation with `--socket`.
     set -l socket_enabled 0
@@ -48,6 +12,67 @@ function _safe_pkg_prescan --argument manager lockfile socket_flag
         _safe_pkg_socket_scan
         or return 1
     end
+end
+
+# Runs the manager's CVE audit on the tree phase 1 resolved, so a package
+# passed to `add` is covered. Returns 1 to block. See _safe_pkg_shared.sh for
+# the full rationale. It runs on the host, so it audits a throwaway copy of the
+# post-fetch snapshot plus the registry config (.npmrc from the sandbox, and
+# .yarnrc without its yarn-path line), never the project. pnpm also skips the
+# project's .pnpmfile.cjs, which would otherwise run on the host.
+function _safe_pkg_audit --argument manager lockfile snapdir tmpdir
+    test -f "$snapdir/$lockfile"; or return 0
+
+    set -l auditdir (mktemp -d)
+    or return 1
+    set -l audit_out (mktemp)
+    or begin
+        rm -rf $auditdir
+        return 1
+    end
+    cp -R "$snapdir/." "$auditdir/"
+    test -f "$tmpdir/.npmrc"; and cp "$tmpdir/.npmrc" "$auditdir/.npmrc"
+    if test -f "$tmpdir/.yarnrc"
+        command grep -v '^[[:space:]]*"\{0,1\}yarn-path' "$tmpdir/.yarnrc" >"$auditdir/.yarnrc"
+    end
+
+    echo "→ $manager audit..." >&2
+    # pushd/popd, not cd: a fish function shares the caller's working directory.
+    pushd $auditdir >/dev/null
+    or begin
+        rm -rf $auditdir $audit_out
+        return 1
+    end
+    switch $manager
+        case pnpm
+            command pnpm audit --audit-level moderate --config.ignore-pnpmfile=true >$audit_out 2>&1
+        case npm
+            command npm audit --audit-level moderate >$audit_out 2>&1
+        case yarn
+            command yarn audit >$audit_out 2>&1
+    end
+    set -l audit_rc $status
+    popd >/dev/null
+    rm -rf $auditdir
+
+    if test $audit_rc -ne 0
+        tail -n 40 $audit_out >&2
+        if test "$SAFE_PNPM_STRICT" = "1"
+            rm -f $audit_out
+            echo "✗ $manager audit failed or found issues. Blocking (SAFE_PNPM_STRICT=1)." >&2
+            return 1
+        end
+        if isatty stdin
+            read --prompt-str "⚠️  $manager audit failed or found issues. Continue anyway? [y/N] " _ans
+            if not string match -qi 'y*' "$_ans"
+                rm -f $audit_out
+                return 1
+            end
+        else
+            echo "⚠️  $manager audit failed or found issues — continuing in non-interactive mode." >&2
+        end
+    end
+    rm -f $audit_out
 end
 
 # Applies safe-pnpm's Socket failure semantics. See _safe_pkg_shared.sh for the

@@ -25,6 +25,9 @@ const sandbox = ({ auditRc = 0, dockerHook = "" } = {}) => {
   for (const f of fs.readdirSync(ASSETS_DIR)) {
     fs.copyFileSync(path.join(ASSETS_DIR, f), path.join(home, ".safe-pnpm", f));
   }
+  // A scanner that always reports clean, so SAFE_PNPM_STRICT=1 (which also
+  // blocks a scan that could not run) reaches the audit under test.
+  fs.writeFileSync(path.join(home, ".safe-pnpm", "malware-scan.js"), 'console.log("clean");\n');
   fs.writeFileSync(
     path.join(bin, "docker"),
     `#!/bin/sh\n[ "$1" = info ] && exit 0\necho "$@" >> "${root}/docker.log"\necho "DOCKER $1" >> "${root}/events.log"\n${dockerHook}\nexit 0\n`,
@@ -32,7 +35,7 @@ const sandbox = ({ auditRc = 0, dockerHook = "" } = {}) => {
   );
   fs.writeFileSync(
     path.join(bin, "npm"),
-    `#!/bin/sh\necho "AUDIT cwd=$PWD" >> "${root}/events.log"\ncat package-lock.json >> "${root}/events.log" 2>/dev/null\necho "audit-stub: 1 high severity vulnerability"\nexit ${auditRc}\n`,
+    `#!/bin/sh\necho "AUDIT cwd=$PWD" >> "${root}/events.log"\ncat package-lock.json >> "${root}/events.log" 2>/dev/null\necho >> "${root}/events.log"\necho "audit-stub: 1 high severity vulnerability"\nexit ${auditRc}\n`,
     { mode: 0o755 },
   );
   fs.writeFileSync(

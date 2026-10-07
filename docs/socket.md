@@ -1,6 +1,6 @@
 # Socket.dev Behavioral Scanning
 
-Socket analyzes packages for behavioral signals that go beyond name-matching: suspicious network calls in lifecycle scripts, obfuscated code, typosquatting indicators, new unmaintained packages, and more. It runs as a third pre-install layer alongside `pnpm audit` (CVE database) and the OSV malware check.
+Socket analyzes packages for behavioral signals that go beyond name-matching: suspicious network calls in lifecycle scripts, obfuscated code, typosquatting indicators, new unmaintained packages, and more. It runs as a third layer alongside `pnpm audit` (CVE database, after the fetch) and the OSV malware check.
 
 `@socketsecurity/cli` is bundled as a dependency and installed automatically with this package.
 
@@ -47,7 +47,7 @@ A Socket run has three possible outcomes, and safe-pnpm treats them differently.
 
 Findings follow the same convention as the `pnpm audit` layer: they prompt when there's a human to ask, and warn without blocking when there isn't.
 
-Failures are deliberately lenient by default and never prompt. Socket is an opt-in third layer: the CVE audit has already run, and the OSV malware check still runs after the fetch. Breaking every install because a token expired or a laptop is offline costs more than it protects — so safe-pnpm tells you the layer didn't run and moves on.
+Failures are deliberately lenient by default and never prompt. Socket is an opt-in third layer: the CVE audit and the OSV malware check still run after the fetch. Breaking every install because a token expired or a laptop is offline costs more than it protects — so safe-pnpm tells you the layer didn't run and moves on.
 
 ### Strict mode
 

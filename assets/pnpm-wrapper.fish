@@ -147,6 +147,13 @@ function pnpm
             end
         end
 
+        # CVE audit on the resolved tree, after the snapshot and before any
+        # build script. A block discards the sandbox like a malware hit does.
+        _safe_pkg_audit pnpm pnpm-lock.yaml $snapdir/tree $tmpdir
+        or set rc 1
+    end
+
+    if test $rc -eq 0
         # `pnpm fetch` only populates the store; there is nothing to build.
         if test "$argv[1]" != "fetch"
             # Strip registry credentials before any build script can run.

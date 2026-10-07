@@ -21,7 +21,7 @@ Inside the Docker container, none of this is reachable: the container has no hom
 | Source file exfiltration | Yes — source files are never mounted |
 | `.env` and secret theft | Yes — only `package.json` and lockfile enter the container |
 | Persistent host backdoors via manifests | Yes — the container is discarded, and manifests and the lockfile are restored from the pre-build snapshot, so build scripts cannot plant `scripts` entries or new dependencies |
-| Known CVE-listed packages | Partly — `audit` runs pre-install and its output is shown. Interactive runs prompt; non-interactive runs warn and continue unless `SAFE_PNPM_STRICT=1`, which blocks (and also blocks when the audit itself could not run) |
+| Known CVE-listed packages | Partly — `audit` runs after the fetch, on the tree the fetch resolved, so a package passed to `add` is covered. Its output is shown. Interactive runs prompt; non-interactive runs warn and continue unless `SAFE_PNPM_STRICT=1`, which blocks (and also blocks when the audit itself could not run) |
 | Known malicious packages | Yes — every version the fetch resolved is checked against [OSV](https://osv.dev)'s malicious-package advisories (`MAL-*`, which include the Shai-Hulud 2.0 IOC lists) before any package code runs; a hit blocks the install |
 | Behavioral anomalies (suspicious network calls, etc.) | Yes, with [Socket.dev](./socket.md) configured |
 

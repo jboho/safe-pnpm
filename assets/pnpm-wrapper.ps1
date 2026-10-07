@@ -103,6 +103,12 @@ function global:pnpm {
             $manifests = @('package.json','pnpm-lock.yaml') + @($members | ForEach-Object { Join-Path $_ 'package.json' })
             _Safe_Pkg_Copy_Files -From $tmpDir.FullName -To $snapDir.FullName -RelPaths $manifests
 
+            # CVE audit on the resolved tree, after the snapshot and before any
+            # build script. A block discards the sandbox like a malware hit does.
+            if (-not (_Safe_Pkg_Audit pnpm 'pnpm-lock.yaml' $snapDir.FullName $tmpDir.FullName)) { $rc = 1 }
+        }
+
+        if ($rc -eq 0) {
             # `pnpm fetch` only populates the store; there is nothing to build.
             if ($cmd -ne 'fetch') {
                 # Strip registry credentials before any build script can run.

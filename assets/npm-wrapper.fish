@@ -112,6 +112,13 @@ function npm
             end
         end
 
+        # CVE audit on the resolved tree, after the snapshot and before any
+        # build script. A block discards the sandbox like a malware hit does.
+        _safe_pkg_audit npm package-lock.json $snapdir $tmpdir
+        or set rc 1
+    end
+
+    if test $rc -eq 0
         # Strip registry credentials before any build script can run.
         _safe_pkg_strip_npmrc_auth "$tmpdir/.npmrc"
         _safe_pkg_strip_npmrc_auth "$tmpdir/.yarnrc"
