@@ -8,8 +8,29 @@
 # Note: yarn v1 only. berry (v2+) requires separate handling.
 
 function yarn
-    set -l install_cmds install add remove upgrade
-    if not contains -- $argv[1] $install_cmds
+    # Subcommand = first word that is not a global flag or that flag's value.
+    set -l install_cmds install add remove upgrade upgrade-interactive
+    set -l value_flags --cwd --registry --modules-folder --cache-folder --preferred-cache-folder --global-folder --link-folder --network-concurrency --network-timeout --proxy --https-proxy --mutex --use-yarnrc --cafile --otp
+    set -l subcmd
+    set -l skip 0
+    for a in $argv
+        if test $skip -eq 1
+            set skip 0
+        else if test "$a" = --
+            break
+        else if string match -q -- '-*=*' $a
+        else if string match -q -- '-*' $a
+            contains -- $a $value_flags; and set skip 1
+        else
+            set subcmd $a
+            break
+        end
+    end
+    # Bare `yarn` runs an install (yarn v1), unless it only asks for help or the version.
+    if test -z "$subcmd"; and not contains -- $argv[1] -v --version -h --help
+        set subcmd install
+    end
+    if not contains -- "$subcmd" $install_cmds
         command yarn $argv
         return
     end

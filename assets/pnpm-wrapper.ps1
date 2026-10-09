@@ -9,9 +9,18 @@
 . "$HOME\.safe-pnpm\_safe_pkg_shared.ps1"
 
 function global:pnpm {
-    $installCmds = @('install','add','update','ci','remove','fetch')
-    $cmd = if ($args.Count -gt 0) { $args[0] } else { '' }
-
+    $installCmds = @('install','i','add','update','up','upgrade','ci','fetch','remove','rm','un','uninstall','install-test','it')
+    $valueFlags = @('-C','--dir','-F','--filter','--filter-prod','--workspace-dir','--reporter','--loglevel','--config')
+    # Subcommand = first word that is not a global flag or that flag's value.
+    $cmd = ''
+    $skip = $false
+    foreach ($a in $args) {
+        if ($skip) { $skip = $false; continue }
+        if ($a -eq '--') { break }
+        if ($a -like '-*=*') { continue }
+        if ($a -like '-*') { if ($a -in $valueFlags) { $skip = $true }; continue }
+        $cmd = $a; break
+    }
     if ($cmd -notin $installCmds) {
         $pnpmExe = (Get-Command pnpm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
         & $pnpmExe @args

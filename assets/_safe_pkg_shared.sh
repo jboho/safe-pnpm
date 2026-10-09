@@ -3,6 +3,57 @@
 
 _SAFE_PKG_SHARED_LOADED=1
 
+# _safe_pkg_subcmd manager [args...]
+#   Prints the subcommand: the first word that is not a global flag or a global
+#   flag's value (`pnpm --filter app add x` -> add). Prints nothing when there
+#   is none. A flag that takes its value as a separate word must be listed
+#   here, or that value would be read as the subcommand.
+_safe_pkg_subcmd() {
+  local manager="$1" valueflags
+  shift
+  case "$manager" in
+    pnpm) valueflags=" -C --dir -F --filter --filter-prod --workspace-dir --reporter --loglevel --config " ;;
+    npm)  valueflags=" --prefix -w --workspace --registry --cache --userconfig --globalconfig --loglevel --otp --scope --omit --include --install-strategy --tag --before " ;;
+    yarn) valueflags=" --cwd --registry --modules-folder --cache-folder --preferred-cache-folder --global-folder --link-folder --network-concurrency --network-timeout --proxy --https-proxy --mutex --use-yarnrc --cafile --otp " ;;
+  esac
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --) return 0 ;;
+      -*=*) ;;
+      -*) case "$valueflags" in *" $1 "*) shift ;; esac ;;
+      *) printf '%s\n' "$1"; return 0 ;;
+    esac
+    shift
+  done
+}
+
+# _safe_pkg_is_install manager [args...]
+#   Succeeds when the command installs, adds, removes or updates packages under
+#   any of the manager's spellings. Bare `yarn` is an install (yarn v1).
+_safe_pkg_is_install() {
+  local manager="$1" sub arg
+  shift
+  sub="$(_safe_pkg_subcmd "$manager" "$@")"
+  if [ -z "$sub" ]; then
+    [ "$manager" = "yarn" ] || return 1
+    for arg in "$@"; do
+      case "$arg" in -v|--version|-h|--help) return 1 ;; esac
+    done
+    return 0
+  fi
+  case "$manager:$sub" in
+    pnpm:install|pnpm:i|pnpm:add|pnpm:update|pnpm:up|pnpm:upgrade|pnpm:ci|pnpm:fetch|\
+    pnpm:remove|pnpm:rm|pnpm:un|pnpm:uninstall|pnpm:install-test|pnpm:it) return 0 ;;
+    npm:install|npm:i|npm:in|npm:ins|npm:inst|npm:insta|npm:instal|npm:isnt|npm:isnta|npm:isntal|npm:isntall|\
+    npm:add|npm:ci|npm:clean-install|npm:ic|npm:install-clean|npm:isntall-clean|\
+    npm:install-test|npm:it|npm:cit|npm:install-ci-test|\
+    npm:update|npm:up|npm:upgrade|npm:udpate|\
+    npm:uninstall|npm:un|npm:unlink|npm:remove|npm:rm|npm:r) return 0 ;;
+    yarn:install|yarn:add|yarn:remove|yarn:upgrade|yarn:upgrade-interactive) return 0 ;;
+  esac
+  return 1
+}
+
 _safe_pkg_prescan() {
   local manager="$1"
   local lockfile="$2"
@@ -317,7 +368,8 @@ _safe_pkg_run() {
   local workspace_file="$3"
   local manifest_files="$4"
   shift 4
-  local subcmd="${1:-}"
+  local subcmd
+  subcmd="$(_safe_pkg_subcmd "$manager" "$@")"
 
   if ! docker info > /dev/null 2>&1; then
     if [ ! -t 0 ]; then
@@ -366,7 +418,8 @@ _safe_pkg_sandbox() {
 
   local tmpdir="$1" snapdir="$2" manager="$3" lockfile="$4" workspace_file="$5" manifest_files="$6"
   shift 6
-  local subcmd="${1:-}"
+  local subcmd
+  subcmd="$(_safe_pkg_subcmd "$manager" "$@")"
 
   local workspace_root _cwd rel_path d
   _cwd="$(pwd)"

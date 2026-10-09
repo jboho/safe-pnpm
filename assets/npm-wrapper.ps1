@@ -9,9 +9,18 @@
 . "$HOME\.safe-pnpm\_safe_pkg_shared.ps1"
 
 function global:npm {
-    $installCmds = @('install','i','ci','update','uninstall','un')
-    $cmd = if ($args.Count -gt 0) { $args[0] } else { '' }
-
+    $installCmds = @('install','i','in','ins','inst','insta','instal','isnt','isnta','isntal','isntall','add','ci','clean-install','ic','install-clean','isntall-clean','install-test','it','cit','install-ci-test','update','up','upgrade','udpate','uninstall','un','unlink','remove','rm','r')
+    $valueFlags = @('--prefix','-w','--workspace','--registry','--cache','--userconfig','--globalconfig','--loglevel','--otp','--scope','--omit','--include','--install-strategy','--tag','--before')
+    # Subcommand = first word that is not a global flag or that flag's value.
+    $cmd = ''
+    $skip = $false
+    foreach ($a in $args) {
+        if ($skip) { $skip = $false; continue }
+        if ($a -eq '--') { break }
+        if ($a -like '-*=*') { continue }
+        if ($a -like '-*') { if ($a -in $valueFlags) { $skip = $true }; continue }
+        $cmd = $a; break
+    }
     if ($cmd -notin $installCmds) {
         $npmExe = (Get-Command npm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
         & $npmExe @args

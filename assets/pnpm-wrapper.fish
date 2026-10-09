@@ -7,8 +7,25 @@
 # Escape hatch: command pnpm install bypasses to native pnpm.
 
 function pnpm
-    set -l install_cmds install add update ci remove fetch
-    if not contains -- $argv[1] $install_cmds
+    # Subcommand = first word that is not a global flag or that flag's value.
+    set -l install_cmds install i add update up upgrade ci fetch remove rm un uninstall install-test it
+    set -l value_flags -C --dir -F --filter --filter-prod --workspace-dir --reporter --loglevel --config
+    set -l subcmd
+    set -l skip 0
+    for a in $argv
+        if test $skip -eq 1
+            set skip 0
+        else if test "$a" = --
+            break
+        else if string match -q -- '-*=*' $a
+        else if string match -q -- '-*' $a
+            contains -- $a $value_flags; and set skip 1
+        else
+            set subcmd $a
+            break
+        end
+    end
+    if not contains -- "$subcmd" $install_cmds
         command pnpm $argv
         return
     end
@@ -155,7 +172,7 @@ function pnpm
 
     if test $rc -eq 0
         # `pnpm fetch` only populates the store; there is nothing to build.
-        if test "$argv[1]" != "fetch"
+        if test "$subcmd" != "fetch"
             # Strip registry credentials before any build script can run.
             _safe_pkg_strip_npmrc_auth "$tmpdir/.npmrc"
             _safe_pkg_strip_npmrc_auth "$tmpdir/.yarnrc"

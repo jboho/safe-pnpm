@@ -10,9 +10,19 @@
 . "$HOME\.safe-pnpm\_safe_pkg_shared.ps1"
 
 function global:yarn {
-    $installCmds = @('install','add','remove','upgrade')
-    $cmd = if ($args.Count -gt 0) { $args[0] } else { '' }
-
+    $installCmds = @('install','add','remove','upgrade','upgrade-interactive')
+    $valueFlags = @('--cwd','--registry','--modules-folder','--cache-folder','--preferred-cache-folder','--global-folder','--link-folder','--network-concurrency','--network-timeout','--proxy','--https-proxy','--mutex','--use-yarnrc','--cafile','--otp')
+    # Subcommand = first word that is not a global flag or that flag's value.
+    $cmd = ''
+    $skip = $false
+    foreach ($a in $args) {
+        if ($skip) { $skip = $false; continue }
+        if ($a -eq '--') { break }
+        if ($a -like '-*=*') { continue }
+        if ($a -like '-*') { if ($a -in $valueFlags) { $skip = $true }; continue }
+        $cmd = $a; break
+    }
+    if (-not $cmd -and -not ($args | Where-Object { $_ -in '-v','--version','-h','--help' })) { $cmd = 'install' }
     if ($cmd -notin $installCmds) {
         $yarnExe = (Get-Command yarn -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
         & $yarnExe @args

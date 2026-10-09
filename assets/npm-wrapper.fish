@@ -7,8 +7,25 @@
 # Escape hatch: command npm install bypasses to native npm.
 
 function npm
-    set -l install_cmds install i ci update uninstall un
-    if not contains -- $argv[1] $install_cmds
+    # Subcommand = first word that is not a global flag or that flag's value.
+    set -l install_cmds install i in ins inst insta instal isnt isnta isntal isntall add ci clean-install ic install-clean isntall-clean install-test it cit install-ci-test update up upgrade udpate uninstall un unlink remove rm r
+    set -l value_flags --prefix -w --workspace --registry --cache --userconfig --globalconfig --loglevel --otp --scope --omit --include --install-strategy --tag --before
+    set -l subcmd
+    set -l skip 0
+    for a in $argv
+        if test $skip -eq 1
+            set skip 0
+        else if test "$a" = --
+            break
+        else if string match -q -- '-*=*' $a
+        else if string match -q -- '-*' $a
+            contains -- $a $value_flags; and set skip 1
+        else
+            set subcmd $a
+            break
+        end
+    end
+    if not contains -- "$subcmd" $install_cmds
         command npm $argv
         return
     end
