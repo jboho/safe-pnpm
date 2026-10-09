@@ -114,6 +114,14 @@ When you run an install-class command:
 | npm | `install`, `i`, `ci`, `update`, `uninstall`, `un` |
 | yarn | `install`, `add`, `remove`, `upgrade` (yarn v1 only) |
 
+**Not intercepted.** Commands that download a package and run it straight away skip every step below. No malware scan, CVE audit, Docker sandbox or Socket check runs for them, and the package's code runs on your machine with your permissions:
+
+- `npx PKG`, `npm exec PKG`, `npm init PKG`, `npm create PKG`
+- `pnpm dlx PKG`, `pnpm create PKG`
+- `yarn create PKG`, and `yarn dlx PKG` on yarn 2+
+
+Treat these like any unreviewed download. Check the package name yourself, or install it with `add` or `install` first so it is scanned.
+
 1. **Pre-install scan** — [Socket behavioral analysis](./docs/socket.md) if configured.
 2. **Copy only manifests** — `package.json`, the lockfile, workspace files, and `.npmrc` / `.yarnrc` go into a temp directory. Source files, `.env`, and secrets never leave the host.
 3. **Fetch in Docker** — ephemeral container running as your user, `--cap-drop ALL`, `--ignore-scripts`. Dependencies download with any registry token available but no package code running.
