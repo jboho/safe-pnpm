@@ -207,6 +207,26 @@ _safe_pkg_malware_scan() {
   return 0
 }
 
+# _safe_pkg_is_global [args...]
+#   True when the args ask for a global install (-g, a short-flag cluster
+#   containing g, --global, --location=global, --location global). The sandbox
+#   writes to the container's own global prefix, which is thrown away, so a
+#   global install through the wrapper would exit 0 and change nothing.
+_safe_pkg_is_global() {
+  local prev="" a
+  for a in "$@"; do
+    case "$a" in
+      --) return 1 ;;
+      --global|--location=global) return 0 ;;
+      --*) ;;
+      -*g*) return 0 ;;
+    esac
+    [ "$prev" = "--location" ] && [ "$a" = "global" ] && return 0
+    prev="$a"
+  done
+  return 1
+}
+
 # _safe_pkg_dispatch manager lockfile workspace_file manifest_files [pkg-manager-args...]
 #   Shared entry point for the install-class path of every manager wrapper.
 #   Strips the safe-pnpm-only `--socket` flag from the pass-through args (so it
@@ -234,6 +254,12 @@ _safe_pkg_dispatch() {
     fi
     count=$((count - 1))
   done
+
+  if _safe_pkg_is_global "$@"; then
+    echo "✗ safe-pnpm: global installs are not supported through the wrapper; the sandbox would install into a throwaway container and change nothing on this machine." >&2
+    echo "  To install globally without the safety checks, run: command $manager $*" >&2
+    return 1
+  fi
 
   _safe_pkg_prescan "$manager" "$lockfile" "$socket_flag" || return 1
   _safe_pkg_run "$manager" "$lockfile" "$workspace_file" "$manifest_files" "$@"

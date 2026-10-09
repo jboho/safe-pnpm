@@ -25,6 +25,12 @@ function yarn
         end
     end
 
+    if _safe_pkg_is_global $pass_args
+        echo "✗ safe-pnpm: global installs are not supported through the wrapper; the sandbox would install into a throwaway container and change nothing on this machine." >&2
+        echo "  To install globally without the safety checks, run: command yarn $pass_args" >&2
+        return 1
+    end
+
     _safe_pkg_prescan yarn yarn.lock $socket_flag
     or return 1
 

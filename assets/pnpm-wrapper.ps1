@@ -22,6 +22,13 @@ function global:pnpm {
     $socketFlag = $args -contains '--socket'
     $passArgs = @($args | Where-Object { $_ -ne '--socket' })
 
+    if (_Safe_Pkg_Is_Global $passArgs) {
+        Write-Host "✗ safe-pnpm: global installs are not supported through the wrapper; the sandbox would install into a throwaway container and change nothing on this machine." -ForegroundColor Red
+        Write-Host "  To install globally without the safety checks, run: pnpm.cmd $passArgs" -ForegroundColor Red
+        $global:LASTEXITCODE = 1
+        return
+    }
+
     if (-not (_Safe_Pkg_Prescan -Manager pnpm -Lockfile 'pnpm-lock.yaml' -Socket:$socketFlag)) { return }
 
     docker info 2>$null | Out-Null

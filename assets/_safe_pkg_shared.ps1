@@ -58,6 +58,21 @@ function _Safe_Pkg_Audit {
     }
 }
 
+# True when the args ask for a global install. See _safe_pkg_is_global in
+# _safe_pkg_shared.sh for why the wrapper refuses these.
+function _Safe_Pkg_Is_Global {
+    param([string[]]$PassArgs)
+    $prev = ''
+    foreach ($a in $PassArgs) {
+        if ($a -eq '--') { return $false }
+        if ($a -in @('--global','--location=global')) { return $true }
+        if ($a -notlike '--*' -and $a -clike '-*g*') { return $true }
+        if ($prev -eq '--location' -and $a -eq 'global') { return $true }
+        $prev = $a
+    }
+    return $false
+}
+
 function _Safe_Pkg_Prescan {
     param([string]$Manager, [string]$Lockfile, [switch]$Socket)
 
