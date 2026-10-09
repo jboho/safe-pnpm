@@ -88,9 +88,12 @@ function yarn
         set hardening $hardening --memory $SAFE_PNPM_MEMORY
     end
 
+    # Phase 2 needs the flag too, or --force would prune what phase 1 added.
+    set -l host_flags (_safe_pkg_host_platform yarn $tmpdir)
+
     # Phase 1: fetch (network on, token available, scripts disabled).
     docker run --rm --cap-drop ALL $hardening $user_flags -v "$tmpdir:/app" -w /app $token_env \
-        safe-pnpm:latest yarn $pass_args --ignore-scripts $store_flag
+        safe-pnpm:latest yarn $pass_args --ignore-scripts $store_flag $host_flags
     set -l rc $status
 
     # Known-malware check on the tree phase 1 resolved, before any package
@@ -131,7 +134,7 @@ function yarn
 
         # Phase 2: build (no token, no .npmrc auth, network off by default).
         docker run --rm --cap-drop ALL $hardening $user_flags $net_flag -v "$tmpdir:/app" -w /app \
-            safe-pnpm:latest yarn install --offline --force $store_flag
+            safe-pnpm:latest yarn install --offline --force $store_flag $host_flags
         set rc $status
 
         # A node_modules swapped for a symlink could pull in files from anywhere
