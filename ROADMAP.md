@@ -23,6 +23,8 @@
   - [ ] Copy `.yarnrc.yml` into the audit directory so private registry config applies
   - [ ] Run the PowerShell containers as a non-root user
   - [ ] Test rootless Docker and Podman against a real daemon
+  - [ ] Check npx, dlx and create packages against OSV in the fish wrappers (issue #60)
+  - [ ] Check npx, dlx and create packages against OSV in the PowerShell wrappers (issue #61, after #57)
 
 ## Notes
 - docs/socket.md (Socket.dev integration design)
