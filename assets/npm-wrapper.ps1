@@ -9,19 +9,30 @@
 . "$HOME\.safe-pnpm\_safe_pkg_shared.ps1"
 
 function global:npm {
-    $installCmds = @('install','i','in','ins','inst','insta','instal','isnt','isnta','isntal','isntall','add','ci','clean-install','ic','install-clean','isntall-clean','install-test','it','cit','install-ci-test','update','up','upgrade','udpate','uninstall','un','unlink','remove','rm','r')
-    $valueFlags = @('--prefix','-w','--workspace','--registry','--cache','--userconfig','--globalconfig','--loglevel','--otp','--scope','--omit','--include','--install-strategy','--tag','--before')
-    # Subcommand = first word that is not a global flag or that flag's value.
+    $installCmds = @('install','i','in','ins','inst','insta','instal','isnt','isnta','isntal','isntall','add','ci','clean-install','ic','install-clean','isntall-clean','install-test','it','cit','install-ci-test','sit','clean-install-test','update','up','upgrade','udpate','u','uninstall','un','unlink','remove','rm','r')
+    $nativeCmds = @('run','run-script','rum','urn','test','t','tst','start','stop','restart','exec','x','publish','pack','version','v','view','info','show','config','c','get','set','ls','list','la','ll','audit','outdated','login','logout','whoami','init','create','innit','pkg','prefix','root','bin','docs','help','ping','search','team','token','owner','access','dist-tag','deprecate','cache','link','ln','rebuild','rb','dedupe','find-dupes','explain','why','fund','diff','doctor')
+    $valueFlags = @('--prefix','-w','--workspace','--registry','--cache','--userconfig','--globalconfig','--loglevel','--otp','--scope','--omit','--include','--install-strategy','--tag','--before','--audit-level','--fetch-retries','--lockfile-version','--min-release-age','--cpu','--os','--libc','--script-shell','--node-options','--maxsockets')
+    $installN = @($installCmds | ForEach-Object { $_ -replace '-','' })
+    $nativeN = @($nativeCmds | ForEach-Object { $_ -replace '-','' })
+    # Walk the non-flag words: an install word or alias is the subcommand, a
+    # known non-install command means native, and anything else may be the value
+    # of a flag missing from $valueFlags, so try the next word (fails closed).
     $cmd = ''
+    $seen = 0
     $skip = $false
     foreach ($a in $args) {
         if ($skip) { $skip = $false; continue }
         if ($a -eq '--') { break }
         if ($a -like '-*=*') { continue }
-        if ($a -like '-*') { if ($a -in $valueFlags) { $skip = $true }; continue }
-        $cmd = $a; break
+        if ($a -like '-*') { if ($valueFlags -ccontains $a) { $skip = $true }; continue }
+        $n = $a.ToLower() -replace '-',''
+        if (-not $n) { continue }
+        $seen = 1
+        if ($nativeN -contains $n) { break }
+        if ($installN -contains $n) { $cmd = $n; break }
+        if ($n.Length -ge 2 -and ($installN | Where-Object { $_.StartsWith($n) })) { $cmd = $n; break }
     }
-    if ($cmd -notin $installCmds) {
+    if (-not $cmd) {
         $npmExe = (Get-Command npm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
         & $npmExe @args
         return

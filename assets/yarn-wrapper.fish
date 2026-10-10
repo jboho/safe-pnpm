@@ -8,10 +8,16 @@
 # Note: yarn v1 only. berry (v2+) requires separate handling.
 
 function yarn
-    # Subcommand = first word that is not a global flag or that flag's value.
+    # Walk the non-flag words: an install word or alias is the subcommand, a
+    # known non-install command means native, and anything else may be the value
+    # of a flag missing from value_flags, so try the next word (fails closed).
     set -l install_cmds install add remove upgrade upgrade-interactive
+    set -l native_cmds run test start publish pack global create init list ls info why outdated audit cache check config link unlink login logout owner tag team version versions bin generate-lock-entry import licenses autoclean help exec node
     set -l value_flags --cwd --registry --modules-folder --cache-folder --preferred-cache-folder --global-folder --link-folder --network-concurrency --network-timeout --proxy --https-proxy --mutex --use-yarnrc --cafile --otp
+    set -l ninstall (string replace -a - '' -- $install_cmds)
+    set -l nnative (string replace -a - '' -- $native_cmds)
     set -l subcmd
+    set -l seen 0
     set -l skip 0
     for a in $argv
         if test $skip -eq 1
@@ -22,15 +28,25 @@ function yarn
         else if string match -q -- '-*' $a
             contains -- $a $value_flags; and set skip 1
         else
-            set subcmd $a
-            break
+            set -l n (string lower -- $a | string replace -a - '')
+            test -z "$n"; and continue
+            set seen 1
+            if contains -- $n $nnative
+                break
+            else if contains -- $n $ninstall
+                set subcmd $n
+                break
+            end
         end
     end
-    # Bare `yarn` runs an install (yarn v1), unless it only asks for help or the version.
-    if test -z "$subcmd"; and not contains -- $argv[1] -v --version -h --help
+    # Bare `yarn` runs an install (yarn v1), unless help or the version is asked for.
+    if test $seen -eq 0
         set subcmd install
+        for a in $argv
+            contains -- $a -v --version -h --help; and set subcmd
+        end
     end
-    if not contains -- "$subcmd" $install_cmds
+    if test -z "$subcmd"
         command yarn $argv
         return
     end

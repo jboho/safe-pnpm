@@ -9,19 +9,29 @@
 . "$HOME\.safe-pnpm\_safe_pkg_shared.ps1"
 
 function global:pnpm {
-    $installCmds = @('install','i','add','update','up','upgrade','ci','fetch','remove','rm','un','uninstall','install-test','it')
-    $valueFlags = @('-C','--dir','-F','--filter','--filter-prod','--workspace-dir','--reporter','--loglevel','--config')
-    # Subcommand = first word that is not a global flag or that flag's value.
+    $installCmds = @('install','i','add','update','up','upgrade','ci','clean-install','ic','install-clean','fetch','remove','rm','un','uninstall','uni','install-test','it','unlink','dislink')
+    $nativeCmds = @('run','exec','dlx','test','t','start','stop','restart','publish','pack','list','ls','ll','la','why','outdated','audit','config','c','get','set','init','create','link','ln','rebuild','rb','approve-builds','store','root','bin','patch','patch-commit','patch-remove','import','prune','dedupe','deploy','licenses','help','env','self-update','setup','doctor','server','cat-file','cat-index','find-hash')
+    $valueFlags = @('-C','--dir','-F','--filter','--filter-prod','--workspace-dir','--reporter','--loglevel','--config','--store-dir','--state-dir','--registry','--lockfile-dir','--network-concurrency','--fetch-timeout','--workspace-concurrency','--test-pattern','--changed-files-ignore-pattern','--http-proxy','--https-proxy','--no-proxy','--user-agent')
+    $installN = @($installCmds | ForEach-Object { $_ -replace '-','' })
+    $nativeN = @($nativeCmds | ForEach-Object { $_ -replace '-','' })
+    # Walk the non-flag words: an install word or alias is the subcommand, a
+    # known non-install command means native, and anything else may be the value
+    # of a flag missing from $valueFlags, so try the next word (fails closed).
     $cmd = ''
+    $seen = 0
     $skip = $false
     foreach ($a in $args) {
         if ($skip) { $skip = $false; continue }
         if ($a -eq '--') { break }
         if ($a -like '-*=*') { continue }
-        if ($a -like '-*') { if ($a -in $valueFlags) { $skip = $true }; continue }
-        $cmd = $a; break
+        if ($a -like '-*') { if ($valueFlags -ccontains $a) { $skip = $true }; continue }
+        $n = $a.ToLower() -replace '-',''
+        if (-not $n) { continue }
+        $seen = 1
+        if ($nativeN -contains $n) { break }
+        if ($installN -contains $n) { $cmd = $n; break }
     }
-    if ($cmd -notin $installCmds) {
+    if (-not $cmd) {
         $pnpmExe = (Get-Command pnpm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
         & $pnpmExe @args
         return

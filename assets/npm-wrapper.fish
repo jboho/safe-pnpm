@@ -7,10 +7,16 @@
 # Escape hatch: command npm install bypasses to native npm.
 
 function npm
-    # Subcommand = first word that is not a global flag or that flag's value.
-    set -l install_cmds install i in ins inst insta instal isnt isnta isntal isntall add ci clean-install ic install-clean isntall-clean install-test it cit install-ci-test update up upgrade udpate uninstall un unlink remove rm r
-    set -l value_flags --prefix -w --workspace --registry --cache --userconfig --globalconfig --loglevel --otp --scope --omit --include --install-strategy --tag --before
+    # Walk the non-flag words: an install word or alias is the subcommand, a
+    # known non-install command means native, and anything else may be the value
+    # of a flag missing from value_flags, so try the next word (fails closed).
+    set -l install_cmds install i in ins inst insta instal isnt isnta isntal isntall add ci clean-install ic install-clean isntall-clean install-test it cit install-ci-test sit clean-install-test update up upgrade udpate u uninstall un unlink remove rm r
+    set -l native_cmds run run-script rum urn test t tst start stop restart exec x publish pack version v view info show config c get set ls list la ll audit outdated login logout whoami init create innit pkg prefix root bin docs help ping search team token owner access dist-tag deprecate cache link ln rebuild rb dedupe find-dupes explain why fund diff doctor
+    set -l value_flags --prefix -w --workspace --registry --cache --userconfig --globalconfig --loglevel --otp --scope --omit --include --install-strategy --tag --before --audit-level --fetch-retries --lockfile-version --min-release-age --cpu --os --libc --script-shell --node-options --maxsockets
+    set -l ninstall (string replace -a - '' -- $install_cmds)
+    set -l nnative (string replace -a - '' -- $native_cmds)
     set -l subcmd
+    set -l seen 0
     set -l skip 0
     for a in $argv
         if test $skip -eq 1
@@ -21,11 +27,21 @@ function npm
         else if string match -q -- '-*' $a
             contains -- $a $value_flags; and set skip 1
         else
-            set subcmd $a
-            break
+            set -l n (string lower -- $a | string replace -a - '')
+            test -z "$n"; and continue
+            set seen 1
+            if contains -- $n $nnative
+                break
+            else if contains -- $n $ninstall
+                set subcmd $n
+                break
+            else if test (string length -- $n) -ge 2; and string match -q -- "$n*" $ninstall
+                set subcmd $n
+                break
+            end
         end
     end
-    if not contains -- "$subcmd" $install_cmds
+    if test -z "$subcmd"
         command npm $argv
         return
     end

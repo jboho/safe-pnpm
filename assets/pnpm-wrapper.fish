@@ -7,10 +7,16 @@
 # Escape hatch: command pnpm install bypasses to native pnpm.
 
 function pnpm
-    # Subcommand = first word that is not a global flag or that flag's value.
-    set -l install_cmds install i add update up upgrade ci fetch remove rm un uninstall install-test it
-    set -l value_flags -C --dir -F --filter --filter-prod --workspace-dir --reporter --loglevel --config
+    # Walk the non-flag words: an install word or alias is the subcommand, a
+    # known non-install command means native, and anything else may be the value
+    # of a flag missing from value_flags, so try the next word (fails closed).
+    set -l install_cmds install i add update up upgrade ci clean-install ic install-clean fetch remove rm un uninstall uni install-test it unlink dislink
+    set -l native_cmds run exec dlx test t start stop restart publish pack list ls ll la why outdated audit config c get set init create link ln rebuild rb approve-builds store root bin patch patch-commit patch-remove import prune dedupe deploy licenses help env self-update setup doctor server cat-file cat-index find-hash
+    set -l value_flags -C --dir -F --filter --filter-prod --workspace-dir --reporter --loglevel --config --store-dir --state-dir --registry --lockfile-dir --network-concurrency --fetch-timeout --workspace-concurrency --test-pattern --changed-files-ignore-pattern --http-proxy --https-proxy --no-proxy --user-agent
+    set -l ninstall (string replace -a - '' -- $install_cmds)
+    set -l nnative (string replace -a - '' -- $native_cmds)
     set -l subcmd
+    set -l seen 0
     set -l skip 0
     for a in $argv
         if test $skip -eq 1
@@ -21,11 +27,18 @@ function pnpm
         else if string match -q -- '-*' $a
             contains -- $a $value_flags; and set skip 1
         else
-            set subcmd $a
-            break
+            set -l n (string lower -- $a | string replace -a - '')
+            test -z "$n"; and continue
+            set seen 1
+            if contains -- $n $nnative
+                break
+            else if contains -- $n $ninstall
+                set subcmd $n
+                break
+            end
         end
     end
-    if not contains -- "$subcmd" $install_cmds
+    if test -z "$subcmd"
         command pnpm $argv
         return
     end
