@@ -13,6 +13,7 @@
   source "$HOME/.safe-pnpm/_safe_pkg_shared.sh" 2>/dev/null
 
 pnpm() {
+  _safe_pkg_runner_check pnpm "$@" || return 1
   _safe_pkg_is_install pnpm "$@" || { command pnpm "$@"; return; }
 
   _safe_pkg_dispatch "pnpm" "pnpm-lock.yaml" "pnpm-workspace.yaml" \
