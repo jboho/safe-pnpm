@@ -11,7 +11,7 @@
 
 function global:yarn {
     $installCmds = @('install','add','remove','upgrade','upgrade-interactive')
-    $nativeCmds = @('run','test','start','publish','pack','global','create','init','list','ls','info','why','outdated','audit','cache','check','config','link','unlink','login','logout','owner','tag','team','version','versions','bin','generate-lock-entry','import','licenses','autoclean','help','exec','node')
+    $nativeCmds = @('run','test','start','publish','pack','create','init','list','ls','info','why','outdated','audit','cache','check','config','link','unlink','login','logout','owner','tag','team','version','versions','bin','generate-lock-entry','import','licenses','autoclean','help','exec','node')
     $valueFlags = @('--cwd','--registry','--modules-folder','--cache-folder','--preferred-cache-folder','--global-folder','--link-folder','--network-concurrency','--network-timeout','--proxy','--https-proxy','--mutex','--use-yarnrc','--cafile','--otp')
     $installN = @($installCmds | ForEach-Object { $_ -replace '-','' })
     $nativeN = @($nativeCmds | ForEach-Object { $_ -replace '-','' })
@@ -20,6 +20,7 @@ function global:yarn {
     # of a flag missing from $valueFlags, so try the next word (fails closed).
     $cmd = ''
     $seen = 0
+    $g = $false
     $skip = $false
     foreach ($a in $args) {
         if ($skip) { $skip = $false; continue }
@@ -29,6 +30,10 @@ function global:yarn {
         $n = $a.ToLower() -replace '-',''
         if (-not $n) { continue }
         $seen = 1
+        # yarn v1 spells a global install as a subcommand; only the mutating
+        # ones are install-class (refused below), `yarn global list` is not.
+        if ($g) { if ($n -in 'add','remove','upgrade') { $cmd = 'global' }; break }
+        if ($n -eq 'global') { $g = $true; continue }
         if ($nativeN -contains $n) { break }
         if ($installN -contains $n) { $cmd = $n; break }
     }
@@ -45,6 +50,13 @@ function global:yarn {
     # Extract the safe-pnpm-only --socket flag so it never reaches yarn.
     $socketFlag = $args -contains '--socket'
     $passArgs = @($args | Where-Object { $_ -ne '--socket' })
+
+    if (_Safe_Pkg_Is_Global $passArgs) {
+        Write-Host "✗ safe-pnpm: global installs are not supported through the wrapper; the sandbox would install into a throwaway container and change nothing on this machine." -ForegroundColor Red
+        Write-Host "  To install globally without the safety checks, run: yarn.cmd $passArgs" -ForegroundColor Red
+        $global:LASTEXITCODE = 1
+        return
+    }
 
     if (-not (_Safe_Pkg_Prescan -Manager yarn -Lockfile 'yarn.lock' -Socket:$socketFlag)) { return }
 

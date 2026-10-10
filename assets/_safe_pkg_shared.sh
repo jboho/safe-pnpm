@@ -15,7 +15,7 @@ _SAFE_PKG_SHARED_LOADED=1
 #   accepts unambiguous prefixes (`npm uninst x`), so two or more letters that
 #   start an install name count. Bare `yarn` is an install (yarn v1).
 _safe_pkg_subcmd() {
-  local manager="$1" install native valueflags a n skip=0 seen=0
+  local manager="$1" install native valueflags a n skip=0 seen=0 g=0
   shift
   case "$manager" in
     pnpm)
@@ -28,7 +28,7 @@ _safe_pkg_subcmd() {
       valueflags=" --prefix -w --workspace --registry --cache --userconfig --globalconfig --loglevel --otp --scope --omit --include --install-strategy --tag --before --audit-level --fetch-retries --lockfile-version --min-release-age --cpu --os --libc --script-shell --node-options --maxsockets " ;;
     yarn)
       install=" install add remove upgrade upgrade-interactive "
-      native=" run test start publish pack global create init list ls info why outdated audit cache check config link unlink login logout owner tag team version versions bin generate-lock-entry import licenses autoclean help exec node "
+      native=" run test start publish pack create init list ls info why outdated audit cache check config link unlink login logout owner tag team version versions bin generate-lock-entry import licenses autoclean help exec node "
       valueflags=" --cwd --registry --modules-folder --cache-folder --preferred-cache-folder --global-folder --link-folder --network-concurrency --network-timeout --proxy --https-proxy --mutex --use-yarnrc --cafile --otp " ;;
   esac
   install="${install//-/}"
@@ -44,6 +44,13 @@ _safe_pkg_subcmd() {
     n="${n//-/}"
     [ -z "$n" ] && continue
     seen=1
+    # yarn v1 spells a global install as a subcommand; only the mutating ones
+    # are install-class (refused in _safe_pkg_dispatch), `yarn global list` is not.
+    if [ "$g" = 1 ]; then
+      case "$n" in add|remove|upgrade) printf '%s\n' global ;; esac
+      return 0
+    fi
+    if [ "$manager" = "yarn" ] && [ "$n" = "global" ]; then g=1; continue; fi
     case "$native" in *" $n "*) return 0 ;; esac
     case "$install" in *" $n "*) printf '%s\n' "$n"; return 0 ;; esac
     if [ "$manager" = "npm" ] && [ "${#n}" -ge 2 ]; then
@@ -269,6 +276,37 @@ _safe_pkg_malware_scan() {
   return 0
 }
 
+# _safe_pkg_is_global [args...]
+#   True when the args ask for a global install (-g, a short-flag cluster
+#   containing g, --global, --global=true, --location=global, --location global). The sandbox
+#   writes to the container's own global prefix, which is thrown away, so a
+#   global install through the wrapper would exit 0 and change nothing.
+_safe_pkg_is_global() {
+  local prev="" a
+  # yarn v1 spells it as a subcommand: yarn global add|remove|upgrade
+  local first="" second=""
+  for a in "$@"; do
+    case "$a" in
+      -*) ;;
+      *) if [ -z "$first" ]; then first="$a"; else second="$a"; break; fi ;;
+    esac
+  done
+  if [ "$first" = "global" ]; then
+    case "$second" in add|remove|upgrade) return 0 ;; esac
+  fi
+  for a in "$@"; do
+    case "$a" in
+      --) return 1 ;;
+      --global|--global=true|--global=1|--location=global) return 0 ;;
+      --*) ;;
+      -*g*) return 0 ;;
+    esac
+    [ "$prev" = "--location" ] && [ "$a" = "global" ] && return 0
+    prev="$a"
+  done
+  return 1
+}
+
 # _safe_pkg_dispatch manager lockfile workspace_file manifest_files [pkg-manager-args...]
 #   Shared entry point for the install-class path of every manager wrapper.
 #   Strips the safe-pnpm-only `--socket` flag from the pass-through args (so it
@@ -296,6 +334,12 @@ _safe_pkg_dispatch() {
     fi
     count=$((count - 1))
   done
+
+  if _safe_pkg_is_global "$@"; then
+    echo "✗ safe-pnpm: global installs are not supported through the wrapper; the sandbox would install into a throwaway container and change nothing on this machine." >&2
+    echo "  To install globally without the safety checks, run: command $manager $*" >&2
+    return 1
+  fi
 
   _safe_pkg_prescan "$manager" "$lockfile" "$socket_flag" || return 1
   _safe_pkg_run "$manager" "$lockfile" "$workspace_file" "$manifest_files" "$@"
@@ -422,6 +466,46 @@ _safe_pkg_run() {
   )
 }
 
+# _safe_pkg_host_platform manager tmpdir
+#
+# Native optional dependencies (rollup, esbuild, ...) ship one package per
+# platform, and the container picks the Linux one. A macOS host then fails with
+# "Cannot find module @rollup/rollup-darwin-arm64". On macOS this also asks the
+# package manager for the host's build, so it goes through the same malware
+# scan and CVE audit as everything else (phase 1 runs no install scripts).
+# Linux hosts match the container, so nothing changes there.
+#   pnpm: supportedArchitectures in the sandbox copy of pnpm-workspace.yaml; the
+#         setting is not read from flags or environment. A project's own
+#         supportedArchitectures wins. The file is never copied back.
+#   yarn: prints --ignore-platform (yarn 1 has no per-platform list), so every
+#         platform's build is fetched.
+#   npm:  unchanged. --os/--cpu replace the container's platform instead of
+#         adding to it, and esbuild's install script in the (Linux) build
+#         container then fails for want of its Linux package.
+# Prints extra package-manager flags on stdout; may edit tmpdir.
+_safe_pkg_host_platform() {
+  local manager="$1" tmpdir="$2" os cpu
+  [ "$(uname -s)" = "Darwin" ] || return 0
+  os=darwin
+  case "$(uname -m)" in
+    arm64|aarch64) cpu=arm64 ;;
+    x86_64)        cpu=x64 ;;
+    *)             return 0 ;;
+  esac
+  case "$manager" in
+    pnpm)
+      local ws="$tmpdir/pnpm-workspace.yaml"
+      if [ -f "$ws" ] && command grep -q '^supportedArchitectures:' "$ws"; then
+        return 0
+      fi
+      # A file with no trailing newline would glue the key onto its last line.
+      if [ -s "$ws" ] && [ -n "$(tail -c1 "$ws")" ]; then printf '\n' >> "$ws"; fi
+      printf 'supportedArchitectures:\n  os: [current, %s]\n  cpu: [current, %s]\n' "$os" "$cpu" >> "$ws"
+      ;;
+    yarn) printf '%s\n' "--ignore-platform" ;;
+  esac
+}
+
 # _safe_pkg_sandbox tmpdir snapdir manager lockfile workspace_file manifest_files [args...]
 #   Body of _safe_pkg_run; tmpdir/snapdir are created and removed by the caller.
 _safe_pkg_sandbox() {
@@ -503,13 +587,20 @@ _safe_pkg_sandbox() {
   [ -n "${NODE_AUTH_TOKEN:-}" ] && token_env="$token_env -e NODE_AUTH_TOKEN"
   [ -n "${NPM_TOKEN:-}" ]       && token_env="$token_env -e NPM_TOKEN"
 
+  # Host platform's native optional dependencies (see _safe_pkg_host_platform).
+  # Yarn needs its flag in phase 2 too, or --force would prune what phase 1 added.
+  local host_flags
+  host_flags=$(_safe_pkg_host_platform "$manager" "$tmpdir") || return 1
+  local phase2_host_flags=""
+  [ "$manager" = "yarn" ] && phase2_host_flags="$host_flags"
+
   # --- Phase 1: fetch (network on, token available, scripts disabled) ---
   # shellcheck disable=SC2086
   docker run --rm --cap-drop ALL $hardening $user_flags \
     -v "${tmpdir}:/app" \
     -w "$workdir" \
     $token_env \
-    safe-pnpm:latest "$manager" "$@" --ignore-scripts $store_flag
+    safe-pnpm:latest "$manager" "$@" --ignore-scripts $store_flag $host_flags
   local phase1_rc=$?
   local rc=$phase1_rc
 
@@ -568,7 +659,7 @@ _safe_pkg_sandbox() {
     docker run --rm --cap-drop ALL $hardening $user_flags $net_flag \
       -v "${tmpdir}:/app" \
       -w "$workdir" \
-      safe-pnpm:latest "$manager" $phase2_cmd
+      safe-pnpm:latest "$manager" $phase2_cmd $phase2_host_flags
     rc=$?
   fi
 

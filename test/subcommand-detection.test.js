@@ -52,6 +52,9 @@ const SCANNED = [
   "yarn --emoji false add x",
   "yarn --some-future-flag value add x",
   "pnpm --socket install",
+  "yarn global add x",
+  "yarn --silent global add x",
+  "yarn global remove x",
 ];
 
 const NATIVE = [
@@ -70,6 +73,9 @@ const NATIVE = [
   "pnpm --some-future-flag value run add",
   "npm cache clean",
   "npm c set x y",
+  "yarn global list",
+  "yarn global bin",
+  "yarn global",
 ];
 
 // Stub the two exits so nothing installs: the scan path prints "scanned" and
@@ -122,14 +128,18 @@ for (const cmd of SCANNED) {
     assert.equal(fishProbe(cmd).stdout.trim(), "scanned");
   });
 }
-test("zsh and bash agree on every probe", { skip: spawnSync("zsh", ["-c", "true"]).status !== 0 }, () => {
+test("zsh and bash agree on every probe", {
+  skip: spawnSync("zsh", ["-c", "true"]).status !== 0,
+}, () => {
   for (const cmd of [...SCANNED, ...NATIVE]) {
     const script = `_SAFE_PKG_SHARED_LOADED=1
 command() { echo NATIVE; }
 source "$1/_safe_pkg_shared.sh"; source "$1/pnpm-wrapper.sh"; source "$1/npm-wrapper.sh"; source "$1/yarn-wrapper.sh"
 _safe_pkg_dispatch() { echo scanned; }
 ${cmd}`;
-    const z = spawnSync("zsh", ["-c", script, "zsh", ASSETS], { encoding: "utf8" });
+    const z = spawnSync("zsh", ["-c", script, "zsh", ASSETS], {
+      encoding: "utf8",
+    });
     assert.equal(z.stdout.trim(), bashProbe(cmd).stdout.trim(), cmd);
   }
 });
@@ -142,12 +152,18 @@ for (const m of ["pnpm", "npm", "yarn"]) {
   test(`${m} command lists match across sh, fish and ps1`, () => {
     const sh = read("_safe_pkg_shared.sh");
     const shBlock = sh.match(new RegExp(`    ${m}\\)\\n([\\s\\S]*?)\\) ;;`))[1];
-    const shList = (k) => shBlock.match(new RegExp(`${k}=" ([^"]*) "`))[1].split(" ");
+    const shList = (k) =>
+      shBlock.match(new RegExp(`${k}=" ([^"]*) "`))[1].split(" ");
     const fish = read(`${m}-wrapper.fish`);
-    const fishList = (k) => fish.match(new RegExp(`set -l ${k} ([^\\n]*)`))[1].split(" ");
+    const fishList = (k) =>
+      fish.match(new RegExp(`set -l ${k} ([^\\n]*)`))[1].split(" ");
     const ps = read(`${m}-wrapper.ps1`);
     const psList = (k) =>
-      [...ps.match(new RegExp(`\\$${k} = @\\(([^)]*)\\)`))[1].matchAll(/'([^']*)'/g)].map((x) => x[1]);
+      [
+        ...ps
+          .match(new RegExp(`\\$${k} = @\\(([^)]*)\\)`))[1]
+          .matchAll(/'([^']*)'/g),
+      ].map((x) => x[1]);
     for (const [k, fk, pk] of [
       ["install", "install_cmds", "installCmds"],
       ["native", "native_cmds", "nativeCmds"],

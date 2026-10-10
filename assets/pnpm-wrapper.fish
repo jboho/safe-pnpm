@@ -54,6 +54,12 @@ function pnpm
         end
     end
 
+    if _safe_pkg_is_global $pass_args
+        echo "✗ safe-pnpm: global installs are not supported through the wrapper; the sandbox would install into a throwaway container and change nothing on this machine." >&2
+        echo "  To install globally without the safety checks, run: command pnpm $pass_args" >&2
+        return 1
+    end
+
     _safe_pkg_prescan pnpm pnpm-lock.yaml $socket_flag
     or return 1
 
@@ -144,6 +150,8 @@ function pnpm
     if test -n "$SAFE_PNPM_MEMORY"
         set hardening $hardening --memory $SAFE_PNPM_MEMORY
     end
+
+    _safe_pkg_host_platform pnpm $tmpdir
 
     # Phase 1: fetch (network on, token available, scripts disabled).
     docker run --rm --cap-drop ALL $hardening $user_flags -v "$tmpdir:/app" -w $workdir $token_env \

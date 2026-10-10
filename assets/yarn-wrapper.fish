@@ -12,12 +12,13 @@ function yarn
     # known non-install command means native, and anything else may be the value
     # of a flag missing from value_flags, so try the next word (fails closed).
     set -l install_cmds install add remove upgrade upgrade-interactive
-    set -l native_cmds run test start publish pack global create init list ls info why outdated audit cache check config link unlink login logout owner tag team version versions bin generate-lock-entry import licenses autoclean help exec node
+    set -l native_cmds run test start publish pack create init list ls info why outdated audit cache check config link unlink login logout owner tag team version versions bin generate-lock-entry import licenses autoclean help exec node
     set -l value_flags --cwd --registry --modules-folder --cache-folder --preferred-cache-folder --global-folder --link-folder --network-concurrency --network-timeout --proxy --https-proxy --mutex --use-yarnrc --cafile --otp
     set -l ninstall (string replace -a - '' -- $install_cmds)
     set -l nnative (string replace -a - '' -- $native_cmds)
     set -l subcmd
     set -l seen 0
+    set -l g 0
     set -l skip 0
     for a in $argv
         if test $skip -eq 1
@@ -31,7 +32,14 @@ function yarn
             set -l n (string lower -- $a | string replace -a - '')
             test -z "$n"; and continue
             set seen 1
-            if contains -- $n $nnative
+            # yarn v1 spells a global install as a subcommand; only the mutating
+            # ones are install-class (refused below), `yarn global list` is not.
+            if test $g -eq 1
+                contains -- $n add remove upgrade; and set subcmd global
+                break
+            else if test "$n" = global
+                set g 1
+            else if contains -- $n $nnative
                 break
             else if contains -- $n $ninstall
                 set subcmd $n
@@ -60,6 +68,12 @@ function yarn
         else
             set pass_args $pass_args $a
         end
+    end
+
+    if _safe_pkg_is_global $pass_args
+        echo "✗ safe-pnpm: global installs are not supported through the wrapper; the sandbox would install into a throwaway container and change nothing on this machine." >&2
+        echo "  To install globally without the safety checks, run: command yarn $pass_args" >&2
+        return 1
     end
 
     _safe_pkg_prescan yarn yarn.lock $socket_flag
@@ -125,9 +139,12 @@ function yarn
         set hardening $hardening --memory $SAFE_PNPM_MEMORY
     end
 
+    # Phase 2 needs the flag too, or --force would prune what phase 1 added.
+    set -l host_flags (_safe_pkg_host_platform yarn $tmpdir)
+
     # Phase 1: fetch (network on, token available, scripts disabled).
     docker run --rm --cap-drop ALL $hardening $user_flags -v "$tmpdir:/app" -w /app $token_env \
-        safe-pnpm:latest yarn $pass_args --ignore-scripts $store_flag
+        safe-pnpm:latest yarn $pass_args --ignore-scripts $store_flag $host_flags
     set -l rc $status
 
     # Known-malware check on the tree phase 1 resolved, before any package
@@ -168,7 +185,7 @@ function yarn
 
         # Phase 2: build (no token, no .npmrc auth, network off by default).
         docker run --rm --cap-drop ALL $hardening $user_flags $net_flag -v "$tmpdir:/app" -w /app \
-            safe-pnpm:latest yarn install --offline --force $store_flag
+            safe-pnpm:latest yarn install --offline --force $store_flag $host_flags
         set rc $status
 
         # A node_modules swapped for a symlink could pull in files from anywhere

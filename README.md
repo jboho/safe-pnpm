@@ -82,9 +82,11 @@ source ~/.zshrc    # or open a new terminal
 Refresh wrapper files and rebuild the Docker image after a package update. If `update` detects a manager that wasn't enabled before, it offers to add it:
 
 ```sh
-npm update -g @jboho/safe-pnpm
+command npm update -g @jboho/safe-pnpm
 safe-pnpm update
 ```
+
+Use `command npm` here. The wrappers refuse `-g` and `--global` installs, because the sandbox would install into a container that is thrown away and change nothing on your machine. Add `command` in front (`command npm install -g PKG`) to run a global install natively, without the safety checks.
 
 ### `safe-pnpm doctor`
 
@@ -113,6 +115,14 @@ When you run an install-class command:
 | pnpm | `install`, `add`, `update`, `ci`, `remove`, `fetch` |
 | npm | `install`, `i`, `ci`, `update`, `uninstall`, `un` |
 | yarn | `install`, `add`, `remove`, `upgrade` (yarn v1 only) |
+
+**Not intercepted.** Commands that download a package and run it straight away skip every step below. No malware scan, CVE audit, Docker sandbox or Socket check runs for them, and the package's code runs on your machine with your permissions:
+
+- `npx PKG`, `npm exec PKG`, `npm init PKG`, `npm create PKG`
+- `pnpm dlx PKG`, `pnpm create PKG`
+- `yarn create PKG`, and `yarn dlx PKG` on yarn 2+
+
+Treat these like any unreviewed download. Check the package name yourself, or install it with `add` or `install` first so it is scanned.
 
 1. **Pre-install scan** — [Socket behavioral analysis](./docs/socket.md) if configured.
 2. **Copy only manifests** — `package.json`, the lockfile, workspace files, and `.npmrc` / `.yarnrc` go into a temp directory. Source files, `.env`, and secrets never leave the host.
@@ -170,6 +180,21 @@ export SAFE_PNPM_MEMORY=2g  # optional: memory limit for both containers
 ```
 
 `SAFE_PNPM_OSV_STRICT=1` and `SAFE_PNPM_SOCKET_STRICT=1` set the same behavior for a single layer.
+
+---
+
+## Native optional dependencies on macOS
+
+Packages such as rollup and esbuild ship one native build per platform as optional dependencies. The install runs in a Linux container, so it would pick only the Linux build, and tools you run on the Mac afterwards fail with `Cannot find module @rollup/rollup-darwin-arm64`.
+
+On a Mac (bash, zsh and fish) the wrapper also fetches the Mac build, and it goes through the same malware check and CVE audit as everything else:
+
+- **pnpm** — the sandbox copy of `pnpm-workspace.yaml` gets `supportedArchitectures` for the host. Your own file is not changed, and a `supportedArchitectures` you already set is kept.
+- **yarn** — `--ignore-platform`, which fetches the builds for every platform (yarn 1 cannot name one).
+- **npm** — not handled yet. `--os` and `--cpu` replace the container's platform instead of adding to it, which breaks esbuild's install script in the build container. Run the tool in a container, or see the issue below.
+- **PowerShell** — not handled yet.
+
+Tracked in [#46](https://github.com/jboho/safe-pnpm/issues/46). Running `command pnpm install` to get around this skips the malware scan; use the above instead.
 
 ---
 
