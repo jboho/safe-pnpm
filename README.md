@@ -191,9 +191,9 @@ On a Mac or Windows host the wrapper also fetches the Mac build, and it goes thr
 
 - **pnpm** — the sandbox copy of `pnpm-workspace.yaml` gets `supportedArchitectures` for the host. Your own file is not changed, and a `supportedArchitectures` you already set is kept.
 - **yarn** — `--ignore-platform`, which fetches the builds for every platform (yarn 1 cannot name one).
-- **npm** — not handled yet. `--os` and `--cpu` replace the container's platform instead of adding to it, which breaks esbuild's install script in the build container. Run the tool in a container, or see the issue below.
+- **npm** — after the fetch, the wrapper installs the lockfile's optional packages built for the host next to the Linux ones (`npm install --no-save --ignore-scripts`), by name and version from the lockfile that was just malware-scanned. `--os`/`--cpu` can't do this: they replace the container's platform, which breaks esbuild's install script in the build container. This needs `host-specs.js` in `~/.safe-pnpm/`; run `safe-pnpm update` if the wrapper warns that it is missing.
 
-On Windows the extra build is `win32`. Tracked in [#46](https://github.com/jboho/safe-pnpm/issues/46). Running `command pnpm install` to get around this skips the malware scan; use the above instead.
+On Windows the extra build is `win32`. Running `command pnpm install` to get around this skips the malware scan; use the above instead.
 
 ---
 

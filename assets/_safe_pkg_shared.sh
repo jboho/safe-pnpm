@@ -408,13 +408,10 @@ _safe_pkg_run() {
 # Prints extra package-manager flags on stdout; may edit tmpdir.
 _safe_pkg_host_platform() {
   local manager="$1" tmpdir="$2" os cpu
-  [ "$(uname -s)" = "Darwin" ] || return 0
-  os=darwin
-  case "$(uname -m)" in
-    arm64|aarch64) cpu=arm64 ;;
-    x86_64)        cpu=x64 ;;
-    *)             return 0 ;;
-  esac
+  read -r os cpu <<EOF_HP || return 0
+$(_safe_pkg_host_os_cpu)
+EOF_HP
+  [ -n "$cpu" ] || return 0
   case "$manager" in
     pnpm)
       local ws="$tmpdir/pnpm-workspace.yaml"
@@ -427,6 +424,49 @@ _safe_pkg_host_platform() {
       ;;
     yarn) printf '%s\n' "--ignore-platform" ;;
   esac
+}
+
+# Prints "OS CPU" in npm's names for a macOS host, nothing otherwise.
+_safe_pkg_host_os_cpu() {
+  [ "$(uname -s)" = "Darwin" ] || return 0
+  case "$(uname -m)" in
+    arm64|aarch64) echo "darwin arm64" ;;
+    x86_64)        echo "darwin x64" ;;
+  esac
+}
+
+# _safe_pkg_npm_host_builds tmpdir hardening user_flags token_env
+#
+# npm cannot be asked for several platforms at once: --os/--cpu replace the
+# container's platform, and then esbuild's install script in the build
+# container finds no Linux package. So after phase 1 this adds the host's
+# optional packages next to the Linux ones, by name and version from the
+# lockfile (already malware-scanned and unchanged by this step), with
+# --no-save and --ignore-scripts. Needs the registry token, so it runs before
+# the credentials are stripped. Best effort: without host-specs.js (an old
+# install) it warns and the host build is missing, as before.
+_safe_pkg_npm_host_builds() {
+  [ -n "${ZSH_VERSION:-}" ] && setopt localoptions sh_word_split
+  local tmpdir="$1" hardening="$2" user_flags="$3" token_env="$4" os cpu
+  read -r os cpu <<EOF_HB || return 0
+$(_safe_pkg_host_os_cpu)
+EOF_HB
+  [ -n "$cpu" ] || return 0
+  if ! cp "$HOME/.safe-pnpm/host-specs.js" "$tmpdir/.safe-host-specs.js" 2>/dev/null; then
+    echo "⚠️  safe-pnpm: host-specs.js missing, so native packages for $os are not installed (run: safe-pnpm update)." >&2
+    return 0
+  fi
+  # shellcheck disable=SC2086
+  docker run --rm --cap-drop ALL $hardening $user_flags \
+    -v "${tmpdir}:/app" \
+    -w /app \
+    $token_env \
+    safe-pnpm:latest sh -c \
+    'specs=$(node /app/.safe-host-specs.js "$1" "$2") || exit 1; [ -z "$specs" ] || npm install --no-save --ignore-scripts --force --cache /app/.safe-store $specs' \
+    sh "$os" "$cpu"
+  local rc=$?
+  rm -f "$tmpdir/.safe-host-specs.js"
+  return $rc
 }
 
 # _safe_pkg_sandbox tmpdir snapdir manager lockfile workspace_file manifest_files [args...]
@@ -566,6 +606,16 @@ _safe_pkg_sandbox() {
   if [ "$fetched" -eq 1 ] && ! _safe_pkg_audit "$manager" "$lockfile" "$snapdir" "$tmpdir"; then
     fetched=0
     rc=1
+  fi
+
+  if [ "$fetched" -eq 1 ] && [ "$run_build" -eq 1 ] && [ -n "$phase2_cmd" ]; then
+    # Host-platform builds for npm; needs the token, so before the strip below.
+    case "$subcmd" in
+      uninstall|un) ;;
+      *) if [ "$manager" = "npm" ] && ! _safe_pkg_npm_host_builds "$tmpdir" "$hardening" "$user_flags" "$token_env"; then
+           fetched=0; rc=1
+         fi ;;
+    esac
   fi
 
   if [ "$fetched" -eq 1 ] && [ "$run_build" -eq 1 ] && [ -n "$phase2_cmd" ]; then

@@ -232,6 +232,40 @@ function _Safe_Pkg_Host_Platform {
     return @()
 }
 
+# npm cannot fetch several platforms at once (--os/--cpu replace the container's
+# platform, and esbuild's install script then fails in the build container), so
+# this adds the host's optional packages next to the Linux ones, by name and
+# version from the already-scanned lockfile. See _safe_pkg_npm_host_builds in
+# _safe_pkg_shared.sh. Needs the token, so run it before the credentials are
+# stripped. Returns $false when the install step fails. -Os and -Cpu are for tests.
+function _Safe_Pkg_Npm_Host_Builds {
+    param([string]$TmpDir, [string[]]$Hardening, [string[]]$UserFlags, [string[]]$TokenEnv, [string]$Os, [string]$Cpu)
+    $P = [Runtime.InteropServices.OSPlatform]
+    if (-not $Os) {
+        if ([Runtime.InteropServices.RuntimeInformation]::IsOSPlatform($P::Windows)) { $Os = 'win32' }
+        elseif ([Runtime.InteropServices.RuntimeInformation]::IsOSPlatform($P::OSX)) { $Os = 'darwin' }
+    }
+    if (-not $Cpu) {
+        $Cpu = switch ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()) {
+            'X64' { 'x64' } 'Arm64' { 'arm64' } default { '' }
+        }
+    }
+    if ($Os -notin @('win32','darwin') -or -not $Cpu) { return $true }
+    $specs = Join-Path $HOME '.safe-pnpm/host-specs.js'
+    $dest = Join-Path $TmpDir '.safe-host-specs.js'
+    try { Copy-Item -LiteralPath $specs -Destination $dest -ErrorAction Stop } catch {
+        Write-Host "⚠️  safe-pnpm: host-specs.js missing, so native packages for $Os are not installed (run: safe-pnpm update)." -ForegroundColor Yellow
+        return $true
+    }
+    $script = 'specs=$(node /app/.safe-host-specs.js "$1" "$2") || exit 1; [ -z "$specs" ] || npm install --no-save --ignore-scripts --force --cache /app/.safe-store $specs'
+    $a = @('run','--rm','--cap-drop','ALL') + $Hardening + $UserFlags + @('-v',"${TmpDir}:/app",'-w','/app') + $TokenEnv +
+        @('safe-pnpm:latest','sh','-c',$script,'sh',$Os,$Cpu)
+    & docker @a
+    $ok = ($LASTEXITCODE -eq 0)
+    Remove-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue
+    return $ok
+}
+
 # Limits for both containers: no setuid escalation and a bounded process count
 # (a fork bomb in a build script would otherwise take down the Docker VM).
 # Memory is opt-in because legitimate builds vary widely in what they need.

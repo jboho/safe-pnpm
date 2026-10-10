@@ -84,6 +84,10 @@ function global:npm {
             if (-not (_Safe_Pkg_Audit npm 'package-lock.json' $snapDir.FullName $tmpDir.FullName)) { $rc = 1 }
         }
 
+        if ($rc -eq 0 -and $passArgs[0] -notin @('uninstall','un')) {
+            if (-not (_Safe_Pkg_Npm_Host_Builds -TmpDir $tmpDir.FullName -Hardening (_Safe_Pkg_Hardening) -UserFlags $userFlags -TokenEnv $tokenEnv)) { $rc = 1 }
+        }
+
         if ($rc -eq 0) {
             # Strip registry credentials before any build script can run.
             _Safe_Pkg_Strip_NpmrcAuth (Join-Path $tmpDir.FullName '.npmrc')
