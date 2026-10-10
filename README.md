@@ -193,6 +193,8 @@ On a Mac or Windows host the wrapper also fetches the Mac build, and it goes thr
 - **yarn** — `--ignore-platform`, which fetches the builds for every platform (yarn 1 cannot name one).
 - **npm** — after the fetch, the wrapper installs the lockfile's optional packages built for the host next to the Linux ones (`npm install --no-save --ignore-scripts`), by name and version from the lockfile that was just malware-scanned. `--os`/`--cpu` can't do this: they replace the container's platform, which breaks esbuild's install script in the build container. This needs `host-specs.js` in `~/.safe-pnpm/`; run `safe-pnpm update` if the wrapper warns that it is missing.
 
+Known limit for npm: the extra install fetches `name@version` from the registry again and does not check the lockfile's integrity hash. A nested lockfile entry (inside another package's `node_modules`) is installed at the top level instead. The malware scan and CVE audit cover the same name and version that gets installed.
+
 On Windows the extra build is `win32`. Running `command pnpm install` to get around this skips the malware scan; use the above instead.
 
 ---
