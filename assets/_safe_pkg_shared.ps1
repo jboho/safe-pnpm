@@ -190,6 +190,48 @@ function _Safe_Pkg_Strip_NpmrcAuth {
     [IO.File]::WriteAllLines((Resolve-Path -LiteralPath $Path).Path, [string[]]$kept)
 }
 
+# See _safe_pkg_host_platform in _safe_pkg_shared.sh. Native optional
+# dependencies (rollup, esbuild, ...) come as one package per platform and the
+# container picks the Linux one, so tools run on a Windows or macOS host fail.
+# Fetches the host's build too, so it is malware-scanned and audited like the
+# rest. Linux hosts match the container and change nothing.
+#   pnpm: supportedArchitectures in the sandbox copy of pnpm-workspace.yaml (the
+#         only place pnpm reads it); a project's own setting wins.
+#   yarn: returns --ignore-platform (every platform's build).
+#   npm:  unchanged (see the README).
+# Returns extra package-manager flags; may edit TmpDir. -Os and -Cpu exist for
+# tests; they default to the host's.
+function _Safe_Pkg_Host_Platform {
+    param([string]$Manager, [string]$TmpDir, [string]$Os, [string]$Cpu)
+    $P = [Runtime.InteropServices.OSPlatform]
+    if (-not $Os) {
+        if ([Runtime.InteropServices.RuntimeInformation]::IsOSPlatform($P::Windows)) { $Os = 'win32' }
+        elseif ([Runtime.InteropServices.RuntimeInformation]::IsOSPlatform($P::OSX)) { $Os = 'darwin' }
+    }
+    if (-not $Cpu) {
+        $Cpu = switch ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()) {
+            'X64' { 'x64' } 'Arm64' { 'arm64' } default { '' }
+        }
+    }
+    if ($Os -notin @('win32','darwin') -or -not $Cpu) { return @() }
+    switch ($Manager) {
+        'pnpm' {
+            $ws = Join-Path $TmpDir 'pnpm-workspace.yaml'
+            $text = ''
+            if (Test-Path -LiteralPath $ws) { $text = [IO.File]::ReadAllText($ws) }
+            if ($text -notmatch '(?m)^supportedArchitectures:') {
+                # A file with no trailing newline would glue the key onto its last line.
+                if ($text -and -not $text.EndsWith("`n")) { $text += "`n" }
+                $text += "supportedArchitectures:`n  os: [current, $Os]`n  cpu: [current, $Cpu]`n"
+                [IO.File]::WriteAllText($ws, $text)
+            }
+            return @()
+        }
+        'yarn' { return @('--ignore-platform') }
+    }
+    return @()
+}
+
 # Limits for both containers: no setuid escalation and a bounded process count
 # (a fork bomb in a build script would otherwise take down the Docker VM).
 # Memory is opt-in because legitimate builds vary widely in what they need.

@@ -96,6 +96,8 @@ function global:pnpm {
         if ($env:NODE_AUTH_TOKEN) { $tokenEnv += @('-e','NODE_AUTH_TOKEN') }
         if ($env:NPM_TOKEN)       { $tokenEnv += @('-e','NPM_TOKEN') }
 
+        [void](_Safe_Pkg_Host_Platform -Manager pnpm -TmpDir $tmpDir.FullName)
+
         # Phase 1: fetch (network on, token available, scripts disabled).
         $p1 = @('run','--rm','--cap-drop','ALL') + (_Safe_Pkg_Hardening) + $userFlags + @('-v',"$($tmpDir.FullName):/app",'-w',$workdir) +
             $tokenEnv + @('safe-pnpm:latest','pnpm') + $passArgs + @('--ignore-scripts') + $storeFlag

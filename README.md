@@ -187,14 +187,13 @@ export SAFE_PNPM_MEMORY=2g  # optional: memory limit for both containers
 
 Packages such as rollup and esbuild ship one native build per platform as optional dependencies. The install runs in a Linux container, so it would pick only the Linux build, and tools you run on the Mac afterwards fail with `Cannot find module @rollup/rollup-darwin-arm64`.
 
-On a Mac (bash, zsh and fish) the wrapper also fetches the Mac build, and it goes through the same malware check and CVE audit as everything else:
+On a Mac or Windows host the wrapper also fetches the Mac build, and it goes through the same malware check and CVE audit as everything else:
 
 - **pnpm** — the sandbox copy of `pnpm-workspace.yaml` gets `supportedArchitectures` for the host. Your own file is not changed, and a `supportedArchitectures` you already set is kept.
 - **yarn** — `--ignore-platform`, which fetches the builds for every platform (yarn 1 cannot name one).
 - **npm** — not handled yet. `--os` and `--cpu` replace the container's platform instead of adding to it, which breaks esbuild's install script in the build container. Run the tool in a container, or see the issue below.
-- **PowerShell** — not handled yet.
 
-Tracked in [#46](https://github.com/jboho/safe-pnpm/issues/46). Running `command pnpm install` to get around this skips the malware scan; use the above instead.
+On Windows the extra build is `win32`. Tracked in [#46](https://github.com/jboho/safe-pnpm/issues/46). Running `command pnpm install` to get around this skips the malware scan; use the above instead.
 
 ---
 

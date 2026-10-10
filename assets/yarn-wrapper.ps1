@@ -70,9 +70,12 @@ function global:yarn {
         if ($env:NODE_AUTH_TOKEN) { $tokenEnv += @('-e','NODE_AUTH_TOKEN') }
         if ($env:NPM_TOKEN)       { $tokenEnv += @('-e','NPM_TOKEN') }
 
+        # Phase 2 needs the flag too, or --force would prune what phase 1 added.
+        $hostFlags = @(_Safe_Pkg_Host_Platform -Manager yarn -TmpDir $tmpDir.FullName)
+
         # Phase 1: fetch (network on, token available, scripts disabled).
         $p1 = @('run','--rm','--cap-drop','ALL') + (_Safe_Pkg_Hardening) + $userFlags + @('-v',"$($tmpDir.FullName):/app",'-w','/app') +
-            $tokenEnv + @('safe-pnpm:latest','yarn') + $passArgs + @('--ignore-scripts') + $storeFlag
+            $tokenEnv + @('safe-pnpm:latest','yarn') + $passArgs + @('--ignore-scripts') + $storeFlag + $hostFlags
         & docker @p1
         $rc = $LASTEXITCODE
 
@@ -99,7 +102,7 @@ function global:yarn {
 
             # Phase 2: build (no token, no .npmrc auth, network off by default).
             $p2 = @('run','--rm','--cap-drop','ALL') + (_Safe_Pkg_Hardening) + $userFlags + $netFlag +
-                @('-v',"$($tmpDir.FullName):/app",'-w','/app','safe-pnpm:latest','yarn','install','--offline','--force') + $storeFlag
+                @('-v',"$($tmpDir.FullName):/app",'-w','/app','safe-pnpm:latest','yarn','install','--offline','--force') + $storeFlag + $hostFlags
             & docker @p2
             $rc = $LASTEXITCODE
 
