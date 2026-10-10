@@ -462,7 +462,7 @@ EOF_HB
     -w /app \
     $token_env \
     safe-pnpm:latest sh -c \
-    'specs=$(node /app/.safe-host-specs.js "$1" "$2") || exit 1; [ -z "$specs" ] || npm install --no-save --ignore-scripts --force --cache /app/.safe-store $specs' \
+    'specs=$(node /app/.safe-host-specs.js "$1" "$2") || exit 1; [ -z "$specs" ] || npm install --no-save --ignore-scripts --force --cache /app/.safe-store -- $specs' \
     sh "$os" "$cpu"
   local rc=$?
   rm -f "$tmpdir/.safe-host-specs.js"
