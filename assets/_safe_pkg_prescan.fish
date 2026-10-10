@@ -261,7 +261,7 @@ function _safe_pkg_host_platform --argument manager tmpdir
     switch $manager
         case pnpm
             set -l ws $tmpdir/pnpm-workspace.yaml
-            if test -f $ws; and command grep -q supportedArchitectures $ws
+            if test -f $ws; and command grep -q '^supportedArchitectures:' $ws
                 return 0
             end
             # A file with no trailing newline would glue the key onto its last line.

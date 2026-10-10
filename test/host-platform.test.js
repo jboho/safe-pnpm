@@ -83,6 +83,17 @@ for (const [shell, available] of shells) {
     assert.equal(run(shell, "pnpm", "Darwin", "arm64", own).yaml, own);
   });
 
+  t("pnpm ignores a commented-out supportedArchitectures", () => {
+    const r = run(
+      shell,
+      "pnpm",
+      "Darwin",
+      "arm64",
+      "# supportedArchitectures: x\n",
+    );
+    assert.match(r.yaml, /^supportedArchitectures:/m);
+  });
+
   t("pnpm on Linux changes nothing", () => {
     assert.equal(run(shell, "pnpm", "Linux", "x86_64").yaml, null);
   });

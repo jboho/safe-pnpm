@@ -388,7 +388,7 @@ _safe_pkg_host_platform() {
   case "$manager" in
     pnpm)
       local ws="$tmpdir/pnpm-workspace.yaml"
-      if [ -f "$ws" ] && command grep -q 'supportedArchitectures' "$ws"; then
+      if [ -f "$ws" ] && command grep -q '^supportedArchitectures:' "$ws"; then
         return 0
       fi
       # A file with no trailing newline would glue the key onto its last line.
