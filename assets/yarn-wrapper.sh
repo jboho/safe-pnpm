@@ -16,6 +16,13 @@
 yarn() {
   case "${1:-}" in
     install|add|remove|upgrade) ;;
+    # Only the mutating global subcommands are install-class (refused below);
+    # `yarn global list` and `yarn global bin` stay native.
+    global)
+      case "${2:-}" in
+        add|remove|upgrade) ;;
+        *) command yarn "$@"; return ;;
+      esac ;;
     *) command yarn "$@"; return ;;
   esac
 

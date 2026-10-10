@@ -82,9 +82,11 @@ source ~/.zshrc    # or open a new terminal
 Refresh wrapper files and rebuild the Docker image after a package update. If `update` detects a manager that wasn't enabled before, it offers to add it:
 
 ```sh
-npm update -g @jboho/safe-pnpm
+command npm update -g @jboho/safe-pnpm
 safe-pnpm update
 ```
+
+Use `command npm` here. The wrappers refuse `-g` and `--global` installs, because the sandbox would install into a container that is thrown away and change nothing on your machine. Add `command` in front (`command npm install -g PKG`) to run a global install natively, without the safety checks.
 
 ### `safe-pnpm doctor`
 

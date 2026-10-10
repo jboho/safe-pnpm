@@ -10,10 +10,14 @@
 . "$HOME\.safe-pnpm\_safe_pkg_shared.ps1"
 
 function global:yarn {
-    $installCmds = @('install','add','remove','upgrade')
+    $installCmds = @('install','add','remove','upgrade','global')
     $cmd = if ($args.Count -gt 0) { $args[0] } else { '' }
 
-    if ($cmd -notin $installCmds) {
+    # Only the mutating global subcommands are install-class (refused below);
+    # `yarn global list` and `yarn global bin` stay native.
+    $nativeGlobal = ($cmd -eq 'global') -and ($args.Count -lt 2 -or $args[1] -notin @('add','remove','upgrade'))
+
+    if (($cmd -notin $installCmds) -or $nativeGlobal) {
         $yarnExe = (Get-Command yarn -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
         & $yarnExe @args
         return
@@ -22,6 +26,13 @@ function global:yarn {
     # Extract the safe-pnpm-only --socket flag so it never reaches yarn.
     $socketFlag = $args -contains '--socket'
     $passArgs = @($args | Where-Object { $_ -ne '--socket' })
+
+    if (_Safe_Pkg_Is_Global $passArgs) {
+        Write-Host "✗ safe-pnpm: global installs are not supported through the wrapper; the sandbox would install into a throwaway container and change nothing on this machine." -ForegroundColor Red
+        Write-Host "  To install globally without the safety checks, run: yarn.cmd $passArgs" -ForegroundColor Red
+        $global:LASTEXITCODE = 1
+        return
+    }
 
     if (-not (_Safe_Pkg_Prescan -Manager yarn -Lockfile 'yarn.lock' -Socket:$socketFlag)) { return }
 

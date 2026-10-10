@@ -8,8 +8,14 @@
 # Note: yarn v1 only. berry (v2+) requires separate handling.
 
 function yarn
-    set -l install_cmds install add remove upgrade
+    set -l install_cmds install add remove upgrade global
     if not contains -- $argv[1] $install_cmds
+        command yarn $argv
+        return
+    end
+    # Only the mutating global subcommands are install-class (refused below);
+    # `yarn global list` and `yarn global bin` stay native.
+    if test "$argv[1]" = global; and not contains -- "$argv[2]" add remove upgrade
         command yarn $argv
         return
     end
@@ -23,6 +29,12 @@ function yarn
         else
             set pass_args $pass_args $a
         end
+    end
+
+    if _safe_pkg_is_global $pass_args
+        echo "✗ safe-pnpm: global installs are not supported through the wrapper; the sandbox would install into a throwaway container and change nothing on this machine." >&2
+        echo "  To install globally without the safety checks, run: command yarn $pass_args" >&2
+        return 1
     end
 
     _safe_pkg_prescan yarn yarn.lock $socket_flag
