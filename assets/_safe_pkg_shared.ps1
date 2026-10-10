@@ -219,7 +219,7 @@ function _Safe_Pkg_Host_Platform {
             $ws = Join-Path $TmpDir 'pnpm-workspace.yaml'
             $text = ''
             if (Test-Path -LiteralPath $ws) { $text = [IO.File]::ReadAllText($ws) }
-            if ($text -notmatch 'supportedArchitectures') {
+            if ($text -notmatch '(?m)^supportedArchitectures:') {
                 # A file with no trailing newline would glue the key onto its last line.
                 if ($text -and -not $text.EndsWith("`n")) { $text += "`n" }
                 $text += "supportedArchitectures:`n  os: [current, $Os]`n  cpu: [current, $Cpu]`n"
