@@ -8,14 +8,53 @@
 # Note: yarn v1 only. berry (v2+) requires separate handling.
 
 function yarn
-    set -l install_cmds install add remove upgrade global
-    if not contains -- $argv[1] $install_cmds
-        command yarn $argv
-        return
+    # Walk the non-flag words: an install word or alias is the subcommand, a
+    # known non-install command means native, and anything else may be the value
+    # of a flag missing from value_flags, so try the next word (fails closed).
+    set -l install_cmds install add remove upgrade upgrade-interactive
+    set -l native_cmds run test start publish pack create init list ls info why outdated audit cache check config link unlink login logout owner tag team version versions bin generate-lock-entry import licenses autoclean help exec node
+    set -l value_flags --cwd --registry --modules-folder --cache-folder --preferred-cache-folder --global-folder --link-folder --network-concurrency --network-timeout --proxy --https-proxy --mutex --use-yarnrc --cafile --otp
+    set -l ninstall (string replace -a - '' -- $install_cmds)
+    set -l nnative (string replace -a - '' -- $native_cmds)
+    set -l subcmd
+    set -l seen 0
+    set -l g 0
+    set -l skip 0
+    for a in $argv
+        if test $skip -eq 1
+            set skip 0
+        else if test "$a" = --
+            break
+        else if string match -q -- '-*=*' $a
+        else if string match -q -- '-*' $a
+            contains -- $a $value_flags; and set skip 1
+        else
+            set -l n (string lower -- $a | string replace -a - '')
+            test -z "$n"; and continue
+            set seen 1
+            # yarn v1 spells a global install as a subcommand; only the mutating
+            # ones are install-class (refused below), `yarn global list` is not.
+            if test $g -eq 1
+                contains -- $n add remove upgrade; and set subcmd global
+                break
+            else if test "$n" = global
+                set g 1
+            else if contains -- $n $nnative
+                break
+            else if contains -- $n $ninstall
+                set subcmd $n
+                break
+            end
+        end
     end
-    # Only the mutating global subcommands are install-class (refused below);
-    # `yarn global list` and `yarn global bin` stay native.
-    if test "$argv[1]" = global; and not contains -- "$argv[2]" add remove upgrade
+    # Bare `yarn` runs an install (yarn v1), unless help or the version is asked for.
+    if test $seen -eq 0
+        set subcmd install
+        for a in $argv
+            contains -- $a -v --version -h --help; and set subcmd
+        end
+    end
+    if test -z "$subcmd"
         command yarn $argv
         return
     end

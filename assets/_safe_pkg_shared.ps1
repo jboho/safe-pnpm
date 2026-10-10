@@ -64,7 +64,8 @@ function _Safe_Pkg_Is_Global {
     param([string[]]$PassArgs)
     $prev = ''
     # yarn v1 spells it as a subcommand: yarn global add|remove|upgrade
-    if ($PassArgs.Count -ge 2 -and $PassArgs[0] -eq 'global' -and $PassArgs[1] -in @('add','remove','upgrade')) { return $true }
+    $words = @($PassArgs | Where-Object { $_ -notlike '-*' })
+    if ($words.Count -ge 2 -and $words[0] -eq 'global' -and $words[1] -in @('add','remove','upgrade')) { return $true }
     foreach ($a in $PassArgs) {
         if ($a -eq '--') { return $false }
         if ($a -in @('--global','--global=true','--global=1','--location=global')) { return $true }

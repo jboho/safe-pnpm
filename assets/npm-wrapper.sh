@@ -13,10 +13,7 @@
   source "$HOME/.safe-pnpm/_safe_pkg_shared.sh" 2>/dev/null
 
 npm() {
-  case "${1:-}" in
-    install|i|ci|update|uninstall|un) ;;
-    *) command npm "$@"; return ;;
-  esac
+  _safe_pkg_is_install npm "$@" || { command npm "$@"; return; }
 
   _safe_pkg_dispatch "npm" "package-lock.json" "" \
     "package.json package-lock.json .npmrc" "$@"

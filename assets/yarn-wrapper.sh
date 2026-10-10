@@ -14,17 +14,7 @@
   source "$HOME/.safe-pnpm/_safe_pkg_shared.sh" 2>/dev/null
 
 yarn() {
-  case "${1:-}" in
-    install|add|remove|upgrade) ;;
-    # Only the mutating global subcommands are install-class (refused below);
-    # `yarn global list` and `yarn global bin` stay native.
-    global)
-      case "${2:-}" in
-        add|remove|upgrade) ;;
-        *) command yarn "$@"; return ;;
-      esac ;;
-    *) command yarn "$@"; return ;;
-  esac
+  _safe_pkg_is_install yarn "$@" || { command yarn "$@"; return; }
 
   _safe_pkg_dispatch "yarn" "yarn.lock" "" \
     "package.json yarn.lock .yarnrc .npmrc" "$@"

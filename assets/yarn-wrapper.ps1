@@ -10,14 +10,38 @@
 . "$HOME\.safe-pnpm\_safe_pkg_shared.ps1"
 
 function global:yarn {
-    $installCmds = @('install','add','remove','upgrade','global')
-    $cmd = if ($args.Count -gt 0) { $args[0] } else { '' }
-
-    # Only the mutating global subcommands are install-class (refused below);
-    # `yarn global list` and `yarn global bin` stay native.
-    $nativeGlobal = ($cmd -eq 'global') -and ($args.Count -lt 2 -or $args[1] -notin @('add','remove','upgrade'))
-
-    if (($cmd -notin $installCmds) -or $nativeGlobal) {
+    $installCmds = @('install','add','remove','upgrade','upgrade-interactive')
+    $nativeCmds = @('run','test','start','publish','pack','create','init','list','ls','info','why','outdated','audit','cache','check','config','link','unlink','login','logout','owner','tag','team','version','versions','bin','generate-lock-entry','import','licenses','autoclean','help','exec','node')
+    $valueFlags = @('--cwd','--registry','--modules-folder','--cache-folder','--preferred-cache-folder','--global-folder','--link-folder','--network-concurrency','--network-timeout','--proxy','--https-proxy','--mutex','--use-yarnrc','--cafile','--otp')
+    $installN = @($installCmds | ForEach-Object { $_ -replace '-','' })
+    $nativeN = @($nativeCmds | ForEach-Object { $_ -replace '-','' })
+    # Walk the non-flag words: an install word or alias is the subcommand, a
+    # known non-install command means native, and anything else may be the value
+    # of a flag missing from $valueFlags, so try the next word (fails closed).
+    $cmd = ''
+    $seen = 0
+    $g = $false
+    $skip = $false
+    foreach ($a in $args) {
+        if ($skip) { $skip = $false; continue }
+        if ($a -eq '--') { break }
+        if ($a -like '-*=*') { continue }
+        if ($a -like '-*') { if ($valueFlags -ccontains $a) { $skip = $true }; continue }
+        $n = $a.ToLower() -replace '-',''
+        if (-not $n) { continue }
+        $seen = 1
+        # yarn v1 spells a global install as a subcommand; only the mutating
+        # ones are install-class (refused below), `yarn global list` is not.
+        if ($g) { if ($n -in 'add','remove','upgrade') { $cmd = 'global' }; break }
+        if ($n -eq 'global') { $g = $true; continue }
+        if ($nativeN -contains $n) { break }
+        if ($installN -contains $n) { $cmd = $n; break }
+    }
+    if ($seen -eq 0) {
+        $cmd = 'install'
+        if ($args | Where-Object { $_ -in '-v','--version','-h','--help' }) { $cmd = '' }
+    }
+    if (-not $cmd) {
         $yarnExe = (Get-Command yarn -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
         & $yarnExe @args
         return

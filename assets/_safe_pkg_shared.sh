@@ -3,6 +3,75 @@
 
 _SAFE_PKG_SHARED_LOADED=1
 
+# _safe_pkg_subcmd manager [args...]
+#   Prints the install-class subcommand (lowercased, hyphens removed) and
+#   returns 0, or prints nothing. Walks the non-flag words in order:
+#     - an install word or alias           -> that is the subcommand
+#     - a known non-install command        -> nothing (run native)
+#     - anything else                      -> maybe the value of a flag missing
+#                                             from the list below; try the next word
+#   so an unknown value-taking flag fails closed. Flags in the list have their
+#   value skipped, so `pnpm --filter test add x` is still an add. npm also
+#   accepts unambiguous prefixes (`npm uninst x`), so two or more letters that
+#   start an install name count. Bare `yarn` is an install (yarn v1).
+_safe_pkg_subcmd() {
+  local manager="$1" install native valueflags a n skip=0 seen=0 g=0
+  shift
+  case "$manager" in
+    pnpm)
+      install=" install i add update up upgrade ci clean-install ic install-clean fetch remove rm un uninstall uni install-test it unlink dislink "
+      native=" run exec dlx test t start stop restart publish pack list ls ll la why outdated audit config c get set init create link ln rebuild rb approve-builds store root bin patch patch-commit patch-remove import prune dedupe deploy licenses help env self-update setup doctor server cat-file cat-index find-hash "
+      valueflags=" -C --dir -F --filter --filter-prod --workspace-dir --reporter --loglevel --config --store-dir --state-dir --registry --lockfile-dir --network-concurrency --fetch-timeout --workspace-concurrency --test-pattern --changed-files-ignore-pattern --http-proxy --https-proxy --no-proxy --user-agent " ;;
+    npm)
+      install=" install i in ins inst insta instal isnt isnta isntal isntall add ci clean-install ic install-clean isntall-clean install-test it cit install-ci-test sit clean-install-test update up upgrade udpate u uninstall un unlink remove rm r "
+      native=" run run-script rum urn test t tst start stop restart exec x publish pack version v view info show config c get set ls list la ll audit outdated login logout whoami init create innit pkg prefix root bin docs help ping search team token owner access dist-tag deprecate cache link ln rebuild rb dedupe find-dupes explain why fund diff doctor "
+      valueflags=" --prefix -w --workspace --registry --cache --userconfig --globalconfig --loglevel --otp --scope --omit --include --install-strategy --tag --before --audit-level --fetch-retries --lockfile-version --min-release-age --cpu --os --libc --script-shell --node-options --maxsockets " ;;
+    yarn)
+      install=" install add remove upgrade upgrade-interactive "
+      native=" run test start publish pack create init list ls info why outdated audit cache check config link unlink login logout owner tag team version versions bin generate-lock-entry import licenses autoclean help exec node "
+      valueflags=" --cwd --registry --modules-folder --cache-folder --preferred-cache-folder --global-folder --link-folder --network-concurrency --network-timeout --proxy --https-proxy --mutex --use-yarnrc --cafile --otp " ;;
+  esac
+  install="${install//-/}"
+  native="${native//-/}"
+  for a in "$@"; do
+    if [ "$skip" = 1 ]; then skip=0; continue; fi
+    case "$a" in
+      --) break ;;
+      -*=*) continue ;;
+      -*) case "$valueflags" in *" $a "*) skip=1 ;; esac; continue ;;
+    esac
+    n="$(printf '%s' "$a" | tr '[:upper:]' '[:lower:]')"
+    n="${n//-/}"
+    [ -z "$n" ] && continue
+    seen=1
+    # yarn v1 spells a global install as a subcommand; only the mutating ones
+    # are install-class (refused in _safe_pkg_dispatch), `yarn global list` is not.
+    if [ "$g" = 1 ]; then
+      case "$n" in add|remove|upgrade) printf '%s\n' global ;; esac
+      return 0
+    fi
+    if [ "$manager" = "yarn" ] && [ "$n" = "global" ]; then g=1; continue; fi
+    case "$native" in *" $n "*) return 0 ;; esac
+    case "$install" in *" $n "*) printf '%s\n' "$n"; return 0 ;; esac
+    if [ "$manager" = "npm" ] && [ "${#n}" -ge 2 ]; then
+      case "$install" in *" $n"*) printf '%s\n' "$n"; return 0 ;; esac
+    fi
+  done
+  if [ "$manager" = "yarn" ] && [ "$seen" = 0 ]; then
+    for a in "$@"; do
+      case "$a" in -v|--version|-h|--help) return 0 ;; esac
+    done
+    printf '%s\n' install
+  fi
+  return 0
+}
+
+# _safe_pkg_is_install manager [args...]
+#   Succeeds when the command installs, adds, removes or updates packages.
+_safe_pkg_is_install() {
+  [ -n "$(_safe_pkg_subcmd "$@")" ]
+}
+
 _safe_pkg_prescan() {
   local manager="$1"
   local lockfile="$2"
@@ -215,8 +284,15 @@ _safe_pkg_malware_scan() {
 _safe_pkg_is_global() {
   local prev="" a
   # yarn v1 spells it as a subcommand: yarn global add|remove|upgrade
-  if [ "${1:-}" = "global" ]; then
-    case "${2:-}" in add|remove|upgrade) return 0 ;; esac
+  local first="" second=""
+  for a in "$@"; do
+    case "$a" in
+      -*) ;;
+      *) if [ -z "$first" ]; then first="$a"; else second="$a"; break; fi ;;
+    esac
+  done
+  if [ "$first" = "global" ]; then
+    case "$second" in add|remove|upgrade) return 0 ;; esac
   fi
   for a in "$@"; do
     case "$a" in
@@ -347,7 +423,8 @@ _safe_pkg_run() {
   local workspace_file="$3"
   local manifest_files="$4"
   shift 4
-  local subcmd="${1:-}"
+  local subcmd
+  subcmd="$(_safe_pkg_subcmd "$manager" "$@")"
 
   if ! docker info > /dev/null 2>&1; then
     if [ ! -t 0 ]; then
@@ -436,7 +513,8 @@ _safe_pkg_sandbox() {
 
   local tmpdir="$1" snapdir="$2" manager="$3" lockfile="$4" workspace_file="$5" manifest_files="$6"
   shift 6
-  local subcmd="${1:-}"
+  local subcmd
+  subcmd="$(_safe_pkg_subcmd "$manager" "$@")"
 
   local workspace_root _cwd rel_path d
   _cwd="$(pwd)"
