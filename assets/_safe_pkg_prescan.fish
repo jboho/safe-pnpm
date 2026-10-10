@@ -265,11 +265,15 @@ end
 #   _safe_pkg_shared.sh for why the wrapper refuses these.
 function _safe_pkg_is_global
     set -l prev ""
+    # yarn v1 spells it as a subcommand: yarn global add|remove|upgrade
+    if test "$argv[1]" = global; and contains -- "$argv[2]" add remove upgrade
+        return 0
+    end
     for a in $argv
         switch $a
             case --
                 return 1
-            case --global --location=global
+            case --global --global=true --global=1 --location=global
                 return 0
             case '--*'
             case '-*g*'

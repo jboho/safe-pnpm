@@ -8,8 +8,14 @@
 # Note: yarn v1 only. berry (v2+) requires separate handling.
 
 function yarn
-    set -l install_cmds install add remove upgrade
+    set -l install_cmds install add remove upgrade global
     if not contains -- $argv[1] $install_cmds
+        command yarn $argv
+        return
+    end
+    # Only the mutating global subcommands are install-class (refused below);
+    # `yarn global list` and `yarn global bin` stay native.
+    if test "$argv[1]" = global; and not contains -- "$argv[2]" add remove upgrade
         command yarn $argv
         return
     end

@@ -209,15 +209,19 @@ _safe_pkg_malware_scan() {
 
 # _safe_pkg_is_global [args...]
 #   True when the args ask for a global install (-g, a short-flag cluster
-#   containing g, --global, --location=global, --location global). The sandbox
+#   containing g, --global, --global=true, --location=global, --location global). The sandbox
 #   writes to the container's own global prefix, which is thrown away, so a
 #   global install through the wrapper would exit 0 and change nothing.
 _safe_pkg_is_global() {
   local prev="" a
+  # yarn v1 spells it as a subcommand: yarn global add|remove|upgrade
+  if [ "${1:-}" = "global" ]; then
+    case "${2:-}" in add|remove|upgrade) return 0 ;; esac
+  fi
   for a in "$@"; do
     case "$a" in
       --) return 1 ;;
-      --global|--location=global) return 0 ;;
+      --global|--global=true|--global=1|--location=global) return 0 ;;
       --*) ;;
       -*g*) return 0 ;;
     esac

@@ -10,10 +10,14 @@
 . "$HOME\.safe-pnpm\_safe_pkg_shared.ps1"
 
 function global:yarn {
-    $installCmds = @('install','add','remove','upgrade')
+    $installCmds = @('install','add','remove','upgrade','global')
     $cmd = if ($args.Count -gt 0) { $args[0] } else { '' }
 
-    if ($cmd -notin $installCmds) {
+    # Only the mutating global subcommands are install-class (refused below);
+    # `yarn global list` and `yarn global bin` stay native.
+    $nativeGlobal = ($cmd -eq 'global') -and ($args.Count -lt 2 -or $args[1] -notin @('add','remove','upgrade'))
+
+    if (($cmd -notin $installCmds) -or $nativeGlobal) {
         $yarnExe = (Get-Command yarn -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
         & $yarnExe @args
         return
