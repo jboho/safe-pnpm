@@ -83,6 +83,13 @@ test("ps1 pnpm keeps a project's own supportedArchitectures", { skip }, () => {
   assert.equal(run("pnpm", ["win32", "x64"], own).yaml, own);
 });
 
+test("ps1 pnpm ignores a commented-out supportedArchitectures", {
+  skip,
+}, () => {
+  const r = run("pnpm", ["win32", "x64"], "# supportedArchitectures: x\n");
+  assert.match(r.yaml, /^supportedArchitectures:/m);
+});
+
 test("ps1 yarn ignores platform on Windows", { skip }, () => {
   assert.equal(run("yarn", ["win32", "x64"]).flags, "--ignore-platform");
 });
