@@ -27,7 +27,10 @@ const sandbox = ({ auditRc = 0, dockerHook = "" } = {}) => {
   }
   // A scanner that always reports clean, so SAFE_PNPM_STRICT=1 (which also
   // blocks a scan that could not run) reaches the audit under test.
-  fs.writeFileSync(path.join(home, ".safe-pnpm", "malware-scan.js"), 'console.log("clean");\n');
+  fs.writeFileSync(
+    path.join(home, ".safe-pnpm", "malware-scan.js"),
+    'console.log("clean");\n',
+  );
   fs.writeFileSync(
     path.join(bin, "docker"),
     `#!/bin/sh\n[ "$1" = info ] && exit 0\necho "$@" >> "${root}/docker.log"\necho "DOCKER $1" >> "${root}/events.log"\n${dockerHook}\nexit 0\n`,
@@ -98,8 +101,14 @@ for (const shell of SHELLS) {
     });
     assert.notEqual(r.status, 0);
     assert.match(sb.events(), /^AUDIT /m, "audit ran");
-    assert.match(r.stderr, /audit failed or found issues\. Blocking \(SAFE_PNPM_STRICT=1\)/);
-    const runs = sb.dockerLog().split("\n").filter((l) => l.startsWith("run"));
+    assert.match(
+      r.stderr,
+      /audit failed or found issues\. Blocking \(SAFE_PNPM_STRICT=1\)/,
+    );
+    const runs = sb
+      .dockerLog()
+      .split("\n")
+      .filter((l) => l.startsWith("run"));
     assert.equal(runs.length, 1, "only the fetch container started");
   });
 
@@ -116,7 +125,12 @@ for (const shell of SHELLS) {
       .split("\n")
       .filter((l) => /^(DOCKER run|AUDIT)/.test(l))
       .map((l) => l.split(" ")[0] + (l.startsWith("DOCKER") ? ":run" : ""));
-    assert.deepEqual(order, ["DOCKER:run", "AUDIT", "DOCKER:run"]);
+    // On a Mac, npm adds a container between the audit and the build (host
+    // platform packages), so only the ends and the audit's place are fixed.
+    assert.equal(order[0], "DOCKER:run");
+    assert.equal(order[1], "AUDIT");
+    assert.ok(order.length >= 3, "build container ran after the audit");
+    assert.equal(order.at(-1), "DOCKER:run");
   });
 
   test(`audit sees a package added by the fetch and never runs in the project (${shell})`, () => {

@@ -274,6 +274,19 @@ function _safe_pkg_host_platform --argument manager tmpdir
     end
 end
 
+# Prints the macOS host's OS and CPU in npm's names (two lines), nothing otherwise.
+function _safe_pkg_host_os_cpu
+    test (uname -s) = Darwin; or return 0
+    switch (uname -m)
+        case arm64 aarch64
+            echo darwin
+            echo arm64
+        case x86_64
+            echo darwin
+            echo x64
+    end
+end
+
 function _safe_pkg_track
     set -g _safe_pkg_sandbox_dirs $_safe_pkg_sandbox_dirs $argv
 end

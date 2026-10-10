@@ -157,6 +157,26 @@ function npm
         or set rc 1
     end
 
+    # npm cannot fetch several platforms at once, so add the host's optional
+    # packages next to the Linux ones, by name and version from the (already
+    # scanned) lockfile. See _safe_pkg_npm_host_builds in _safe_pkg_shared.sh.
+    # Needs the token, so it runs before the credentials are stripped.
+    if test $rc -eq 0; and not contains -- "$pass_args[1]" uninstall un
+        set -l host (_safe_pkg_host_os_cpu)
+        if test (count $host) -eq 2
+            if cp "$HOME/.safe-pnpm/host-specs.js" "$tmpdir/.safe-host-specs.js" 2>/dev/null
+                docker run --rm --cap-drop ALL $hardening $user_flags -v "$tmpdir:/app" -w /app $token_env \
+                    safe-pnpm:latest sh -c \
+                    'specs=$(node /app/.safe-host-specs.js $1 $2) || exit 1; [ -z "$specs" ] || npm install --no-save --ignore-scripts --force --cache /app/.safe-store -- $specs' \
+                    sh $host[1] $host[2]
+                or set rc 1
+                rm -f "$tmpdir/.safe-host-specs.js"
+            else
+                echo "⚠️  safe-pnpm: host-specs.js missing, so native packages for $host[1] are not installed (run: safe-pnpm update)." >&2
+            end
+        end
+    end
+
     if test $rc -eq 0
         # Strip registry credentials before any build script can run.
         _safe_pkg_strip_npmrc_auth "$tmpdir/.npmrc"
