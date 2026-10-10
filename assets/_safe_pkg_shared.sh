@@ -389,6 +389,46 @@ _safe_pkg_run() {
   )
 }
 
+# _safe_pkg_host_platform manager tmpdir
+#
+# Native optional dependencies (rollup, esbuild, ...) ship one package per
+# platform, and the container picks the Linux one. A macOS host then fails with
+# "Cannot find module @rollup/rollup-darwin-arm64". On macOS this also asks the
+# package manager for the host's build, so it goes through the same malware
+# scan and CVE audit as everything else (phase 1 runs no install scripts).
+# Linux hosts match the container, so nothing changes there.
+#   pnpm: supportedArchitectures in the sandbox copy of pnpm-workspace.yaml; the
+#         setting is not read from flags or environment. A project's own
+#         supportedArchitectures wins. The file is never copied back.
+#   yarn: prints --ignore-platform (yarn 1 has no per-platform list), so every
+#         platform's build is fetched.
+#   npm:  unchanged. --os/--cpu replace the container's platform instead of
+#         adding to it, and esbuild's install script in the (Linux) build
+#         container then fails for want of its Linux package.
+# Prints extra package-manager flags on stdout; may edit tmpdir.
+_safe_pkg_host_platform() {
+  local manager="$1" tmpdir="$2" os cpu
+  [ "$(uname -s)" = "Darwin" ] || return 0
+  os=darwin
+  case "$(uname -m)" in
+    arm64|aarch64) cpu=arm64 ;;
+    x86_64)        cpu=x64 ;;
+    *)             return 0 ;;
+  esac
+  case "$manager" in
+    pnpm)
+      local ws="$tmpdir/pnpm-workspace.yaml"
+      if [ -f "$ws" ] && command grep -q '^supportedArchitectures:' "$ws"; then
+        return 0
+      fi
+      # A file with no trailing newline would glue the key onto its last line.
+      if [ -s "$ws" ] && [ -n "$(tail -c1 "$ws")" ]; then printf '\n' >> "$ws"; fi
+      printf 'supportedArchitectures:\n  os: [current, %s]\n  cpu: [current, %s]\n' "$os" "$cpu" >> "$ws"
+      ;;
+    yarn) printf '%s\n' "--ignore-platform" ;;
+  esac
+}
+
 # _safe_pkg_sandbox tmpdir snapdir manager lockfile workspace_file manifest_files [args...]
 #   Body of _safe_pkg_run; tmpdir/snapdir are created and removed by the caller.
 _safe_pkg_sandbox() {
@@ -469,13 +509,20 @@ _safe_pkg_sandbox() {
   [ -n "${NODE_AUTH_TOKEN:-}" ] && token_env="$token_env -e NODE_AUTH_TOKEN"
   [ -n "${NPM_TOKEN:-}" ]       && token_env="$token_env -e NPM_TOKEN"
 
+  # Host platform's native optional dependencies (see _safe_pkg_host_platform).
+  # Yarn needs its flag in phase 2 too, or --force would prune what phase 1 added.
+  local host_flags
+  host_flags=$(_safe_pkg_host_platform "$manager" "$tmpdir") || return 1
+  local phase2_host_flags=""
+  [ "$manager" = "yarn" ] && phase2_host_flags="$host_flags"
+
   # --- Phase 1: fetch (network on, token available, scripts disabled) ---
   # shellcheck disable=SC2086
   docker run --rm --cap-drop ALL $hardening $user_flags \
     -v "${tmpdir}:/app" \
     -w "$workdir" \
     $token_env \
-    safe-pnpm:latest "$manager" "$@" --ignore-scripts $store_flag
+    safe-pnpm:latest "$manager" "$@" --ignore-scripts $store_flag $host_flags
   local phase1_rc=$?
   local rc=$phase1_rc
 
@@ -534,7 +581,7 @@ _safe_pkg_sandbox() {
     docker run --rm --cap-drop ALL $hardening $user_flags $net_flag \
       -v "${tmpdir}:/app" \
       -w "$workdir" \
-      safe-pnpm:latest "$manager" $phase2_cmd
+      safe-pnpm:latest "$manager" $phase2_cmd $phase2_host_flags
     rc=$?
   fi
 

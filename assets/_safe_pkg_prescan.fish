@@ -241,6 +241,39 @@ end
 # non-zero, which skips the copy-back.
 set -g _safe_pkg_sandbox_dirs
 
+# Native optional dependencies (rollup, esbuild, ...) ship one package per
+# platform, and the container picks the Linux one. On a macOS host this also
+# fetches the host's build, so it is malware-scanned and audited like the rest.
+# See _safe_pkg_host_platform in _safe_pkg_shared.sh for the reasoning.
+# pnpm: edits the sandbox copy of pnpm-workspace.yaml; prints nothing.
+# yarn: prints --ignore-platform. npm: unchanged.
+function _safe_pkg_host_platform --argument manager tmpdir
+    test (uname -s) = Darwin; or return 0
+    set -l cpu
+    switch (uname -m)
+        case arm64 aarch64
+            set cpu arm64
+        case x86_64
+            set cpu x64
+        case '*'
+            return 0
+    end
+    switch $manager
+        case pnpm
+            set -l ws $tmpdir/pnpm-workspace.yaml
+            if test -f $ws; and command grep -q '^supportedArchitectures:' $ws
+                return 0
+            end
+            # A file with no trailing newline would glue the key onto its last line.
+            if test -s $ws; and test -n (tail -c1 $ws | string collect)
+                printf '\n' >>$ws
+            end
+            printf 'supportedArchitectures:\n  os: [current, darwin]\n  cpu: [current, %s]\n' $cpu >>$ws
+        case yarn
+            echo --ignore-platform
+    end
+end
+
 function _safe_pkg_track
     set -g _safe_pkg_sandbox_dirs $_safe_pkg_sandbox_dirs $argv
 end

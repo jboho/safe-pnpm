@@ -121,6 +121,8 @@ function pnpm
         set hardening $hardening --memory $SAFE_PNPM_MEMORY
     end
 
+    _safe_pkg_host_platform pnpm $tmpdir
+
     # Phase 1: fetch (network on, token available, scripts disabled).
     docker run --rm --cap-drop ALL $hardening $user_flags -v "$tmpdir:/app" -w $workdir $token_env \
         safe-pnpm:latest pnpm $pass_args --ignore-scripts $store_flag
