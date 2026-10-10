@@ -257,10 +257,11 @@ function _Safe_Pkg_Npm_Host_Builds {
         Write-Host "⚠️  safe-pnpm: host-specs.js missing, so native packages for $Os are not installed (run: safe-pnpm update)." -ForegroundColor Yellow
         return $true
     }
-    $script = 'specs=$(node /app/.safe-host-specs.js "$1" "$2") || exit 1; [ -z "$specs" ] || npm install --no-save --ignore-scripts --force --cache /app/.safe-store -- $specs'
+    $script = 'specs=$(node /app/.safe-host-specs.js $1 $2) || exit 1; [ -z "$specs" ] || npm install --no-save --ignore-scripts --force --cache /app/.safe-store -- $specs'
     $a = @('run','--rm','--cap-drop','ALL') + $Hardening + $UserFlags + @('-v',"${TmpDir}:/app",'-w','/app') + $TokenEnv +
         @('safe-pnpm:latest','sh','-c',$script,'sh',$Os,$Cpu)
-    & docker @a
+    # Out-Host keeps docker's output out of the return value, which must be one bool.
+    & docker @a | Out-Host
     $ok = ($LASTEXITCODE -eq 0)
     Remove-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue
     return $ok

@@ -134,7 +134,7 @@ function npm
             if cp "$HOME/.safe-pnpm/host-specs.js" "$tmpdir/.safe-host-specs.js" 2>/dev/null
                 docker run --rm --cap-drop ALL $hardening $user_flags -v "$tmpdir:/app" -w /app $token_env \
                     safe-pnpm:latest sh -c \
-                    'specs=$(node /app/.safe-host-specs.js "$1" "$2") || exit 1; [ -z "$specs" ] || npm install --no-save --ignore-scripts --force --cache /app/.safe-store -- $specs' \
+                    'specs=$(node /app/.safe-host-specs.js $1 $2) || exit 1; [ -z "$specs" ] || npm install --no-save --ignore-scripts --force --cache /app/.safe-store -- $specs' \
                     sh $host[1] $host[2]
                 or set rc 1
                 rm -f "$tmpdir/.safe-host-specs.js"

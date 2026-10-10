@@ -33,7 +33,7 @@ function run({ osCpu, specsInstalled = true, dockerRc = 0 }) {
     );
   fs.writeFileSync(
     path.join(bin, "docker"),
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> /w/docker.log\nls -A /w/sandbox >> /w/seen.log\nexit ${dockerRc}\n`,
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> /w/docker.log\nls -A /w/sandbox >> /w/seen.log\necho added-3-packages\nexit ${dockerRc}\n`,
     { mode: 0o755 },
   );
   const args = osCpu ? `-Os ${osCpu[0]} -Cpu ${osCpu[1]}` : "";
@@ -80,7 +80,7 @@ test("ps1 npm host builds run one hardened container with the token and the plat
   skip,
 }, () => {
   const r = run({ osCpu: ["win32", "x64"] });
-  assert.match(r.out, /OK=True/);
+  assert.match(r.out, /^OK=True$/m);
   assert.equal(r.log.trim().split("\n").length, 1);
   assert.match(
     r.log.trim(),
@@ -92,7 +92,7 @@ test("ps1 npm host builds run one hardened container with the token and the plat
 
 test("ps1 npm host builds report a failed install", { skip }, () => {
   const r = run({ osCpu: ["darwin", "arm64"], dockerRc: 1 });
-  assert.match(r.out, /OK=False/);
+  assert.match(r.out, /^OK=False$/m);
   assert.deepEqual(r.left, []);
 });
 
@@ -100,13 +100,13 @@ test("ps1 npm host builds warn and skip when host-specs.js is not installed", {
   skip,
 }, () => {
   const r = run({ osCpu: ["darwin", "arm64"], specsInstalled: false });
-  assert.match(r.out, /OK=True/);
+  assert.match(r.out, /^OK=True$/m);
   assert.match(r.out, /host-specs\.js missing/);
   assert.equal(r.log, "");
 });
 
 test("ps1 npm host builds do nothing on a Linux host", { skip }, () => {
   const r = run({});
-  assert.match(r.out, /OK=True/);
+  assert.match(r.out, /^OK=True$/m);
   assert.equal(r.log, "");
 });
