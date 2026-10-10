@@ -13,8 +13,15 @@
   source "$HOME/.safe-pnpm/_safe_pkg_shared.sh" 2>/dev/null
 
 npm() {
+  _safe_pkg_runner_check npm "$@" || return 1
   _safe_pkg_is_install npm "$@" || { command npm "$@"; return; }
 
   _safe_pkg_dispatch "npm" "package-lock.json" "" \
     "package.json package-lock.json .npmrc" "$@"
+}
+
+# npx fetches a package and runs it. Same OSV check as `npm exec`, then native.
+npx() {
+  _safe_pkg_runner_check npx "$@" || return 1
+  command npx "$@"
 }

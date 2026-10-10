@@ -116,13 +116,13 @@ When you run an install-class command:
 | npm | `install`, `i`, `ci`, `update`, `uninstall`, `un` |
 | yarn | `install`, `add`, `remove`, `upgrade` (yarn v1 only) |
 
-**Not intercepted.** Commands that download a package and run it straight away skip every step below. No malware scan, CVE audit, Docker sandbox or Socket check runs for them, and the package's code runs on your machine with your permissions:
+**Download-and-run commands get a malware check only.** These fetch a package and run it straight away, so they skip the Docker sandbox, the CVE audit and Socket, and the package's code runs on your machine with your permissions:
 
 - `npx PKG`, `npm exec PKG`, `npm init PKG`, `npm create PKG`
 - `pnpm dlx PKG`, `pnpm create PKG`
 - `yarn create PKG`, and `yarn dlx PKG` on yarn 2+
 
-Treat these like any unreviewed download. Check the package name yourself, or install it with `add` or `install` first so it is scanned.
+In bash and zsh the wrappers look up the version the command would fetch (`npm view`, which reads registry metadata and runs no package code), check that `name@version` against [OSV](https://osv.dev)'s malicious-package advisories, and refuse to run the command on a hit. A `create` command checks the `create-` package the manager would fetch. If OSV or the lookup fails the command warns and runs; `SAFE_PNPM_OSV_STRICT=1` blocks instead. Paths, URLs, git specs and packages in private scopes are not checked. In fish and PowerShell these commands are not intercepted at all, and `npx` is wrapped only when the npm wrapper is enabled. OSV only knows packages already reported as malicious, so treat anything new with care and check the name yourself.
 
 1. **Pre-install scan** — [Socket behavioral analysis](./docs/socket.md) if configured.
 2. **Copy only manifests** — `package.json`, the lockfile, workspace files, and `.npmrc` / `.yarnrc` go into a temp directory. Source files, `.env`, and secrets never leave the host.

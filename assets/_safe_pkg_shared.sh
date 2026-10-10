@@ -3,6 +3,18 @@
 
 _SAFE_PKG_SHARED_LOADED=1
 
+# _safe_pkg_valueflags manager
+#   Prints the global flags that take a separate value, space-separated, so
+#   the finders below can skip the value instead of reading it as a command.
+#   npx takes npm's list.
+_safe_pkg_valueflags() {
+  case "$1" in
+    pnpm) printf '%s' "-C --dir -F --filter --filter-prod --workspace-dir --reporter --loglevel --config --store-dir --state-dir --registry --lockfile-dir --network-concurrency --fetch-timeout --workspace-concurrency --test-pattern --changed-files-ignore-pattern --http-proxy --https-proxy --no-proxy --user-agent" ;;
+    npm|npx) printf '%s' "--prefix -w --workspace --registry --cache --userconfig --globalconfig --loglevel --otp --scope --omit --include --install-strategy --tag --before --audit-level --fetch-retries --lockfile-version --min-release-age --cpu --os --libc --script-shell --node-options --maxsockets" ;;
+    yarn) printf '%s' "--cwd --registry --modules-folder --cache-folder --preferred-cache-folder --global-folder --link-folder --network-concurrency --network-timeout --proxy --https-proxy --mutex --use-yarnrc --cafile --otp" ;;
+  esac
+}
+
 # _safe_pkg_subcmd manager [args...]
 #   Prints the install-class subcommand (lowercased, hyphens removed) and
 #   returns 0, or prints nothing. Walks the non-flag words in order:
@@ -20,19 +32,17 @@ _safe_pkg_subcmd() {
   case "$manager" in
     pnpm)
       install=" install i add update up upgrade ci clean-install ic install-clean fetch remove rm un uninstall uni install-test it unlink dislink "
-      native=" run exec dlx test t start stop restart publish pack list ls ll la why outdated audit config c get set init create link ln rebuild rb approve-builds store root bin patch patch-commit patch-remove import prune dedupe deploy licenses help env self-update setup doctor server cat-file cat-index find-hash "
-      valueflags=" -C --dir -F --filter --filter-prod --workspace-dir --reporter --loglevel --config --store-dir --state-dir --registry --lockfile-dir --network-concurrency --fetch-timeout --workspace-concurrency --test-pattern --changed-files-ignore-pattern --http-proxy --https-proxy --no-proxy --user-agent " ;;
+      native=" run exec dlx test t start stop restart publish pack list ls ll la why outdated audit config c get set init create link ln rebuild rb approve-builds store root bin patch patch-commit patch-remove import prune dedupe deploy licenses help env self-update setup doctor server cat-file cat-index find-hash " ;;
     npm)
       install=" install i in ins inst insta instal isnt isnta isntal isntall add ci clean-install ic install-clean isntall-clean install-test it cit install-ci-test sit clean-install-test update up upgrade udpate u uninstall un unlink remove rm r "
-      native=" run run-script rum urn test t tst start stop restart exec x publish pack version v view info show config c get set ls list la ll audit outdated login logout whoami init create innit pkg prefix root bin docs help ping search team token owner access dist-tag deprecate cache link ln rebuild rb dedupe find-dupes explain why fund diff doctor "
-      valueflags=" --prefix -w --workspace --registry --cache --userconfig --globalconfig --loglevel --otp --scope --omit --include --install-strategy --tag --before --audit-level --fetch-retries --lockfile-version --min-release-age --cpu --os --libc --script-shell --node-options --maxsockets " ;;
+      native=" run run-script rum urn test t tst start stop restart exec x publish pack version v view info show config c get set ls list la ll audit outdated login logout whoami init create innit pkg prefix root bin docs help ping search team token owner access dist-tag deprecate cache link ln rebuild rb dedupe find-dupes explain why fund diff doctor " ;;
     yarn)
       install=" install add remove upgrade upgrade-interactive "
-      native=" run test start publish pack create init list ls info why outdated audit cache check config link unlink login logout owner tag team version versions bin generate-lock-entry import licenses autoclean help exec node "
-      valueflags=" --cwd --registry --modules-folder --cache-folder --preferred-cache-folder --global-folder --link-folder --network-concurrency --network-timeout --proxy --https-proxy --mutex --use-yarnrc --cafile --otp " ;;
+      native=" run test start publish pack create init list ls info why outdated audit cache check config link unlink login logout owner tag team version versions bin generate-lock-entry import licenses autoclean help exec node " ;;
   esac
   install="${install//-/}"
   native="${native//-/}"
+  valueflags=" $(_safe_pkg_valueflags "$manager") "
   for a in "$@"; do
     if [ "$skip" = 1 ]; then skip=0; continue; fi
     case "$a" in
@@ -70,6 +80,103 @@ _safe_pkg_subcmd() {
 #   Succeeds when the command installs, adds, removes or updates packages.
 _safe_pkg_is_install() {
   [ -n "$(_safe_pkg_subcmd "$@")" ]
+}
+
+# _safe_pkg_runner_specs manager [args...]
+#   For the commands that download a package and run it (npx, npm exec,
+#   npm init|create, pnpm dlx|create, yarn dlx|create) prints the package
+#   specs that will be fetched, one per line, and returns 0. Returns 1 for any
+#   other command. The specs are candidates: malware-scan.js drops what is not
+#   a registry package (paths, URLs, git) and what the registry does not know.
+#     -p/--package values are the packages; the first word after the flags is
+#       then a command name, not a package.
+#     A flag missing from the lists makes the next word a candidate too, so an
+#       unknown value-taking flag cannot hide the package (fails closed).
+#     create adds the create- prefix the managers add (foo -> create-foo,
+#       @scope/foo -> @scope/create-foo, @scope -> @scope/create).
+_safe_pkg_runner_specs() {
+  local manager="$1" mode="" valueflags a n skip=0 extra=0 npos=0 pkgs="" pos="" nl="
+"
+  shift
+  valueflags=" $(_safe_pkg_valueflags "$manager") "
+  if [ "$manager" = "npx" ]; then
+    mode=exec
+  else
+    while [ $# -gt 0 ]; do
+      a="$1"; shift
+      if [ "$skip" = 1 ]; then skip=0; continue; fi
+      case "$a" in
+        --) break ;;
+        -*=*) continue ;;
+        -*) case "$valueflags" in *" $a "*) skip=1 ;; esac; continue ;;
+      esac
+      n="$(printf '%s' "$a" | tr '[:upper:]' '[:lower:]')"
+      case "$manager:$n" in
+        npm:exec|npm:x|pnpm:dlx|yarn:dlx) mode=exec ;;
+        npm:init|npm:create|npm:innit|pnpm:create|yarn:create) mode=create ;;
+      esac
+      break
+    done
+    [ -z "$mode" ] && return 1
+  fi
+  skip=0
+  while [ $# -gt 0 ]; do
+    a="$1"; shift
+    if [ "$skip" = pkg ]; then pkgs="$pkgs$a$nl"; skip=0; continue; fi
+    if [ "$skip" = 1 ]; then skip=0; continue; fi
+    case "$a" in
+      --) continue ;;
+      -p|--package) skip=pkg; continue ;;
+      --package=*|-p=*) pkgs="$pkgs${a#*=}$nl"; continue ;;
+      -c|--call) skip=1; continue ;;
+      -*=*) continue ;;
+      -y|--yes|-n|--no|--no-install|--ignore-existing|-s|--shell-mode|--silent|-q|--quiet|--verbose|--json|--offline|--prefer-offline|-ws|--workspaces|--no-workspaces|--include-workspace-root|--no-color|--color|--no-fund|--no-audit) continue ;;
+      -*) case "$valueflags" in *" $a "*) skip=1 ;; *) extra=1 ;; esac; continue ;;
+    esac
+    npos=$((npos + 1))
+    [ -z "$pkgs" ] && pos="$pos$a$nl"
+    if [ "$extra" = 1 ] && [ "$npos" -lt 2 ]; then continue; fi
+    break
+  done
+  if [ "$mode" = create ]; then
+    local line rest scope
+    while IFS= read -r line; do
+      [ -z "$line" ] && continue
+      case "$line" in
+        @*/*) scope="${line%%/*}/"; rest="${line#*/}" ;;
+        # `create @scope[@version]` runs @scope/create
+        @*) rest="${line#@}"; scope="@${rest%%@*}/"; rest="${rest#"${rest%%@*}"}"
+            printf '%s\n' "${scope}create$rest"; continue ;;
+        *) scope=""; rest="$line" ;;
+      esac
+      printf '%s\n' "${scope}create-$rest"
+      case "$rest" in create-*) printf '%s\n' "$line" ;; esac
+    done <<SPECS_END
+$pos
+SPECS_END
+    return 0
+  fi
+  printf '%s%s' "$pkgs" "$pos"
+  return 0
+}
+
+# _safe_pkg_runner_check manager [args...]
+#   Runs before a download-and-run command. Not one of them: succeeds at once.
+#   Otherwise checks the packages it would fetch against OSV (malware-scan.js
+#   --specs) and fails, so the caller does not run the command, when one has a
+#   MAL- advisory. A scan that cannot run warns, or blocks under
+#   SAFE_PNPM_OSV_STRICT=1 / SAFE_PNPM_STRICT=1, like the install path.
+_safe_pkg_runner_check() {
+  local specs spec
+  specs="$(_safe_pkg_runner_specs "$@")" || return 0
+  set -- --specs
+  while IFS= read -r spec; do
+    [ -n "$spec" ] && set -- "$@" "$spec"
+  done <<SPECS_END
+$specs
+SPECS_END
+  [ $# -gt 1 ] || return 0
+  _safe_pkg_malware_scan "$@"
 }
 
 _safe_pkg_prescan() {
@@ -228,6 +335,7 @@ _safe_pkg_socket_scan() {
 }
 
 # _safe_pkg_malware_scan lockfile
+# _safe_pkg_malware_scan --specs spec...
 #   Checks every name@version in the lockfile the fetch phase resolved against
 #   OSV's malicious-package advisories (malware-scan.js). It runs between the
 #   phases, so no package code has run yet and packages being added in this
@@ -240,13 +348,12 @@ _safe_pkg_socket_scan() {
 #                scanner not installed). Warn and continue, as the Socket layer
 #                does; SAFE_PNPM_OSV_STRICT=1 blocks instead, for CI.
 _safe_pkg_malware_scan() {
-  local lockfile="$1"
   local scanner="$HOME/.safe-pnpm/malware-scan.js"
   local reason verdict
 
   if [ -f "$scanner" ]; then
     echo "→ Malware scan (OSV)..." >&2
-    reason=$(node "$scanner" "$lockfile" 2>&1)
+    reason=$(node "$scanner" "$@" 2>&1)
     verdict=$?
   else
     reason="Malware scan not installed — run \`safe-pnpm setup\`."
@@ -260,7 +367,11 @@ _safe_pkg_malware_scan() {
       ;;
     3)
       echo "✗ $reason" >&2
-      echo "✗ safe-pnpm: install blocked; nothing was built or copied back." >&2
+      if [ "$1" = "--specs" ]; then
+        echo "✗ safe-pnpm: not running it; no package code was executed." >&2
+      else
+        echo "✗ safe-pnpm: install blocked; nothing was built or copied back." >&2
+      fi
       return 1
       ;;
   esac

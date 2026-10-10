@@ -152,8 +152,15 @@ for (const m of ["pnpm", "npm", "yarn"]) {
   test(`${m} command lists match across sh, fish and ps1`, () => {
     const sh = read("_safe_pkg_shared.sh");
     const shBlock = sh.match(new RegExp(`    ${m}\\)\\n([\\s\\S]*?)\\) ;;`))[1];
+    // The value-flag lists live in _safe_pkg_valueflags, shared with the
+    // runner finder; the install and native lists are in _safe_pkg_subcmd.
+    const shFlags = sh.match(
+      new RegExp(`\\n    ${m}(?:\\|npx)?\\) printf '%s' "([^"]*)"`),
+    )[1];
     const shList = (k) =>
-      shBlock.match(new RegExp(`${k}=" ([^"]*) "`))[1].split(" ");
+      k === "valueflags"
+        ? shFlags.split(" ")
+        : shBlock.match(new RegExp(`${k}=" ([^"]*) "`))[1].split(" ");
     const fish = read(`${m}-wrapper.fish`);
     const fishList = (k) =>
       fish.match(new RegExp(`set -l ${k} ([^\\n]*)`))[1].split(" ");

@@ -14,6 +14,7 @@
   source "$HOME/.safe-pnpm/_safe_pkg_shared.sh" 2>/dev/null
 
 yarn() {
+  _safe_pkg_runner_check yarn "$@" || return 1
   _safe_pkg_is_install yarn "$@" || { command yarn "$@"; return; }
 
   _safe_pkg_dispatch "yarn" "yarn.lock" "" \
