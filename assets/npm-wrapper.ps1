@@ -9,9 +9,10 @@
 . "$HOME\.safe-pnpm\_safe_pkg_shared.ps1"
 
 function global:npm {
+    if (-not (_Safe_Pkg_Runner_Check -Manager npm -PassArgs $args)) { $global:LASTEXITCODE = 1; return }
     $installCmds = @('install','i','in','ins','inst','insta','instal','isnt','isnta','isntal','isntall','add','ci','clean-install','ic','install-clean','isntall-clean','install-test','it','cit','install-ci-test','sit','clean-install-test','update','up','upgrade','udpate','u','uninstall','un','unlink','remove','rm','r')
     $nativeCmds = @('run','run-script','rum','urn','test','t','tst','start','stop','restart','exec','x','publish','pack','version','v','view','info','show','config','c','get','set','ls','list','la','ll','audit','outdated','login','logout','whoami','init','create','innit','pkg','prefix','root','bin','docs','help','ping','search','team','token','owner','access','dist-tag','deprecate','cache','link','ln','rebuild','rb','dedupe','find-dupes','explain','why','fund','diff','doctor')
-    $valueFlags = @('--prefix','-w','--workspace','--registry','--cache','--userconfig','--globalconfig','--loglevel','--otp','--scope','--omit','--include','--install-strategy','--tag','--before','--audit-level','--fetch-retries','--lockfile-version','--min-release-age','--cpu','--os','--libc','--script-shell','--node-options','--maxsockets')
+    $valueFlags = @(_Safe_Pkg_Valueflags npm)
     $installN = @($installCmds | ForEach-Object { $_ -replace '-','' })
     $nativeN = @($nativeCmds | ForEach-Object { $_ -replace '-','' })
     # Walk the non-flag words: an install word or alias is the subcommand, a
@@ -167,4 +168,12 @@ function global:npm {
     } finally {
         Remove-Item -Recurse -Force $tmpDir.FullName, $snapDir.FullName -ErrorAction SilentlyContinue
     }
+}
+
+# npx fetches a package and runs it. Same OSV check as `npm exec`, then native.
+# Escape hatch: npx.cmd.
+function global:npx {
+    if (-not (_Safe_Pkg_Runner_Check -Manager npx -PassArgs $args)) { $global:LASTEXITCODE = 1; return }
+    $npxExe = (Get-Command npx -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+    & $npxExe @args
 }

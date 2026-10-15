@@ -9,9 +9,10 @@
 . "$HOME\.safe-pnpm\_safe_pkg_shared.ps1"
 
 function global:pnpm {
+    if (-not (_Safe_Pkg_Runner_Check -Manager pnpm -PassArgs $args)) { $global:LASTEXITCODE = 1; return }
     $installCmds = @('install','i','add','update','up','upgrade','ci','clean-install','ic','install-clean','fetch','remove','rm','un','uninstall','uni','install-test','it','unlink','dislink')
     $nativeCmds = @('run','exec','dlx','test','t','start','stop','restart','publish','pack','list','ls','ll','la','why','outdated','audit','config','c','get','set','init','create','link','ln','rebuild','rb','approve-builds','store','root','bin','patch','patch-commit','patch-remove','import','prune','dedupe','deploy','licenses','help','env','self-update','setup','doctor','server','cat-file','cat-index','find-hash')
-    $valueFlags = @('-C','--dir','-F','--filter','--filter-prod','--workspace-dir','--reporter','--loglevel','--config','--store-dir','--state-dir','--registry','--lockfile-dir','--network-concurrency','--fetch-timeout','--workspace-concurrency','--test-pattern','--changed-files-ignore-pattern','--http-proxy','--https-proxy','--no-proxy','--user-agent')
+    $valueFlags = @(_Safe_Pkg_Valueflags pnpm)
     $installN = @($installCmds | ForEach-Object { $_ -replace '-','' })
     $nativeN = @($nativeCmds | ForEach-Object { $_ -replace '-','' })
     # Walk the non-flag words: an install word or alias is the subcommand, a

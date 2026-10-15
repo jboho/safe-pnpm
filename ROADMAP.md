@@ -24,7 +24,7 @@
   - [ ] Run the PowerShell containers as a non-root user
   - [ ] Test rootless Docker and Podman against a real daemon
   - [x] Check npx, dlx and create packages against OSV in the fish wrappers (issue #60)
-  - [ ] Check npx, dlx and create packages against OSV in the PowerShell wrappers (issue #61, after #57)
+  - [x] Check npx, dlx and create packages against OSV in the PowerShell wrappers (issue #61, after #57)
   - [ ] Refuse `npx` for a command the project doesn't have installed unless a version is named; OSV has no entry for placeholders such as `tsc@2.0.4`
 
 ## Notes

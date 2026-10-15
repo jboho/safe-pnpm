@@ -10,9 +10,10 @@
 . "$HOME\.safe-pnpm\_safe_pkg_shared.ps1"
 
 function global:yarn {
+    if (-not (_Safe_Pkg_Runner_Check -Manager yarn -PassArgs $args)) { $global:LASTEXITCODE = 1; return }
     $installCmds = @('install','add','remove','upgrade','upgrade-interactive')
     $nativeCmds = @('run','test','start','publish','pack','create','init','list','ls','info','why','outdated','audit','cache','check','config','link','unlink','login','logout','owner','tag','team','version','versions','bin','generate-lock-entry','import','licenses','autoclean','help','exec','node')
-    $valueFlags = @('--cwd','--registry','--modules-folder','--cache-folder','--preferred-cache-folder','--global-folder','--link-folder','--network-concurrency','--network-timeout','--proxy','--https-proxy','--mutex','--use-yarnrc','--cafile','--otp')
+    $valueFlags = @(_Safe_Pkg_Valueflags yarn)
     $installN = @($installCmds | ForEach-Object { $_ -replace '-','' })
     $nativeN = @($nativeCmds | ForEach-Object { $_ -replace '-','' })
     # Walk the non-flag words: an install word or alias is the subcommand, a

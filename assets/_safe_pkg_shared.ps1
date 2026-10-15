@@ -195,20 +195,121 @@ function _Safe_Pkg_Socket_Scan {
     return $true
 }
 
-# Checks the lockfile the fetch phase resolved against OSV's malicious-package
+# Global flags that take a separate value, per manager, so the finders can skip
+# the value instead of reading it as a command. npx takes npm's list. Mirrors
+# _safe_pkg_valueflags in _safe_pkg_shared.sh.
+function _Safe_Pkg_Valueflags {
+    param([string]$Manager)
+    $lists = @{
+        pnpm = @('-C','--dir','-F','--filter','--filter-prod','--workspace-dir','--reporter','--loglevel','--config','--store-dir','--state-dir','--registry','--lockfile-dir','--network-concurrency','--fetch-timeout','--workspace-concurrency','--test-pattern','--changed-files-ignore-pattern','--http-proxy','--https-proxy','--no-proxy','--user-agent')
+        npm = @('--prefix','-w','--workspace','--registry','--cache','--userconfig','--globalconfig','--loglevel','--otp','--scope','--omit','--include','--install-strategy','--tag','--before','--audit-level','--fetch-retries','--lockfile-version','--min-release-age','--cpu','--os','--libc','--script-shell','--node-options','--maxsockets')
+        yarn = @('--cwd','--registry','--modules-folder','--cache-folder','--preferred-cache-folder','--global-folder','--link-folder','--network-concurrency','--network-timeout','--proxy','--https-proxy','--mutex','--use-yarnrc','--cafile','--otp')
+    }
+    if ($Manager -eq 'npx') { $Manager = 'npm' }
+    return $lists[$Manager]
+}
+
+# For the commands that download a package and run it (npx, npm exec,
+# npm init|create, pnpm dlx|create, yarn dlx|create) outputs the package specs
+# that will be fetched; for any other command, nothing. A port of
+# _safe_pkg_runner_specs in _safe_pkg_shared.sh, which has the rules.
+function _Safe_Pkg_Runner_Specs {
+    param([string]$Manager, [string[]]$PassArgs)
+    $valueFlags = @(_Safe_Pkg_Valueflags $Manager)
+    $mode = ''
+    $i = 0
+    if ($Manager -eq 'npx') {
+        $mode = 'exec'
+    } else {
+        $skip = $false
+        while ($i -lt $PassArgs.Count) {
+            $a = $PassArgs[$i]; $i++
+            if ($skip) { $skip = $false; continue }
+            if ($a -eq '--') { break }
+            if ($a -like '-*=*') { continue }
+            if ($a -like '-*') { if ($valueFlags -ccontains $a) { $skip = $true }; continue }
+            $n = $a.ToLower()
+            if ("${Manager}:$n" -in 'npm:exec','npm:x','pnpm:dlx','yarn:dlx') { $mode = 'exec' }
+            if ("${Manager}:$n" -in 'npm:init','npm:create','npm:innit','pnpm:create','yarn:create') { $mode = 'create' }
+            break
+        }
+        if (-not $mode) { return }
+    }
+    $bools = @('-y','--yes','-n','--no','--no-install','--ignore-existing','-s','--shell-mode','--silent','-q','--quiet','--verbose','--json','--offline','--prefer-offline','-ws','--workspaces','--no-workspaces','--include-workspace-root','--no-color','--color','--no-fund','--no-audit')
+    $pkgs = [System.Collections.Generic.List[string]]::new()
+    $pos = [System.Collections.Generic.List[string]]::new()
+    $skip = ''
+    $extra = $false
+    $npos = 0
+    while ($i -lt $PassArgs.Count) {
+        $a = $PassArgs[$i]; $i++
+        if ($skip -eq 'pkg') { $pkgs.Add($a); $skip = ''; continue }
+        if ($skip -eq 'value') { $skip = ''; continue }
+        if ($a -eq '--') { continue }
+        if ($a -ceq '-p' -or $a -ceq '--package') { $skip = 'pkg'; continue }
+        if ($a -clike '--package=*' -or $a -clike '-p=*') { $pkgs.Add($a.Substring($a.IndexOf('=') + 1)); continue }
+        if ($a -ceq '-c' -or $a -ceq '--call') { $skip = 'value'; continue }
+        if ($a -like '-*=*') { continue }
+        if ($bools -ccontains $a) { continue }
+        if ($a -like '-*') { if ($valueFlags -ccontains $a) { $skip = 'value' } else { $extra = $true }; continue }
+        $npos++
+        if ($pkgs.Count -eq 0) { $pos.Add($a) }
+        if ($extra -and $npos -lt 2) { continue }
+        break
+    }
+    if ($mode -eq 'create') {
+        foreach ($line in $pos) {
+            if (-not $line) { continue }
+            if ($line -like '@*/*') {
+                $slash = $line.IndexOf('/')
+                $scope = $line.Substring(0, $slash + 1)
+                $rest = $line.Substring($slash + 1)
+            } elseif ($line -like '@*') {
+                # `create @scope[@version]` runs @scope/create
+                $rest = $line.Substring(1)
+                $at = $rest.IndexOf('@')
+                if ($at -lt 0) { "@$rest/create" } else { "@$($rest.Substring(0, $at))/create$($rest.Substring($at))" }
+                continue
+            } else {
+                $scope = ''
+                $rest = $line
+            }
+            "${scope}create-$rest"
+            if ($rest -clike 'create-*') { $line }
+        }
+        return
+    }
+    $pkgs
+    $pos
+}
+
+# Runs before a download-and-run command: $true at once for any other command,
+# otherwise the OSV check on the packages it would fetch (malware-scan.js
+# --specs), $false on a MAL- advisory. See _safe_pkg_runner_check in
+# _safe_pkg_shared.sh.
+function _Safe_Pkg_Runner_Check {
+    param([string]$Manager, [string[]]$PassArgs)
+    $specs = @(_Safe_Pkg_Runner_Specs -Manager $Manager -PassArgs $PassArgs | Where-Object { $_ })
+    if ($specs.Count -eq 0) { return $true }
+    return (_Safe_Pkg_Malware_Scan -Specs $specs)
+}
+
+# Checks the lockfile the fetch phase resolved, or with -Specs the packages a
+# download-and-run command would fetch, against OSV's malicious-package
 # advisories. See _safe_pkg_shared.sh for the full rationale: findings always
 # block, because a MAL- advisory marks that exact version as malware; failures
 # (OSV unreachable, unreadable lockfile, scanner not installed) warn, and
 # SAFE_PNPM_OSV_STRICT=1 makes them block too.
 function _Safe_Pkg_Malware_Scan {
-    param([string]$Lockfile)
+    param([string]$Lockfile, [string[]]$Specs)
+    $scanArgs = if ($Specs) { @('--specs') + $Specs } else { @($Lockfile) }
     $scanner = Join-Path $HOME ".safe-pnpm\malware-scan.js"
     $verdict = 4
     $reason = "Malware scan not installed — run 'safe-pnpm setup'."
 
     if (Test-Path $scanner) {
         Write-Host "→ Malware scan (OSV)..." -ForegroundColor Cyan
-        $reason = (& node $scanner $Lockfile 2>&1 | Out-String).Trim()
+        $reason = (& node $scanner @scanArgs 2>&1 | Out-String).Trim()
         $verdict = $LASTEXITCODE
     }
 
@@ -218,7 +319,11 @@ function _Safe_Pkg_Malware_Scan {
     }
     if ($verdict -eq 3) {
         Write-Host "✗ $reason" -ForegroundColor Red
-        Write-Host "✗ safe-pnpm: install blocked; nothing was built or copied back." -ForegroundColor Red
+        if ($Specs) {
+            Write-Host "✗ safe-pnpm: not running it; no package code was executed." -ForegroundColor Red
+        } else {
+            Write-Host "✗ safe-pnpm: install blocked; nothing was built or copied back." -ForegroundColor Red
+        }
         return $false
     }
     if ($env:SAFE_PNPM_OSV_STRICT -eq '1') {
