@@ -189,7 +189,7 @@ Packages such as rollup and esbuild ship one native build per platform as option
 
 On a Mac or Windows host the wrapper also fetches the Mac build, and it goes through the same malware check and CVE audit as everything else:
 
-- **pnpm** — the sandbox copy of `pnpm-workspace.yaml` gets `supportedArchitectures` for the host. Your own file is not changed, and a `supportedArchitectures` you already set is kept.
+- **pnpm** — the sandbox copy of the project gets `supportedArchitectures` for the host: in `pnpm-workspace.yaml`, or in the `pnpm` field of `package.json` when `packageManager` pins pnpm 8 or 9, which don't read it from the workspace file and reject a workspace file without `packages` (the image's pnpm 11 then warns that it ignores `pnpm.supportedArchitectures` before it hands off to the pinned pnpm, which reads it). Your own files are not changed (a `pnpm add` keeps its new dependency, without the setting), and a `supportedArchitectures` you already set is kept. This needs `pnpm-arch.js` in `~/.safe-pnpm/`; run `safe-pnpm update` if the wrapper warns that it is missing.
 - **yarn** — `--ignore-platform`, which fetches the builds for every platform (yarn 1 cannot name one).
 - **npm** — after the fetch, the wrapper installs the lockfile's optional packages built for the host next to the Linux ones (`npm install --no-save --ignore-scripts`), by name and version from the lockfile that was just malware-scanned. `--os`/`--cpu` can't do this: they replace the container's platform, which breaks esbuild's install script in the build container. This needs `host-specs.js` in `~/.safe-pnpm/`; run `safe-pnpm update` if the wrapper warns that it is missing.
 

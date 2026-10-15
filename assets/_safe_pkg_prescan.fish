@@ -245,9 +245,11 @@ set -g _safe_pkg_sandbox_dirs
 # platform, and the container picks the Linux one. On a macOS host this also
 # fetches the host's build, so it is malware-scanned and audited like the rest.
 # See _safe_pkg_host_platform in _safe_pkg_shared.sh for the reasoning.
-# pnpm: edits the sandbox copy of pnpm-workspace.yaml; prints nothing.
+# pnpm: pnpm-arch.js edits the sandbox copy of pnpm-workspace.yaml, or of
+# package.json for a project pinned to pnpm 8 or 9 (saving the original to
+# $saved for _safe_pkg_pnpm_arch_restore); prints nothing.
 # yarn: prints --ignore-platform. npm: unchanged.
-function _safe_pkg_host_platform --argument manager tmpdir
+function _safe_pkg_host_platform --argument manager tmpdir saved
     test (uname -s) = Darwin; or return 0
     set -l cpu
     switch (uname -m)
@@ -260,17 +262,24 @@ function _safe_pkg_host_platform --argument manager tmpdir
     end
     switch $manager
         case pnpm
-            set -l ws $tmpdir/pnpm-workspace.yaml
-            if test -f $ws; and command grep -q '^supportedArchitectures:' $ws
-                return 0
+            set -l helper "$HOME/.safe-pnpm/pnpm-arch.js"
+            if not test -f $helper
+                echo "⚠️  safe-pnpm: pnpm-arch.js missing, so native packages for darwin are not fetched (run: safe-pnpm update)." >&2
+            else if not node $helper apply $tmpdir darwin $cpu $saved >&2
+                echo "⚠️  safe-pnpm: could not add darwin to pnpm's supportedArchitectures, so native packages for darwin are not fetched." >&2
             end
-            # A file with no trailing newline would glue the key onto its last line.
-            if test -s $ws; and test -n (tail -c1 $ws | string collect)
-                printf '\n' >>$ws
-            end
-            printf 'supportedArchitectures:\n  os: [current, darwin]\n  cpu: [current, %s]\n' $cpu >>$ws
         case yarn
             echo --ignore-platform
+    end
+end
+
+# See _safe_pkg_pnpm_arch_restore in _safe_pkg_shared.sh. Returns 1 when the
+# snapshot must not be copied back.
+function _safe_pkg_pnpm_arch_restore --argument file saved
+    test -f $saved; or return 0
+    if not node "$HOME/.safe-pnpm/pnpm-arch.js" restore $file $saved
+        echo "✗ safe-pnpm: could not take safe-pnpm's supportedArchitectures out of package.json; nothing copied back." >&2
+        return 1
     end
 end
 

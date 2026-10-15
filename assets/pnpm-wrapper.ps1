@@ -115,7 +115,10 @@ function global:pnpm {
         if ($env:NODE_AUTH_TOKEN) { $tokenEnv += @('-e','NODE_AUTH_TOKEN') }
         if ($env:NPM_TOKEN)       { $tokenEnv += @('-e','NPM_TOKEN') }
 
-        [void](_Safe_Pkg_Host_Platform -Manager pnpm -TmpDir $tmpDir.FullName)
+        # pnpm-arch.js deletes it when it restores the snapshot, before the
+        # audit copies snapDir.
+        $archSaved = Join-Path $snapDir.FullName 'arch-saved.json'
+        [void](_Safe_Pkg_Host_Platform -Manager pnpm -TmpDir $tmpDir.FullName -Saved $archSaved)
 
         # Phase 1: fetch (network on, token available, scripts disabled).
         $p1 = @('run','--rm','--cap-drop','ALL') + (_Safe_Pkg_Hardening) + $userFlags + @('-v',"$($tmpDir.FullName):/app",'-w',$workdir) +
@@ -130,7 +133,10 @@ function global:pnpm {
         if ($rc -eq 0) {
             $manifests = @('package.json','pnpm-lock.yaml') + @($members | ForEach-Object { Join-Path $_ 'package.json' })
             _Safe_Pkg_Copy_Files -From $tmpDir.FullName -To $snapDir.FullName -RelPaths $manifests
+            if (-not (_Safe_Pkg_Pnpm_Arch_Restore (Join-Path $snapDir.FullName 'package.json') $archSaved)) { $rc = 1 }
+        }
 
+        if ($rc -eq 0) {
             # CVE audit on the resolved tree, after the snapshot and before any
             # build script. A block discards the sandbox like a malware hit does.
             if (-not (_Safe_Pkg_Audit pnpm 'pnpm-lock.yaml' $snapDir.FullName $tmpDir.FullName)) { $rc = 1 }

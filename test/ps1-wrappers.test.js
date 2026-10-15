@@ -38,13 +38,17 @@ after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 // noId leaves only /w/bin (the docker stub) on PATH, so no `id` resolves.
 // dockerInfo sets the stub's answers to the `docker info --format` rootless
 // queries (see helpers/docker-info-stub.js).
-function runPs1(manager, { env = {}, emptyId = false, noId = false, dockerInfo, auditRc = 0 } = {}) {
+// pkg is the project's package.json text. win installs pnpm-arch.js and makes
+// _Safe_Pkg_Host_Platform act as on a Windows x64 host.
+function runPs1(manager, { env = {}, emptyId = false, noId = false, dockerInfo, auditRc = 0, pkg, win = false } = {}) {
   const root = fs.mkdtempSync(path.join(tmp, `${manager}-`));
   const bin = path.join(root, "bin");
   const proj = path.join(root, "proj");
   const safe = path.join(root, "home", ".safe-pnpm");
   for (const d of [bin, proj, safe]) fs.mkdirSync(d, { recursive: true });
-  for (const f of ["_safe_pkg_shared.ps1", `${manager}-wrapper.ps1`, "link-check.js"]) {
+  const assets = ["_safe_pkg_shared.ps1", `${manager}-wrapper.ps1`, "link-check.js"];
+  if (win) assets.push("pnpm-arch.js");
+  for (const f of assets) {
     fs.copyFileSync(path.join(ASSETS, f), path.join(safe, f));
   }
   // A scanner that always reports clean, so SAFE_PNPM_STRICT=1 (which also
@@ -59,6 +63,7 @@ function runPs1(manager, { env = {}, emptyId = false, noId = false, dockerInfo, 
       'echo "DOCKER $1" >> /w/events.log',
       'src=""; prev=""; for a in "$@"; do [ "$prev" = "-v" ] && src="${a%%:/app}"; prev="$a"; done',
       "n=$(grep -c '' /w/docker.log)",
+      'cp "$src/package.json" "/w/run$n.pkg"; [ -f "$src/pnpm-workspace.yaml" ] && cp "$src/pnpm-workspace.yaml" "/w/run$n.ws"',
       `if [ "$n" = 1 ]; then mkdir -p "$src/node_modules/dep"; echo x > "$src/node_modules/dep/index.js"; echo resolved-by-phase-1 > "$src/${LOCKFILES[manager]}"; fi`,
       "exit 0",
       "",
@@ -84,7 +89,7 @@ function runPs1(manager, { env = {}, emptyId = false, noId = false, dockerInfo, 
   }
   fs.writeFileSync(
     path.join(proj, "package.json"),
-    JSON.stringify({ name: "x", version: "1.0.0" }),
+    pkg ?? JSON.stringify({ name: "x", version: "1.0.0" }),
   );
   fs.writeFileSync(
     path.join(proj, ".npmrc"),
@@ -94,7 +99,10 @@ function runPs1(manager, { env = {}, emptyId = false, noId = false, dockerInfo, 
   const pathSetup = noId
     ? "$env:PATH = '/w/bin';"
     : "$env:PATH = '/w/bin:' + $env:PATH;";
-  const script = `${pathSetup} . "$HOME/.safe-pnpm/${manager}-wrapper.ps1"; Set-Location /w/proj; ${manager} install; "RC=$LASTEXITCODE"`;
+  const winSetup = win
+    ? "$hp = (Get-Item function:_Safe_Pkg_Host_Platform).ScriptBlock; function global:_Safe_Pkg_Host_Platform { param($Manager, $TmpDir, $Saved) & $hp -Manager $Manager -TmpDir $TmpDir -Saved $Saved -Os win32 -Cpu x64 };"
+    : "";
+  const script = `${pathSetup} . "$HOME/.safe-pnpm/${manager}-wrapper.ps1"; ${winSetup} Set-Location /w/proj; ${manager} install; "RC=$LASTEXITCODE"`;
   const r = spawnSync(
     "docker",
     [
@@ -248,4 +256,23 @@ test("ps1: _Safe_Pkg_User passes no --user on Windows", { skip }, () => {
   );
   assert.match(r.stdout, /UNIX=4/, r.stdout + r.stderr);
   assert.match(r.stdout, /WIN=0/, r.stdout + r.stderr);
+});
+
+// pnpm 8 and 9 only read supportedArchitectures from package.json (see
+// two-phase.test.js); the project's own package.json must come back unchanged.
+test("ps1 pnpm: a pnpm 9 pin on Windows gets supportedArchitectures in the sandbox package.json only", { skip }, () => {
+  const pkg = '{\n    "name": "x",\n    "packageManager": "pnpm@9.15.0"\n}';
+  const { out, runs, proj, read } = runPs1("pnpm", { pkg, win: true });
+  assert.match(out, /RC=0/);
+  assert.equal(runs.length, 2, out);
+  for (const n of [1, 2]) {
+    assert.deepEqual(
+      JSON.parse(read(`run${n}.pkg`)).pnpm.supportedArchitectures,
+      { os: ["current", "win32"], cpu: ["current", "x64"] },
+      `phase ${n}`,
+    );
+    assert.equal(read(`run${n}.ws`), "", `phase ${n}`);
+  }
+  assert.equal(fs.readFileSync(path.join(proj, "package.json"), "utf8"), pkg);
+  assert.ok(!fs.existsSync(path.join(proj, "pnpm-workspace.yaml")));
 });
