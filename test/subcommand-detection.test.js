@@ -117,12 +117,16 @@ for (const m of ["pnpm", "npm", "yarn"]) {
         : fish.match(new RegExp(`set -l ${k} ([^\\n]*)`))[1].split(" ");
     // ps1 keeps its value-flag lists in _Safe_Pkg_Valueflags too.
     const ps = read(`${m}-wrapper.ps1`);
-    const psShared = read("_safe_pkg_shared.ps1");
+    const psShared = read("_safe_pkg_shared.ps1").split(
+      "function _Safe_Pkg_Valueflags",
+    )[1];
     const psList = (k) =>
       [
         ...(k === "valueFlags"
           ? psShared.match(new RegExp(`\\n        ${m} = @\\(([^)]*)\\)`))
-          : ps.match(new RegExp(`\\$${k} = @\\(([^)]*)\\)`)))[1].matchAll(/'([^']*)'/g),
+          : ps.match(new RegExp(`\\$${k} = @\\(([^)]*)\\)`)))[1].matchAll(
+          /'([^']*)'/g,
+        ),
       ].map((x) => x[1]);
     for (const [k, fk, pk] of [
       ["install", "install_cmds", "installCmds"],

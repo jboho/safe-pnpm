@@ -152,22 +152,24 @@ const result = (label) => {
 
 const NO_ERRORS = /ERRORS=0$/;
 
-// The sh probe stubs the whole install path, global refusal included; the ps1
-// wrappers refuse a global install before the scan, so these show up as a
-// refusal instead.
-const isYarnGlobal = (cmd) => /^yarn .*global (add|remove|upgrade)\b/.test(cmd);
+// The sh probe stubs the whole install path, refusals included. The ps1
+// wrappers refuse a global install, a directory flag and a -- after the finder
+// has picked an install subcommand and before the scan, so reaching one of
+// those refusals also shows the command took the scan path.
+const REFUSAL =
+  /global installs are not supported|is not supported through the wrapper/;
+const assertScanPath = (r) => {
+  if (r.events.length === 0 && REFUSAL.test(r.out)) {
+    assert.equal(r.status, "RC=1 ERRORS=0", r.out);
+    return;
+  }
+  assert.deepEqual(r.events, ["scanned"], r.out);
+  assert.match(r.status, NO_ERRORS, r.out);
+};
 
 for (const cmd of [...SCANNED, ...PS_ONLY_SCANNED]) {
   test(`ps1 wrapper scans: ${cmd}`, { skip }, () => {
-    const r = result(cmd);
-    if (isYarnGlobal(cmd)) {
-      assert.deepEqual(r.events, [], r.out);
-      assert.equal(r.status, "RC=1 ERRORS=0", r.out);
-      assert.match(r.out, /global installs are not supported/);
-      return;
-    }
-    assert.deepEqual(r.events, ["scanned"], r.out);
-    assert.match(r.status, NO_ERRORS, r.out);
+    assertScanPath(result(cmd));
   });
 }
 
@@ -232,7 +234,8 @@ for (const args of LOCAL) {
     skip,
   }, () => {
     const r = result(`npm install @${psList(args)}`);
-    assert.deepEqual(r.events, ["scanned"], r.out);
+    assert.doesNotMatch(r.out, /global installs are not supported/);
+    assertScanPath(r);
   });
 }
 
