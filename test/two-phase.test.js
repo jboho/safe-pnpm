@@ -830,6 +830,23 @@ for (const { shell, ext, available } of SHELLS) {
     });
   });
 
+  test(`pnpm (${shell}): a failed supportedArchitectures restore blocks copy-back`, {
+    skip: !available,
+  }, () => {
+    const r = runWrapper("pnpm", wrapperFile, {
+      ...mac,
+      phase1Pkg: `echo '{' > "$src/package.json"`,
+    });
+    assert.notEqual(r.status, 0);
+    assert.equal(r.runCount, 1, "no build phase");
+    assert.match(r.read("stderr"), /nothing copied back/);
+    assert.equal(
+      fs.readFileSync(path.join(r.proj, "package.json"), "utf8"),
+      PINNED_9,
+    );
+    assert.ok(!fs.existsSync(path.join(r.proj, "node_modules")));
+  });
+
   test(`pnpm (${shell}): without a pin on a Mac only the sandbox pnpm-workspace.yaml gets the setting`, {
     skip: !available,
   }, () => {

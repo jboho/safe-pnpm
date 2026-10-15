@@ -39,8 +39,9 @@ after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 // dockerInfo sets the stub's answers to the `docker info --format` rootless
 // queries (see helpers/docker-info-stub.js).
 // pkg is the project's package.json text. win installs pnpm-arch.js and makes
-// _Safe_Pkg_Host_Platform act as on a Windows x64 host.
-function runPs1(manager, { env = {}, emptyId = false, noId = false, dockerInfo, auditRc = 0, pkg, win = false } = {}) {
+// _Safe_Pkg_Host_Platform act as on a Windows x64 host. phase1 is sh the stub
+// runs in phase 1, with $src = the /app mount.
+function runPs1(manager, { env = {}, emptyId = false, noId = false, dockerInfo, auditRc = 0, pkg, win = false, phase1 = "" } = {}) {
   const root = fs.mkdtempSync(path.join(tmp, `${manager}-`));
   const bin = path.join(root, "bin");
   const proj = path.join(root, "proj");
@@ -64,7 +65,7 @@ function runPs1(manager, { env = {}, emptyId = false, noId = false, dockerInfo, 
       'src=""; prev=""; for a in "$@"; do [ "$prev" = "-v" ] && src="${a%%:/app}"; prev="$a"; done',
       "n=$(grep -c '' /w/docker.log)",
       'cp "$src/package.json" "/w/run$n.pkg"; [ -f "$src/pnpm-workspace.yaml" ] && cp "$src/pnpm-workspace.yaml" "/w/run$n.ws"',
-      `if [ "$n" = 1 ]; then mkdir -p "$src/node_modules/dep"; echo x > "$src/node_modules/dep/index.js"; echo resolved-by-phase-1 > "$src/${LOCKFILES[manager]}"; fi`,
+      `if [ "$n" = 1 ]; then mkdir -p "$src/node_modules/dep"; echo x > "$src/node_modules/dep/index.js"; echo resolved-by-phase-1 > "$src/${LOCKFILES[manager]}"; ${phase1} fi`,
       "exit 0",
       "",
     ].join("\n"),
@@ -275,4 +276,18 @@ test("ps1 pnpm: a pnpm 9 pin on Windows gets supportedArchitectures in the sandb
   }
   assert.equal(fs.readFileSync(path.join(proj, "package.json"), "utf8"), pkg);
   assert.ok(!fs.existsSync(path.join(proj, "pnpm-workspace.yaml")));
+});
+
+test("ps1 pnpm: a failed supportedArchitectures restore blocks copy-back", { skip }, () => {
+  const pkg = '{\n    "name": "x",\n    "packageManager": "pnpm@9.15.0"\n}';
+  const { out, runs, proj } = runPs1("pnpm", {
+    pkg,
+    win: true,
+    phase1: `echo '{' > "$src/package.json";`,
+  });
+  assert.match(out, /RC=1/);
+  assert.equal(runs.length, 1, out);
+  assert.match(out, /nothing copied back/);
+  assert.equal(fs.readFileSync(path.join(proj, "package.json"), "utf8"), pkg);
+  assert.ok(!fs.existsSync(path.join(proj, "node_modules")));
 });

@@ -198,7 +198,7 @@ function _Safe_Pkg_Strip_NpmrcAuth {
 # rest. Linux hosts match the container and change nothing.
 #   pnpm: supportedArchitectures through pnpm-arch.js, in the sandbox copy of
 #         pnpm-workspace.yaml, or of package.json for a project pinned to pnpm
-#         8 or 9 (the original goes to -Saved for _Safe_Pkg_Pnpm_Arch_Restore);
+#         10 or earlier (the original goes to -Saved for _Safe_Pkg_Pnpm_Arch_Restore);
 #         a project's own setting wins.
 #   yarn: returns --ignore-platform (every platform's build).
 #   npm:  unchanged (see the README).

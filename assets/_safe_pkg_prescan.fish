@@ -246,7 +246,7 @@ set -g _safe_pkg_sandbox_dirs
 # fetches the host's build, so it is malware-scanned and audited like the rest.
 # See _safe_pkg_host_platform in _safe_pkg_shared.sh for the reasoning.
 # pnpm: pnpm-arch.js edits the sandbox copy of pnpm-workspace.yaml, or of
-# package.json for a project pinned to pnpm 8 or 9 (saving the original to
+# package.json for a project pinned to pnpm 10 or earlier (saving the original to
 # $saved for _safe_pkg_pnpm_arch_restore); prints nothing.
 # yarn: prints --ignore-platform. npm: unchanged.
 function _safe_pkg_host_platform --argument manager tmpdir saved

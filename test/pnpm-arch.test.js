@@ -82,12 +82,38 @@ test("pnpm 9 pin leaves a packages-less workspace yaml alone", () => {
   assert.ok(JSON.parse(a.pkg).pnpm.supportedArchitectures);
 });
 
-test("pnpm 10 and 11 pins use pnpm-workspace.yaml", () => {
-  for (const v of ["10.18.3", "11.5.3"]) {
+// pnpm 10.0-10.4 reject a workspace file without packages; every 10.x reads
+// package.json.
+test("pnpm 10 pins use package.json", () => {
+  for (const v of ["10.0.0", "10.4.1", "10.18.3"]) {
+    const a = apply(pin(v));
+    assert.equal(a.ws, null, v);
+    assert.ok(JSON.parse(a.pkg).pnpm.supportedArchitectures, v);
+  }
+});
+
+test("pnpm 11 and 12 pins use pnpm-workspace.yaml", () => {
+  for (const v of ["11.5.3", "11.5.3+sha512.abc", "12.11.2"]) {
     const a = apply(pin(v));
     assert.equal(a.ws, YAML, v);
     assert.equal(a.savedText, null, v);
   }
+});
+
+test("pins with a hash or a v prefix are read", () => {
+  for (const v of ["9.15.0+sha512.abc", "v9.1.0"]) {
+    const a = apply(pin(v));
+    assert.equal(a.ws, null, v);
+    assert.ok(JSON.parse(a.pkg).pnpm.supportedArchitectures, v);
+  }
+});
+
+test("a pnpm 10 project's own yaml setting is kept", () => {
+  const own = "packages:\n  - pkgs/*\nsupportedArchitectures:\n  os: [linux]\n";
+  const a = apply(pin("10.18.3"), own);
+  assert.equal(a.ws, own);
+  assert.equal(a.savedText, null);
+  assert.equal(JSON.parse(a.pkg).pnpm, undefined);
 });
 
 test("an unreadable pnpm pin is treated as old", () => {
@@ -103,9 +129,38 @@ test("devEngines.packageManager pins are read, as one entry or a list", () => {
   assert.equal(one.ws, null);
   assert.ok(JSON.parse(one.pkg).pnpm.supportedArchitectures);
   const list = apply(
-    `${JSON.stringify({ devEngines: { packageManager: [{ name: "npm" }, { name: "pnpm", version: "10.x" }] } })}\n`,
+    `${JSON.stringify({ devEngines: { packageManager: [{ name: "npm" }, { name: "pnpm", version: "11.x" }] } })}\n`,
   );
   assert.equal(list.ws, YAML);
+});
+
+// pnpm 11 resolves a range to the newest matching pnpm (probed: "<10" ran
+// 9.15.9, ">=9" ran 12.11.2).
+test("devEngines ranges count as old unless they rule out pnpm 10 and earlier", () => {
+  const de = (version) =>
+    `${JSON.stringify({ devEngines: { packageManager: { name: "pnpm", version } } })}\n`;
+  for (const v of ["<10", "^9 || ^11", ">=9", "*", "~10.5.0"]) {
+    assert.equal(apply(de(v)).ws, null, v);
+  }
+  for (const v of ["^11.0.0", "~11.2", ">=11", "12", "11.5.3"]) {
+    assert.equal(apply(de(v)).ws, YAML, v);
+  }
+});
+
+test("devEngines.packageManager wins over packageManager, as in pnpm 11", () => {
+  const a = apply(
+    pin("11.5.3", {
+      devEngines: { packageManager: { name: "pnpm", version: "^9.0.0" } },
+    }),
+  );
+  assert.equal(a.ws, null);
+  assert.ok(JSON.parse(a.pkg).pnpm.supportedArchitectures);
+  const b = apply(
+    pin("9.15.0", {
+      devEngines: { packageManager: { name: "pnpm", version: "^11.0.0" } },
+    }),
+  );
+  assert.equal(b.ws, YAML);
 });
 
 test("a project's own setting where its pnpm reads it wins", () => {
@@ -135,9 +190,9 @@ test("an invalid package.json or a non-object pnpm field is left alone", () => {
 });
 
 test("apply keeps the file's indent, line endings, BOM and missing final newline", () => {
-  const text = `﻿{\r\n    "name": "x",\r\n    "packageManager": "pnpm@9.15.0"\r\n}`;
+  const text = `\uFEFF{\r\n    "name": "x",\r\n    "packageManager": "pnpm@9.15.0"\r\n}`;
   const a = apply(text);
-  assert.ok(a.pkg.startsWith('﻿{\r\n    "name": "x",'));
+  assert.ok(a.pkg.startsWith('\uFEFF{\r\n    "name": "x",'));
   assert.ok(a.pkg.endsWith("}"));
   assert.ok(!/[^\r]\n/.test(a.pkg));
 });

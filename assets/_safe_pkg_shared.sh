@@ -586,9 +586,10 @@ _safe_pkg_run() {
 # scan and CVE audit as everything else (phase 1 runs no install scripts).
 # Linux hosts match the container, so nothing changes there.
 #   pnpm: supportedArchitectures, through pnpm-arch.js: in the sandbox copy of
-#         pnpm-workspace.yaml for pnpm 10 and later, in the sandbox copy of
-#         package.json for a project pinned to pnpm 8 or 9 (which reject a
-#         workspace file without packages and ignore the setting there). The
+#         pnpm-workspace.yaml for pnpm 11 and later, in the sandbox copy of
+#         package.json for a project pinned to pnpm 10 or earlier (before 10.5
+#         pnpm rejects a workspace file without packages, and 8 and 9 ignore
+#         the setting there). The
 #         setting is not read from flags or environment. A project's own
 #         supportedArchitectures wins. The workspace file is never copied back;
 #         package.json is saved to <saved> first and put back by
