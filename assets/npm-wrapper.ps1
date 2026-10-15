@@ -60,6 +60,17 @@ function global:npm {
         return
     }
 
+    # npm, pnpm and yarn stop reading flags at --, and npm and pnpm at any
+    # longer run of dashes too. PowerShell drops an unquoted -- from $args,
+    # but not a quoted or splatted one.
+    $dashes = @($passArgs | Where-Object { $_ -match '^-{2,}$' })
+    if ($dashes.Count) {
+        Write-Host "✗ safe-pnpm: $($dashes[0]) is not supported through the wrapper; the sandbox adds --ignore-scripts and its other flags after your arguments, and after $($dashes[0]) they would not be read as flags." -ForegroundColor Red
+        Write-Host "  To run it without the safety checks: npm.cmd $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
+        $global:LASTEXITCODE = 1
+        return
+    }
+
     if (_Safe_Pkg_Is_Global $passArgs) {
         Write-Host "✗ safe-pnpm: global installs are not supported through the wrapper; the sandbox would install into a throwaway container and change nothing on this machine." -ForegroundColor Red
         Write-Host "  To install globally without the safety checks, run: npm.cmd $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red

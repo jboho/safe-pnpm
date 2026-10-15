@@ -125,7 +125,9 @@ const fishAvailable =
 
 // The finder asks _safe_pkg_dir_flag about one flag at a time, so that call
 // reaches the real function; the refusals, which see every argument, are
-// stubbed out like _safe_pkg_dispatch in the sh probe.
+// stubbed out like _safe_pkg_dispatch in the sh probe. The -- refusal is
+// inline in each wrapper, after the finder, so reaching it also shows the
+// command took the scan path.
 const fishProbe = (cmd) =>
   spawnSync(
     "fish",
@@ -145,7 +147,12 @@ ${cmd}`,
 
 for (const cmd of SCANNED) {
   test(`fish wrapper scans: ${cmd}`, { skip: !fishAvailable }, () => {
-    assert.equal(fishProbe(cmd).stdout.trim(), "scanned");
+    const r = fishProbe(cmd);
+    if (cmd.split(" ").includes("--")) {
+      assert.match(r.stderr, /-- is not supported through the wrapper/);
+    } else {
+      assert.equal(r.stdout.trim(), "scanned");
+    }
   });
 }
 test("zsh and bash agree on every probe", {

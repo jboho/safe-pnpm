@@ -536,6 +536,18 @@ _safe_pkg_dispatch() {
     count=$((count - 1))
   done
 
+  # npm, pnpm and yarn stop reading flags at --, and npm and pnpm at any
+  # longer run of dashes too.
+  for arg in "$@"; do
+    case "$arg" in
+      --*)
+        [ -n "${arg//-/}" ] && continue
+        echo "✗ safe-pnpm: $arg is not supported through the wrapper; the sandbox adds --ignore-scripts and its other flags after your arguments, and after $arg they would not be read as flags." >&2
+        echo "  To run it without the safety checks: command $manager$(printf ' %q' "$@")" >&2
+        return 1 ;;
+    esac
+  done
+
   if _safe_pkg_is_global "$@"; then
     echo "✗ safe-pnpm: global installs are not supported through the wrapper; the sandbox would install into a throwaway container and change nothing on this machine." >&2
     echo "  To install globally without the safety checks, run: command $manager$(printf ' %q' "$@")" >&2

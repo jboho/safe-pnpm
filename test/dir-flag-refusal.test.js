@@ -96,20 +96,38 @@ const KEPT = [
   ["npm", ["install", "--workspace", "web", "x"]],
   ["npm", ["install", "--cache", "/c"]],
   ["npm", ["install", "--Prefix=web"]],
-  ["npm", ["install", "x", "--", "--prefix"]],
-  ["npm", ["--", "install", "x"]],
   ["npm", ["install", "--pref", "web"]],
   ["npm", ["install", "--//r.example/Corp/:_authToken=t"]],
   ["pnpm", ["install", "--lockfile-only"]],
   ["pnpm", ["add", "--filter", "web", "x"]],
   ["pnpm", ["install", "--config.store-dir=/s"]],
   ["pnpm", ["install", "--frozen-lockfile"]],
-  ["pnpm", ["add", "x", "--", "-C"]],
-  ["pnpm", ["--", "install", "x"]],
   ["pnpm", ["install", "--config.childConcurrency=2"]],
   ["yarn", ["add", "-C", "x"]],
   ["yarn", ["install", "--frozen-lockfile"]],
+];
+
+// Scanned commands with a run of two or more dashes, where npm, pnpm and yarn
+// stop reading flags. Phase 1 appends --ignore-scripts after the args, so
+// these are refused; none of them has a directory flag before the dashes.
+const DASHES = [
+  ["npm", ["--", "install", "x"]],
+  ["npm", ["install", "--", "x"]],
+  ["npm", ["install", "x", "--", "--prefix"]],
+  ["npm", ["install", "---", "x"]],
+  ["pnpm", ["add", "--", "x"]],
+  ["pnpm", ["--", "install", "x"]],
+  ["pnpm", ["add", "x", "--", "-C"]],
+  ["yarn", ["add", "--", "x"]],
   ["yarn", ["add", "x", "--", "--cwd"]],
+  ["yarn", ["global", "--", "add", "x"]],
+];
+
+// Not scanned, so -- goes to the native manager as typed.
+const DASHES_NATIVE = [
+  ["npm", ["run", "test", "--", "--watch"]],
+  ["pnpm", ["exec", "vitest", "--", "--run"]],
+  ["yarn", ["run", "build", "--", "--watch"]],
 ];
 
 // Not scanned, so the flags are the manager's business.
@@ -127,7 +145,7 @@ const label = (mgr, args) => `${mgr} ${args.join(" ")}`;
 
 for (const [list, expected] of [
   [REFUSED, 0],
-  [KEPT, 1],
+  [[...KEPT, ...DASHES], 1],
 ]) {
   for (const [mgr, args] of list) {
     test(`sh: _safe_pkg_dir_flag ${label(mgr, args)} -> ${expected}`, () => {
@@ -191,13 +209,13 @@ const env = (dir, bin) => ({
   HOME: dir,
 });
 
-const runSh = (dir, bin, mgr, args) =>
+const runShell = (shell) => (dir, bin, mgr, args) =>
   spawnSync(
-    "bash",
+    shell,
     [
       "-c",
       'source "$1"; source "$2"; shift 2; "$@"',
-      "bash",
+      shell,
       SHARED,
       path.join(ASSETS, `${mgr}-wrapper.sh`),
       mgr,
@@ -205,6 +223,7 @@ const runSh = (dir, bin, mgr, args) =>
     ],
     { stdio: "pipe", cwd: dir, env: env(dir, bin) },
   );
+const runSh = runShell("bash");
 
 // Installed the way setup installs them: fish autoloads the wrapper and
 // _safe_pkg_prescan.fish from a functions dir, and nothing sources them.
@@ -289,21 +308,54 @@ for (const [shell, run, skip] of [
       }
     });
   }
-  // yarn takes the command from the words before --, so this is a global add.
-  test(`${shell}: yarn global -- add x is refused as a global install`, {
-    skip,
-  }, () => {
-    const { dir, bin } = sandbox();
-    try {
-      const r = run(dir, bin, "yarn", ["global", "--", "add", "x"]);
-      assert.equal(r.status, 1, r.stderr.toString());
-      assert.match(r.stderr.toString(), /global installs are not supported/);
-      assert.doesNotMatch(r.stdout.toString(), /NATIVE/);
-      assert.equal(fs.existsSync(path.join(dir, "docker.log")), false);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
+}
+
+for (const [shell, run, skip] of [
+  ["sh", runSh, false],
+  ["zsh", runShell("zsh"), !zshAvailable],
+  ["fish", runFish, !fishAvailable],
+]) {
+  for (const [mgr, args] of DASHES) {
+    const dashes = args.find((a) => /^-{2,}$/.test(a));
+    test(`${shell}: ${label(mgr, args)} is refused for its ${dashes}`, {
+      skip,
+    }, () => {
+      const { dir, bin } = sandbox();
+      try {
+        const r = run(dir, bin, mgr, args);
+        const err = r.stderr.toString();
+        assert.equal(r.status, 1, err);
+        assert.match(
+          err,
+          new RegExp(`✗ safe-pnpm: ${dashes} is not supported through the wrapper;.*would not be read as flags`),
+        );
+        assert.match(
+          err,
+          new RegExp(`without the safety checks: command ${mgr} ${args.join(" ")}\n`),
+        );
+        assert.doesNotMatch(r.stdout.toString(), /NATIVE/);
+        assert.equal(fs.existsSync(path.join(dir, "docker.log")), false);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+  for (const [mgr, args] of DASHES_NATIVE) {
+    test(`${shell}: ${label(mgr, args)} passes through to native ${mgr}`, {
+      skip,
+    }, () => {
+      const { dir, bin } = sandbox();
+      try {
+        const r = run(dir, bin, mgr, args);
+        assert.equal(r.status, 0, r.stderr.toString());
+        assert.equal(r.stdout.toString().trim(), `NATIVE ${args.join(" ")}`);
+        assert.equal(r.stderr.toString(), "");
+        assert.equal(fs.existsSync(path.join(dir, "docker.log")), false);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
 }
 
 test("sh: the bypass command keeps each argument's quoting", () => {
@@ -491,17 +543,18 @@ function runPs1Cases() {
     JSON.stringify({ name: "x", version: "1.0.0" }),
   );
   const cases = {
-    unit: [...REFUSED, ...KEPT].map(([mgr, args], i) => ({
+    unit: [...REFUSED, ...KEPT, ...DASHES].map(([mgr, args], i) => ({
       id: `u${i}`,
       mgr,
       args,
     })),
-    run: [...REFUSED, ...PASS_THROUGH].map(([mgr, args], i) => ({
+    run: [...REFUSED, ...PASS_THROUGH, ...DASHES_NATIVE].map(([mgr, args], i) => ({
       id: `r${i}`,
       mgr,
       args,
     })),
     kept: KEPT.map(([mgr, args], i) => ({ id: `k${i}`, mgr, args })),
+    dashes: DASHES.map(([mgr, args], i) => ({ id: `d${i}`, mgr, args })),
   };
   fs.writeFileSync(path.join(root, "cases.json"), JSON.stringify(cases));
   const script = [
@@ -518,7 +571,7 @@ function runPs1Cases() {
     "  $out = (& $c.mgr @a *>&1 | Out-String) -replace '\\r?\\n', ' '",
     '  "RUN|$($c.id)|$LASTEXITCODE|$out"',
     "}",
-    "foreach ($c in $cases.kept) {",
+    "foreach ($c in [object[]]$cases.kept + $cases.dashes) {",
     "  $env:CASE = $c.id; $global:LASTEXITCODE = 0; $a = @($c.args)",
     "  $out = (& $c.mgr @a *>&1 | Out-String) -replace '\\r?\\n', ' '",
     '  "RUN|$($c.id)|$LASTEXITCODE|$out"',
@@ -530,6 +583,8 @@ function runPs1Cases() {
     "}",
     "extra quoted { npm -C 'my dir' install }",
     "extra yarnglobal { yarn global '--' add x }",
+    // PowerShell drops the first unquoted -- before the wrapper sees it.
+    "extra unquoted { npm install -- x }",
     // A wrapper paired with an older _safe_pkg_shared.ps1 that lacks the check.
     "$saved = (Get-Item function:_Safe_Pkg_Dir_Flag).ScriptBlock",
     "Remove-Item function:_Safe_Pkg_Dir_Flag",
@@ -576,7 +631,7 @@ function runPs1Cases() {
   return ps1Result;
 }
 
-[...REFUSED, ...KEPT].forEach(([mgr, args], i) => {
+[...REFUSED, ...KEPT, ...DASHES].forEach(([mgr, args], i) => {
   const expected = i < REFUSED.length ? "True" : "False";
   test(`ps1: _Safe_Pkg_Dir_Flag ${label(mgr, args)} -> ${expected}`, {
     skip: skipPs1,
@@ -588,7 +643,7 @@ function runPs1Cases() {
   });
 });
 
-[...REFUSED, ...PASS_THROUGH].forEach(([mgr, args], i) => {
+[...REFUSED, ...PASS_THROUGH, ...DASHES_NATIVE].forEach(([mgr, args], i) => {
   const refused = i < REFUSED.length;
   const what = refused
     ? "is refused before docker is called"
@@ -626,6 +681,26 @@ KEPT.forEach(([mgr, args], i) => {
   });
 });
 
+DASHES.forEach(([mgr, args], i) => {
+  const dashes = args.find((a) => /^-{2,}$/.test(a));
+  test(`ps1: ${label(mgr, args)} is refused for its ${dashes}`, {
+    skip: skipPs1,
+  }, () => {
+    const { get, dockerLog, out } = runPs1Cases();
+    const r = get("RUN", `d${i}`);
+    assert.ok(r, out);
+    const text = r.slice(1).join("|");
+    assert.equal(r[0], "1", text);
+    assert.match(
+      text,
+      new RegExp(`✗ safe-pnpm: ${dashes} is not supported through the wrapper;.*would not be read as flags`),
+    );
+    assert.match(text, new RegExp(`${mgr}\\.cmd ${args.join(" ")}`));
+    assert.doesNotMatch(text, /(^|\s)NATIVE /);
+    assert.doesNotMatch(dockerLog, new RegExp(`^d${i} `, "m"));
+  });
+});
+
 test("ps1: the bypass command keeps each argument's quoting", {
   skip: skipPs1,
 }, () => {
@@ -637,7 +712,7 @@ test("ps1: the bypass command keeps each argument's quoting", {
   assert.match(text, /npm\.cmd -C 'my dir' install/);
 });
 
-test("ps1: yarn global -- add x is refused as a global install", {
+test("ps1: yarn global '--' add x is refused for its --", {
   skip: skipPs1,
 }, () => {
   const { get, dockerLog, out } = runPs1Cases();
@@ -645,9 +720,23 @@ test("ps1: yarn global -- add x is refused as a global install", {
   assert.ok(r, out);
   const text = r.slice(1).join("|");
   assert.equal(r[0], "1", text);
-  assert.match(text, /global installs are not supported/);
+  assert.match(text, /-- is not supported through the wrapper/);
+  assert.match(text, /yarn\.cmd global -- add x/);
   assert.doesNotMatch(text, /NATIVE/);
   assert.doesNotMatch(dockerLog, /^yarnglobal /m);
+});
+
+test("ps1: an unquoted -- never reaches the wrapper, so npm install -- x is scanned", {
+  skip: skipPs1,
+}, () => {
+  const { get, dockerLog, out } = runPs1Cases();
+  const r = get("EXTRA", "unquoted");
+  assert.ok(r, out);
+  const text = r.slice(1).join("|");
+  assert.match(text, /Docker not running and no TTY/);
+  assert.doesNotMatch(text, /not supported/);
+  assert.doesNotMatch(text, /(^|\s)NATIVE /);
+  assert.match(dockerLog, /^unquoted info/m, text);
 });
 
 test("ps1: a wrapper with an out-of-date _safe_pkg_shared.ps1 refuses to install", {
