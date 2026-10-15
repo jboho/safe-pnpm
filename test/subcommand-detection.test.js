@@ -110,12 +110,16 @@ for (const cmd of NATIVE) {
 const fishAvailable =
   spawnSync("fish", ["--version"], { stdio: "pipe" }).status === 0;
 
+// The real library with the scan and the global refusal stubbed out, which is
+// what stubbing _safe_pkg_dispatch does in the sh probe.
 const fishProbe = (cmd) =>
   spawnSync(
     "fish",
     [
       "-c",
-      `function _safe_pkg_prescan; echo scanned; return 1; end
+      `source ${ASSETS}/_safe_pkg_prescan.fish
+function _safe_pkg_prescan; echo scanned; return 1; end
+function _safe_pkg_is_global; return 1; end
 function npm; end; function yarn; end; function pnpm; end
 source ${ASSETS}/pnpm-wrapper.fish; source ${ASSETS}/npm-wrapper.fish; source ${ASSETS}/yarn-wrapper.fish
 ${cmd}`,
@@ -162,8 +166,16 @@ for (const m of ["pnpm", "npm", "yarn"]) {
         ? shFlags.split(" ")
         : shBlock.match(new RegExp(`${k}=" ([^"]*) "`))[1].split(" ");
     const fish = read(`${m}-wrapper.fish`);
+    // fish keeps its value-flag lists in _safe_pkg_valueflags too.
+    const fishFlags = read("_safe_pkg_prescan.fish").match(
+      new RegExp(
+        `\\n        case ${m}(?: npx)?\\n            printf '%s\\\\n' ([^\\n]*)`,
+      ),
+    )[1];
     const fishList = (k) =>
-      fish.match(new RegExp(`set -l ${k} ([^\\n]*)`))[1].split(" ");
+      k === "value_flags"
+        ? fishFlags.split(" ")
+        : fish.match(new RegExp(`set -l ${k} ([^\\n]*)`))[1].split(" ");
     const ps = read(`${m}-wrapper.ps1`);
     const psList = (k) =>
       [

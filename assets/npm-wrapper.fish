@@ -7,12 +7,19 @@
 # Escape hatch: command npm install bypasses to native npm.
 
 function npm
+    # fish autoloads _safe_pkg_prescan.fish only by that name; it defines the
+    # other _safe_pkg_ helpers, so load it before calling any of them. Without
+    # it the runner check is an unknown command and every call is refused.
+    functions -q _safe_pkg_prescan
+    _safe_pkg_runner_check npm $argv
+    or return 1
+
     # Walk the non-flag words: an install word or alias is the subcommand, a
     # known non-install command means native, and anything else may be the value
     # of a flag missing from value_flags, so try the next word (fails closed).
     set -l install_cmds install i in ins inst insta instal isnt isnta isntal isntall add ci clean-install ic install-clean isntall-clean install-test it cit install-ci-test sit clean-install-test update up upgrade udpate u uninstall un unlink remove rm r
     set -l native_cmds run run-script rum urn test t tst start stop restart exec x publish pack version v view info show config c get set ls list la ll audit outdated login logout whoami init create innit pkg prefix root bin docs help ping search team token owner access dist-tag deprecate cache link ln rebuild rb dedupe find-dupes explain why fund diff doctor
-    set -l value_flags --prefix -w --workspace --registry --cache --userconfig --globalconfig --loglevel --otp --scope --omit --include --install-strategy --tag --before --audit-level --fetch-retries --lockfile-version --min-release-age --cpu --os --libc --script-shell --node-options --maxsockets
+    set -l value_flags (_safe_pkg_valueflags npm)
     set -l ninstall (string replace -a - '' -- $install_cmds)
     set -l nnative (string replace -a - '' -- $native_cmds)
     set -l subcmd
@@ -214,4 +221,13 @@ function npm
 
     _safe_pkg_untrack $tmpdir $snapdir
     return $rc
+end
+
+# npx fetches a package and runs it. Same OSV check as `npm exec`, then native.
+# setup also installs this file as npx.fish, so fish autoloads it for npx.
+function npx
+    functions -q _safe_pkg_prescan
+    _safe_pkg_runner_check npx $argv
+    or return 1
+    command npx $argv
 end
