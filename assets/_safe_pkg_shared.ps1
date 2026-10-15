@@ -1,8 +1,7 @@
 # _safe_pkg_shared.ps1 — shared prescan for safe-pnpm, safe-npm, safe-yarn (PowerShell)
-# Dot-sourced by each manager wrapper. Guard prevents double-loading.
-
-if ($global:_SafePkgSharedLoaded) { return }
-$global:_SafePkgSharedLoaded = $true
+# Dot-sourced by each manager wrapper. It only defines functions, so it loads
+# again on every dot-source: a profile re-run after safe-pnpm update must not
+# pair the new wrappers with the old functions.
 
 # Runs the manager's CVE audit on the tree phase 1 resolved, so a package
 # passed to `add` is covered. Returns $false to block. See _safe_pkg_shared.sh
@@ -74,6 +73,64 @@ function _Safe_Pkg_Is_Global {
         $prev = $a
     }
     return $false
+}
+
+# Returns the first flag that points the package manager at another
+# directory, or $null. See _safe_pkg_dir_flag in _safe_pkg_shared.sh for why
+# the wrapper refuses these and which spellings each manager accepts. The
+# comparisons are case-sensitive, like the managers' own parsers.
+function _Safe_Pkg_Dir_Flag {
+    param([string]$Manager, [string[]]$PassArgs)
+    $long = @{
+        npm  = @('prefi','prefix')
+        pnpm = @('dir','prefi','prefix','shrinkwrap-directory','lockfile-d','lockfile-di','lockfile-dir','lockfile-dire','lockfile-direc','lockfile-direct','lockfile-directo','lockfile-director','lockfile-directory')
+    }
+    foreach ($a in $PassArgs) {
+        if ($a -ceq '--') { return $null }
+        if ($a -notlike '-*') { continue }
+        $name = ([string]$a -split '=', 2)[0]
+        if ($Manager -eq 'yarn') {
+            if ($name -ceq '--cwd') { return $a }
+            continue
+        }
+        $name = $name -replace '^-+', ''
+        if ($long[$Manager] -ccontains $name) { return $a }
+        if ($Manager -eq 'pnpm' -and $name -clike 'config.*') {
+            $key = $name.Substring(7).ToLowerInvariant() -replace '[-_]',''
+            if ($key -in @('dir','prefix','lockfiledir')) { return $a }
+            continue
+        }
+        if ($name -cmatch '^[A-Za-z]*C[A-Za-z]*$') { return $a }
+    }
+    return $null
+}
+
+# Quotes args for the bypass command the refusals print, so it can be pasted
+# back as it was typed.
+function _Safe_Pkg_Quote_Args {
+    param([string[]]$PassArgs)
+    @($PassArgs | ForEach-Object {
+        if ($_ -cmatch '^[A-Za-z0-9_./:=+-][A-Za-z0-9_./:=@+-]*$') { $_ } else { "'" + ($_ -replace "'", "''") + "'" }
+    }) -join ' '
+}
+
+# Returns the file and key of the first setting in Dir's .npmrc or
+# pnpm-workspace.yaml that moves pnpm's lockfile, or $null. See
+# _safe_pkg_lockfile_dir_setting in _safe_pkg_shared.sh.
+function _Safe_Pkg_Lockfile_Dir_Setting {
+    param([string]$Dir)
+    $checks = @(
+        @('.npmrc', '^\s*["'']?(lockfile-dir|lockfile-directory|shrinkwrap-directory)["'']?\s*='),
+        @('pnpm-workspace.yaml', '^[^#]*(lockfile-?dir)["'']?\s*:')
+    )
+    foreach ($c in $checks) {
+        $path = Join-Path $Dir $c[0]
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        foreach ($line in Get-Content -LiteralPath $path) {
+            if ($line -match $c[1]) { return @($c[0], $Matches[1]) }
+        }
+    }
+    return $null
 }
 
 function _Safe_Pkg_Prescan {

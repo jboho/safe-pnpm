@@ -55,6 +55,17 @@ const SCANNED = [
   "yarn global add x",
   "yarn --silent global add x",
   "yarn global remove x",
+  // -- ends the flags but not the search for the command
+  "npm -- install x",
+  "pnpm -- install x",
+  "yarn global -- add x",
+  // a directory named like a command is still a flag's value
+  "npm -C test install",
+  "npm --prefix bin install",
+  "pnpm --prefix server install",
+  // pnpm's string flags never take a flag as their value
+  "pnpm -C --dir server install",
+  "pnpm --reporter --dir server install",
 ];
 
 const NATIVE = [
@@ -76,6 +87,8 @@ const NATIVE = [
   "yarn global list",
   "yarn global bin",
   "yarn global",
+  "npm -C docs run build",
+  "pnpm --dir test run build",
 ];
 
 // Stub the two exits so nothing installs: the scan path prints "scanned" and
@@ -110,16 +123,21 @@ for (const cmd of NATIVE) {
 const fishAvailable =
   spawnSync("fish", ["--version"], { stdio: "pipe" }).status === 0;
 
-// The real library with the scan and the global refusal stubbed out, which is
-// what stubbing _safe_pkg_dispatch does in the sh probe.
+// The finder asks _safe_pkg_dir_flag about one flag at a time, so that call
+// reaches the real function; the refusals, which see every argument, are
+// stubbed out like _safe_pkg_dispatch in the sh probe. The -- refusal is
+// inline in each wrapper, after the finder, so reaching it also shows the
+// command took the scan path.
 const fishProbe = (cmd) =>
   spawnSync(
     "fish",
     [
       "-c",
       `source ${ASSETS}/_safe_pkg_prescan.fish
-function _safe_pkg_prescan; echo scanned; return 1; end
+functions -c _safe_pkg_dir_flag _real_dir_flag
+function _safe_pkg_dir_flag; test (count $argv) -eq 2; and _real_dir_flag $argv; or return 1; end
 function _safe_pkg_is_global; return 1; end
+function _safe_pkg_prescan; echo scanned; return 1; end
 function npm; end; function yarn; end; function pnpm; end
 source ${ASSETS}/pnpm-wrapper.fish; source ${ASSETS}/npm-wrapper.fish; source ${ASSETS}/yarn-wrapper.fish
 ${cmd}`,
@@ -129,7 +147,12 @@ ${cmd}`,
 
 for (const cmd of SCANNED) {
   test(`fish wrapper scans: ${cmd}`, { skip: !fishAvailable }, () => {
-    assert.equal(fishProbe(cmd).stdout.trim(), "scanned");
+    const r = fishProbe(cmd);
+    if (cmd.split(" ").includes("--")) {
+      assert.match(r.stderr, /-- is not supported through the wrapper/);
+    } else {
+      assert.equal(r.stdout.trim(), "scanned");
+    }
   });
 }
 test("zsh and bash agree on every probe", {

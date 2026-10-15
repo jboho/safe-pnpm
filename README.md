@@ -116,6 +116,10 @@ When you run an install-class command:
 | npm | `install`, `i`, `ci`, `update`, `uninstall`, `un` |
 | yarn | `install`, `add`, `remove`, `upgrade` (yarn v1 only) |
 
+**Flags that point an install at another directory are refused.** The checks read the lockfile in the directory you run the command from, so an install sent elsewhere would go unchecked. On an intercepted command the wrappers refuse npm's `--prefix` and `-C`, pnpm's `-C`, `--dir`, `--prefix` and `--lockfile-dir` (also as `--config.dir=` and similar), and yarn's `--cwd`, in any position, in the `--flag=DIR` form and in the shortened or single-dash spellings the managers accept. `cd` into that directory and run the command there, or put `command` in front (`command pnpm -C web install`) to run it natively without the safety checks. Commands that aren't intercepted, such as `pnpm -C web run build`, are not affected. pnpm installs are also refused when the project's `.npmrc` sets `lockfile-dir` or its `pnpm-workspace.yaml` sets `lockfileDir`; remove the setting to install through the wrapper.
+
+**`--` is refused on intercepted commands.** The sandbox adds `--ignore-scripts` and its other flags after your arguments. After `--` (or `---`, which npm and pnpm read the same way) the managers would take those flags as package names, and install scripts would run in the fetch phase, which has your registry token and the network. Drop the `--`, or put `command` in front to run it natively without the safety checks. Commands that aren't intercepted, such as `npm run test -- --watch`, get the `--` unchanged.
+
 **Download-and-run commands get a malware check only.** These fetch a package and run it straight away, so they skip the Docker sandbox, the CVE audit and Socket, and the package's code runs on your machine with your permissions:
 
 - `npx PKG`, `npm exec PKG`, `npm init PKG`, `npm create PKG`

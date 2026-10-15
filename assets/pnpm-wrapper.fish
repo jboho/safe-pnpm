@@ -21,6 +21,8 @@ function pnpm
     # Walk the non-flag words: an install word or alias is the subcommand, a
     # known non-install command means native, and anything else may be the value
     # of a flag missing from value_flags, so try the next word (fails closed).
+    # The value of a listed flag or a directory flag is skipped, unless it is an
+    # install word or a flag. See _safe_pkg_subcmd in _safe_pkg_shared.sh.
     set -l install_cmds install i add update up upgrade ci clean-install ic install-clean fetch remove rm un uninstall uni install-test it unlink dislink
     set -l native_cmds run exec dlx test t start stop restart publish pack list ls ll la why outdated audit config c get set init create link ln rebuild rb approve-builds store root bin patch patch-commit patch-remove import prune dedupe deploy licenses help env self-update setup doctor server cat-file cat-index find-hash
     set -l value_flags (_safe_pkg_valueflags pnpm)
@@ -30,20 +32,31 @@ function pnpm
     set -l seen 0
     set -l skip 0
     for a in $argv
-        if test $skip -eq 1
+        if string match -q -- '-*=*' $a
             set skip 0
-        else if test "$a" = --
-            break
-        else if string match -q -- '-*=*' $a
         else if string match -q -- '-*' $a
-            contains -- $a $value_flags; and set skip 1
+            set skip 0
+            if contains -- $a $value_flags
+                set skip 1
+            else if functions -q _safe_pkg_dir_flag
+                _safe_pkg_dir_flag pnpm $a >/dev/null
+                test $status -ne 1; and set skip 1
+            else
+                set skip 1
+            end
         else
             set -l n (string lower -- $a | string replace -a - '')
             test -z "$n"; and continue
+            set -l inst 0
+            contains -- $n $ninstall; and set inst 1
+            if test $skip -eq 1
+                set skip 0
+                test $inst -eq 1; or continue
+            end
             set seen 1
             if contains -- $n $nnative
                 break
-            else if contains -- $n $ninstall
+            else if test $inst -eq 1
                 set subcmd $n
                 break
             end
@@ -65,9 +78,36 @@ function pnpm
         end
     end
 
+    # An older _safe_pkg_prescan.fish lacks some of the checks below, and each
+    # would then be an unknown command that lets the install through.
+    if not functions -q _safe_pkg_prescan _safe_pkg_is_global _safe_pkg_dir_flag
+        echo "✗ safe-pnpm: _safe_pkg_prescan.fish is missing or out of date; run safe-pnpm update." >&2
+        return 1
+    end
+
+    # npm, pnpm and yarn stop reading flags at --, and npm and pnpm at any
+    # longer run of dashes too.
+    set -l dashes (string match -r -- '^-{2,}$' $pass_args)[1]
+    if test -n "$dashes"
+        echo "✗ safe-pnpm: $dashes is not supported through the wrapper; the sandbox adds --ignore-scripts and its other flags after your arguments, and after $dashes they would not be read as flags." >&2
+        echo "  To run it without the safety checks: command pnpm "(string join ' ' -- (string escape -- $pass_args)) >&2
+        return 1
+    end
+
     if _safe_pkg_is_global $pass_args
         echo "✗ safe-pnpm: global installs are not supported through the wrapper; the sandbox would install into a throwaway container and change nothing on this machine." >&2
-        echo "  To install globally without the safety checks, run: command pnpm $pass_args" >&2
+        echo "  To install globally without the safety checks, run: command pnpm "(string join ' ' -- (string escape -- $pass_args)) >&2
+        return 1
+    end
+
+    set -l dir_flag (_safe_pkg_dir_flag pnpm $pass_args)
+    set -l dir_status $status
+    if test $dir_status -gt 1
+        echo "✗ safe-pnpm: the directory-flag check failed (status $dir_status); run safe-pnpm update." >&2
+        return 1
+    else if test $dir_status -eq 0
+        echo "✗ safe-pnpm: $dir_flag is not supported through the wrapper; the scan checks this directory's lockfile, so an install in another directory would go unchecked." >&2
+        echo "  cd into that directory and run the command there. To run it without the safety checks: command pnpm "(string join ' ' -- (string escape -- $pass_args)) >&2
         return 1
     end
 
@@ -135,6 +175,17 @@ function pnpm
         end
     end
     popd
+
+    set -l lockfile_setting (_safe_pkg_lockfile_dir_setting $tmpdir)
+    if test $status -ne 1
+        if set -q lockfile_setting[2]
+            echo "✗ safe-pnpm: $workspace_root/$lockfile_setting[1] sets $lockfile_setting[2], so pnpm would write the lockfile somewhere other than the one the scan checks. Remove the setting and run the command again." >&2
+        else
+            echo "✗ safe-pnpm: the lockfile-dir check failed; run safe-pnpm update." >&2
+        end
+        _safe_pkg_untrack $tmpdir $snapdir
+        return 1
+    end
 
     set -l workdir /app
     if test -n "$rel_path"

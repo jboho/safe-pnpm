@@ -22,12 +22,19 @@ _safe_pkg_valueflags() {
 #     - a known non-install command        -> nothing (run native)
 #     - anything else                      -> maybe the value of a flag missing
 #                                             from the list below; try the next word
-#   so an unknown value-taking flag fails closed. Flags in the list have their
-#   value skipped, so `pnpm --filter test add x` is still an add. npm also
-#   accepts unambiguous prefixes (`npm uninst x`), so two or more letters that
-#   start an install name count. Bare `yarn` is an install (yarn v1).
+#   so an unknown value-taking flag fails closed. Flags in the list, and the
+#   directory flags of _safe_pkg_dir_flag, have their value skipped, so
+#   `pnpm --filter test add x` is still an add. A skipped word is never an
+#   install word or a flag: the parsers differ on whether a flag takes the
+#   next word as its value when it looks like a flag (npm's path and URL flags
+#   do, pnpm's string flags do not), so either reading lands on the scan or a
+#   refusal. npm also accepts unambiguous prefixes (`npm uninst x`), so two or
+#   more letters that start an install name count. Words after -- are walked
+#   too: npm and pnpm still run `npm -- install x` as an install, and yarn
+#   takes the command from before --, so `yarn global -- add x` is a global
+#   add. Bare `yarn` is an install (yarn v1).
 _safe_pkg_subcmd() {
-  local manager="$1" install native valueflags a n skip=0 seen=0 g=0
+  local manager="$1" install native valueflags a n inst skip=0 seen=0 g=0
   shift
   case "$manager" in
     pnpm)
@@ -44,15 +51,26 @@ _safe_pkg_subcmd() {
   native="${native//-/}"
   valueflags=" $(_safe_pkg_valueflags "$manager") "
   for a in "$@"; do
-    if [ "$skip" = 1 ]; then skip=0; continue; fi
     case "$a" in
-      --) break ;;
-      -*=*) continue ;;
-      -*) case "$valueflags" in *" $a "*) skip=1 ;; esac; continue ;;
+      -*=*) skip=0; continue ;;
+      -*)
+        skip=0
+        case "$valueflags" in *" $a "*) skip=1 ;; esac
+        [ "$skip" = 0 ] && _safe_pkg_dir_flag "$manager" "$a" > /dev/null && skip=1
+        continue ;;
     esac
     n="$(printf '%s' "$a" | tr '[:upper:]' '[:lower:]')"
     n="${n//-/}"
     [ -z "$n" ] && continue
+    inst=0
+    case "$install" in *" $n "*) inst=1 ;; esac
+    if [ "$inst" = 0 ] && [ "$manager" = "npm" ] && [ "${#n}" -ge 2 ]; then
+      case "$install" in *" $n"*) inst=1 ;; esac
+    fi
+    if [ "$skip" = 1 ]; then
+      skip=0
+      [ "$inst" = 1 ] || continue
+    fi
     seen=1
     # yarn v1 spells a global install as a subcommand; only the mutating ones
     # are install-class (refused in _safe_pkg_dispatch), `yarn global list` is not.
@@ -62,10 +80,7 @@ _safe_pkg_subcmd() {
     fi
     if [ "$manager" = "yarn" ] && [ "$n" = "global" ]; then g=1; continue; fi
     case "$native" in *" $n "*) return 0 ;; esac
-    case "$install" in *" $n "*) printf '%s\n' "$n"; return 0 ;; esac
-    if [ "$manager" = "npm" ] && [ "${#n}" -ge 2 ]; then
-      case "$install" in *" $n"*) printf '%s\n' "$n"; return 0 ;; esac
-    fi
+    if [ "$inst" = 1 ]; then printf '%s\n' "$n"; return 0; fi
   done
   if [ "$manager" = "yarn" ] && [ "$seen" = 0 ]; then
     for a in "$@"; do
@@ -418,6 +433,81 @@ _safe_pkg_is_global() {
   return 1
 }
 
+# _safe_pkg_dir_flag manager [args...]
+#   Prints the first flag that points the package manager at another
+#   directory and succeeds; fails when there is none. The scan and the sandbox
+#   use this directory's lockfile and manifests, so an install pointed
+#   elsewhere would not be the tree that was checked. npm (nopt) and pnpm
+#   strip any number of leading dashes and then try the name as a long option
+#   and as a cluster of single-letter flags, so -prefix, ---dir and --DC all
+#   count. Spellings refused, each also as --flag=DIR (checked against
+#   npm 10.9, pnpm 9.15 and 10.33, yarn 1.22):
+#     npm   -C, --prefix and its abbreviation --prefi, a cluster with C (-DC)
+#     pnpm  -C, --dir, --prefix/--prefi, --lockfile-dir and its older name
+#           --lockfile-directory with every prefix of it the parser expands,
+#           --shrinkwrap-directory, a cluster with C, and --config.dir,
+#           --config.prefix, --config.lockfile-dir in any key spelling
+#           (lockfileDir, lockfile_dir). pnpm rejects --lockfile-d and
+#           --lockfile-di as ambiguous; they are refused all the same.
+#     yarn  --cwd
+#   No long option of either parser has a capital C, so any name of letters
+#   only with a C in it is a cluster that sets -C. Words after -- are
+#   arguments, not flags.
+_safe_pkg_dir_flag() {
+  local manager="$1" a name key
+  shift
+  for a in "$@"; do
+    case "$a" in
+      --) return 1 ;;
+      -*) ;;
+      *) continue ;;
+    esac
+    name="${a%%=*}"
+    if [ "$manager" = "yarn" ]; then
+      [ "$name" = "--cwd" ] || continue
+    else
+      name="${name#"${name%%[!-]*}"}"
+      case "$manager:$name" in
+        npm:prefi|npm:prefix) ;;
+        pnpm:dir|pnpm:prefi|pnpm:prefix|pnpm:shrinkwrap-directory) ;;
+        pnpm:lockfile-d|pnpm:lockfile-di|pnpm:lockfile-dir|pnpm:lockfile-dire|pnpm:lockfile-direc) ;;
+        pnpm:lockfile-direct|pnpm:lockfile-directo|pnpm:lockfile-director|pnpm:lockfile-directory) ;;
+        pnpm:config.*)
+          key="$(printf '%s' "${name#config.}" | tr '[:upper:]' '[:lower:]' | tr -d '_-')"
+          case "$key" in dir|prefix|lockfiledir) ;; *) continue ;; esac ;;
+        *:|*:*[!A-Za-z]*) continue ;;
+        *:*C*) ;;
+        *) continue ;;
+      esac
+    fi
+    printf '%s\n' "$a"
+    return 0
+  done
+  return 1
+}
+
+# _safe_pkg_lockfile_dir_setting dir
+#   Prints the file and key of the first setting in dir's .npmrc or
+#   pnpm-workspace.yaml that moves pnpm's lockfile, and succeeds; fails when
+#   there is none. Phase 1 would write the lockfile there, and the malware
+#   scan and audit would read the old one. pnpm 9 and 10 read lockfile-dir
+#   from .npmrc, pnpm 10 and later read lockfileDir from pnpm-workspace.yaml;
+#   the image's pnpm hands off to the project's packageManager pin, so any of
+#   them can run. The older .npmrc names are not read by pnpm 9-11 and are
+#   refused all the same. Comment lines do not count.
+_safe_pkg_lockfile_dir_setting() {
+  local dir="$1" key
+  if [ -f "$dir/.npmrc" ]; then
+    key="$(grep -iE '^[[:space:]]*["'\'']?(lockfile-dir|lockfile-directory|shrinkwrap-directory)["'\'']?[[:space:]]*=' "$dir/.npmrc" | head -n 1 | grep -ioE 'lockfile-directory|shrinkwrap-directory|lockfile-dir' | head -n 1)"
+    [ -n "$key" ] && { printf '%s %s\n' .npmrc "$key"; return 0; }
+  fi
+  if [ -f "$dir/pnpm-workspace.yaml" ]; then
+    key="$(grep -iE '^[^#]*lockfile-?dir["'\'']?[[:space:]]*:' "$dir/pnpm-workspace.yaml" | head -n 1 | grep -ioE 'lockfile-?dir' | head -n 1)"
+    [ -n "$key" ] && { printf '%s %s\n' pnpm-workspace.yaml "$key"; return 0; }
+  fi
+  return 1
+}
+
 # _safe_pkg_dispatch manager lockfile workspace_file manifest_files [pkg-manager-args...]
 #   Shared entry point for the install-class path of every manager wrapper.
 #   Strips the safe-pnpm-only `--socket` flag from the pass-through args (so it
@@ -446,9 +536,28 @@ _safe_pkg_dispatch() {
     count=$((count - 1))
   done
 
+  # npm, pnpm and yarn stop reading flags at --, and npm and pnpm at any
+  # longer run of dashes too.
+  for arg in "$@"; do
+    case "$arg" in
+      --*)
+        [ -n "${arg//-/}" ] && continue
+        echo "✗ safe-pnpm: $arg is not supported through the wrapper; the sandbox adds --ignore-scripts and its other flags after your arguments, and after $arg they would not be read as flags." >&2
+        echo "  To run it without the safety checks: command $manager$(printf ' %q' "$@")" >&2
+        return 1 ;;
+    esac
+  done
+
   if _safe_pkg_is_global "$@"; then
     echo "✗ safe-pnpm: global installs are not supported through the wrapper; the sandbox would install into a throwaway container and change nothing on this machine." >&2
-    echo "  To install globally without the safety checks, run: command $manager $*" >&2
+    echo "  To install globally without the safety checks, run: command $manager$(printf ' %q' "$@")" >&2
+    return 1
+  fi
+
+  local dir_flag
+  if dir_flag="$(_safe_pkg_dir_flag "$manager" "$@")"; then
+    echo "✗ safe-pnpm: $dir_flag is not supported through the wrapper; the scan checks this directory's lockfile, so an install in another directory would go unchecked." >&2
+    echo "  cd into that directory and run the command there. To run it without the safety checks: command $manager$(printf ' %q' "$@")" >&2
     return 1
   fi
 
@@ -722,6 +831,12 @@ _safe_pkg_sandbox() {
       done
     fi
   )
+
+  local lockfile_setting
+  if [ "$manager" = "pnpm" ] && lockfile_setting="$(_safe_pkg_lockfile_dir_setting "$tmpdir")"; then
+    echo "✗ safe-pnpm: ${workspace_root}/${lockfile_setting%% *} sets ${lockfile_setting#* }, so pnpm would write the lockfile somewhere other than the one the scan checks. Remove the setting and run the command again." >&2
+    return 1
+  fi
 
   local workdir="/app${rel_path:+/$rel_path}"
 

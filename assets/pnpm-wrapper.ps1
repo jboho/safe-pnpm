@@ -17,19 +17,30 @@ function global:pnpm {
     # Walk the non-flag words: an install word or alias is the subcommand, a
     # known non-install command means native, and anything else may be the value
     # of a flag missing from $valueFlags, so try the next word (fails closed).
+    # The value of a listed flag or a directory flag is skipped, unless it is an
+    # install word or a flag. See _safe_pkg_subcmd in _safe_pkg_shared.sh.
     $cmd = ''
     $seen = 0
     $skip = $false
+    # Without _Safe_Pkg_Dir_Flag every unlisted flag counts as taking a value,
+    # and the install is refused below.
+    $hasDirFlag = [bool](Get-Command _Safe_Pkg_Dir_Flag -ErrorAction SilentlyContinue)
     foreach ($a in $args) {
-        if ($skip) { $skip = $false; continue }
-        if ($a -eq '--') { break }
-        if ($a -like '-*=*') { continue }
-        if ($a -like '-*') { if ($valueFlags -ccontains $a) { $skip = $true }; continue }
+        if ($a -like '-*=*') { $skip = $false; continue }
+        if ($a -like '-*') {
+            $skip = ($valueFlags -ccontains $a) -or -not $hasDirFlag -or [bool](_Safe_Pkg_Dir_Flag -Manager pnpm -PassArgs @($a))
+            continue
+        }
         $n = $a.ToLower() -replace '-',''
         if (-not $n) { continue }
+        $inst = $installN -contains $n
+        if ($skip) {
+            $skip = $false
+            if (-not $inst) { continue }
+        }
         $seen = 1
         if ($nativeN -contains $n) { break }
-        if ($installN -contains $n) { $cmd = $n; break }
+        if ($inst) { $cmd = $n; break }
     }
     if (-not $cmd) {
         $pnpmExe = (Get-Command pnpm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
@@ -41,9 +52,36 @@ function global:pnpm {
     $socketFlag = $args -contains '--socket'
     $passArgs = @($args | Where-Object { $_ -ne '--socket' })
 
+    # A missing function is a non-terminating error in PowerShell, so a check
+    # that calls one would print it and let the install through.
+    if (@(Get-Command _Safe_Pkg_Is_Global, _Safe_Pkg_Dir_Flag, _Safe_Pkg_Quote_Args, _Safe_Pkg_Lockfile_Dir_Setting -ErrorAction SilentlyContinue).Count -ne 4) {
+        Write-Host "✗ safe-pnpm: _safe_pkg_shared.ps1 is missing or out of date; run safe-pnpm update." -ForegroundColor Red
+        $global:LASTEXITCODE = 1
+        return
+    }
+
+    # npm, pnpm and yarn stop reading flags at --, and npm and pnpm at any
+    # longer run of dashes too. PowerShell drops an unquoted -- from $args,
+    # but not a quoted or splatted one.
+    $dashes = @($passArgs | Where-Object { $_ -match '^-{2,}$' })
+    if ($dashes.Count) {
+        Write-Host "✗ safe-pnpm: $($dashes[0]) is not supported through the wrapper; the sandbox adds --ignore-scripts and its other flags after your arguments, and after $($dashes[0]) they would not be read as flags." -ForegroundColor Red
+        Write-Host "  To run it without the safety checks: pnpm.cmd $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
+        $global:LASTEXITCODE = 1
+        return
+    }
+
     if (_Safe_Pkg_Is_Global $passArgs) {
         Write-Host "✗ safe-pnpm: global installs are not supported through the wrapper; the sandbox would install into a throwaway container and change nothing on this machine." -ForegroundColor Red
-        Write-Host "  To install globally without the safety checks, run: pnpm.cmd $passArgs" -ForegroundColor Red
+        Write-Host "  To install globally without the safety checks, run: pnpm.cmd $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
+        $global:LASTEXITCODE = 1
+        return
+    }
+
+    $dirFlag = _Safe_Pkg_Dir_Flag -Manager pnpm -PassArgs $passArgs
+    if ($dirFlag) {
+        Write-Host "✗ safe-pnpm: $dirFlag is not supported through the wrapper; the scan checks this directory's lockfile, so an install in another directory would go unchecked." -ForegroundColor Red
+        Write-Host "  cd into that directory and run the command there. To run it without the safety checks: pnpm.cmd $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
         $global:LASTEXITCODE = 1
         return
     }
@@ -104,6 +142,13 @@ function global:pnpm {
                 })
         }
         Pop-Location
+
+        $lockfileSetting = @(_Safe_Pkg_Lockfile_Dir_Setting -Dir $tmpDir.FullName)
+        if ($lockfileSetting.Count -eq 2) {
+            Write-Host "✗ safe-pnpm: $(Join-Path $workspaceRoot $lockfileSetting[0]) sets $($lockfileSetting[1]), so pnpm would write the lockfile somewhere other than the one the scan checks. Remove the setting and run the command again." -ForegroundColor Red
+            $global:LASTEXITCODE = 1
+            return
+        }
 
         $workdir = if ($relPath) { "/app/$($relPath -replace '\\','/')" } else { "/app" }
         # Per-manager store kept under /app so phase 2 resolves fully offline.
