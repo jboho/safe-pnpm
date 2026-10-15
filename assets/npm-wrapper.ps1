@@ -31,7 +31,7 @@ function global:npm {
             $skip = ($valueFlags -ccontains $a) -or -not $hasDirFlag -or [bool](_Safe_Pkg_Dir_Flag -Manager npm -PassArgs @($a))
             continue
         }
-        $n = $a.ToLower() -replace '-',''
+        $n = "$a".ToLower() -replace '-',''
         if (-not $n) { continue }
         $inst = ($installN -contains $n) -or ($n.Length -ge 2 -and [bool]($installN | Where-Object { $_.StartsWith($n) }))
         if ($skip) {

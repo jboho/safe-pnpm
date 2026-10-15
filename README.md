@@ -46,6 +46,7 @@ Published to npm as `@jboho/safe-pnpm` (first public release 2026.10.2, with pro
 - Unless your uid is 1000 (the image's `node` user), it has no user name inside the image, so a build script that looks up the current user (`whoami`, `os.userInfo()`) gets an error.
 - The CVE audit runs on the host after the fetch, on a throwaway copy of the resolved manifests and lockfile plus your registry config. It does not run in your project directory, and pnpm skips `.pnpmfile.cjs` for it. A `yarn-path` line in `.yarnrc` is dropped for the audit.
 - PowerShell is the least-tested shell: the wrappers and copy-back are tested on Linux pwsh only.
+- PowerShell removes an unquoted `--` before the wrapper function sees it, so `npm run build -- --watch` reaches npm as `npm run build --watch`. Quote it to keep it: `npm run build '--' --watch`.
 - Requires Docker; developed and tested on macOS and Linux CI. Windows is not tested.
 
 ## Install

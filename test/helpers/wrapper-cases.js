@@ -1,0 +1,123 @@
+// Command lines each shell's wrappers must classify the same way. The sh,
+// fish and PowerShell tests all read these tables.
+
+const SCANNED = [
+  "pnpm install",
+  "pnpm i",
+  "pnpm up",
+  "pnpm upgrade",
+  "pnpm it",
+  "pnpm rm x",
+  "pnpm un x",
+  "pnpm uninstall x",
+  "pnpm --filter app add x",
+  "pnpm -C web install",
+  "pnpm -r install",
+  "npm ci",
+  "npm add lodash",
+  "npm clean-install",
+  "npm cit",
+  "npm rm x",
+  "npm --prefix web ci",
+  "npm --workspace a install x",
+  "yarn add x",
+  "yarn",
+  "yarn --cwd web add x",
+  "yarn upgrade-interactive",
+  // aliases and abbreviations reported in review
+  "pnpm ic",
+  "pnpm clean-install",
+  "pnpm uni x",
+  "pnpm unlink",
+  "npm u",
+  "npm sit",
+  "npm clean-install-test",
+  "npm uninst x",
+  "npm updat",
+  "npm installTest",
+  // value-taking flags, listed and unlisted
+  "pnpm --store-dir /s add x",
+  "pnpm --registry http://r add y",
+  "pnpm --network-concurrency 4 install",
+  "pnpm --some-future-flag value add x",
+  "pnpm --filter test add x",
+  "pnpm -rC web add x",
+  "npm --audit-level high i",
+  "npm --lockfile-version 3 i",
+  "npm --some-future-flag value i",
+  "yarn --emoji false add x",
+  "yarn --some-future-flag value add x",
+  "pnpm --socket install",
+  "yarn global add x",
+  "yarn --silent global add x",
+  "yarn global remove x",
+  // -- ends the flags but not the search for the command
+  "npm -- install x",
+  "pnpm -- install x",
+  "yarn global -- add x",
+  // a directory named like a command is still a flag's value
+  "npm -C test install",
+  "npm --prefix bin install",
+  "pnpm --prefix server install",
+  // pnpm's string flags never take a flag as their value
+  "pnpm -C --dir server install",
+  "pnpm --reporter --dir server install",
+];
+
+const NATIVE = [
+  "pnpm",
+  "pnpm run build",
+  "pnpm --filter app run add",
+  "pnpm exec install",
+  "npm run install",
+  "npm --version",
+  "npm test",
+  "yarn --version",
+  "yarn run x",
+  "yarn --silent --version",
+  "yarn --json -h",
+  "yarn build",
+  "pnpm --some-future-flag value run add",
+  "npm cache clean",
+  "npm c set x y",
+  "yarn global list",
+  "yarn global bin",
+  "yarn global",
+  "npm -C docs run build",
+  "pnpm --dir test run build",
+];
+
+const GLOBAL = [
+  ["-g", "pkg"],
+  ["pkg", "-g"],
+  ["-gD", "pkg"],
+  ["--global", "pkg"],
+  ["--location=global", "pkg"],
+  ["--location", "global", "pkg"],
+  ["--global=true", "pkg"],
+  ["--global=1", "pkg"],
+  ["--prefix", "/x", "-g", "pkg"],
+  ["-gg", "pkg"],
+  ["global", "add", "pkg"],
+  ["global", "remove", "pkg"],
+  ["global", "upgrade"],
+];
+const LOCAL = [
+  ["pkg"],
+  ["--save-dev", "pkg"],
+  ["--location", "project", "pkg"],
+  ["--", "-g"],
+  ["--legacy-peer-deps", "pkg"],
+  ["--global=false", "pkg"],
+  ["global", "list"],
+];
+
+// Refused end to end by the wrapper function itself, before any docker call.
+const WRAPPER_CASES = [
+  ["npm", ["install", "-g", "pkg"]],
+  ["npm", ["install", "--global=true", "pkg"]],
+  ["pnpm", ["add", "-g", "pkg"]],
+  ["yarn", ["global", "add", "pkg"]],
+];
+
+module.exports = { SCANNED, NATIVE, GLOBAL, LOCAL, WRAPPER_CASES };
