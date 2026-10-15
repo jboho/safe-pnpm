@@ -23,7 +23,7 @@
     "assets/"
   ],
   "dependencies": {
-    "@socketsecurity/cli": "1.4.1"
+    "@socketsecurity/cli": "1.8.1"
   },
   "engines": {
     "node": ">=16"
