@@ -8,12 +8,23 @@
 # Note: yarn v1 only. berry (v2+) requires separate handling.
 
 function yarn
+    # fish autoloads _safe_pkg_prescan.fish only by that name; it defines the
+    # other _safe_pkg_ helpers, so load it before calling any of them, and
+    # refuse the command when it is missing.
+    functions -q _safe_pkg_prescan
+    or begin
+        echo "✗ safe-pnpm: _safe_pkg_prescan.fish not installed — run `safe-pnpm update`." >&2
+        return 1
+    end
+    _safe_pkg_runner_check yarn $argv
+    or return 1
+
     # Walk the non-flag words: an install word or alias is the subcommand, a
     # known non-install command means native, and anything else may be the value
     # of a flag missing from value_flags, so try the next word (fails closed).
     set -l install_cmds install add remove upgrade upgrade-interactive
     set -l native_cmds run test start publish pack create init list ls info why outdated audit cache check config link unlink login logout owner tag team version versions bin generate-lock-entry import licenses autoclean help exec node
-    set -l value_flags --cwd --registry --modules-folder --cache-folder --preferred-cache-folder --global-folder --link-folder --network-concurrency --network-timeout --proxy --https-proxy --mutex --use-yarnrc --cafile --otp
+    set -l value_flags (_safe_pkg_valueflags yarn)
     set -l ninstall (string replace -a - '' -- $install_cmds)
     set -l nnative (string replace -a - '' -- $native_cmds)
     set -l subcmd

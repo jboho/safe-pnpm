@@ -4,9 +4,10 @@
 //
 // The first path segment of SAFE_PNPM_OSV_API picks a behaviour: ok, http500,
 // badjson, short (one result too few), paged (MAL only on the second page) or
-// nodetail (advisory lookups fail). Package names pick the answer: mal-* has a
-// MAL advisory, withdrawn-* a withdrawn one, cve-* only a GHSA; anything else
-// is clean. A scope is ignored (@acme/mal-x counts as mal-).
+// nodetail (advisory lookups fail). Package names pick the answer: mal-* and
+// create-mal-* (what `create mal-x` fetches) have a MAL advisory, withdrawn-*
+// a withdrawn one, cve-* only a GHSA; anything else is clean. A scope is
+// ignored (@acme/mal-x counts as mal-).
 const http = require("node:http");
 const { spawn } = require("node:child_process");
 
@@ -23,7 +24,7 @@ const ADVISORIES = {
 
 function answer(query, mode) {
   const name = query.package.name.replace(/^@[^/]+\//, "");
-  if (name.startsWith("mal-")) {
+  if (name.startsWith("mal-") || name.startsWith("create-mal-")) {
     if (mode === "paged" && !query.page_token) {
       return { vulns: [{ id: "GHSA-page-one" }], next_page_token: "page-2" };
     }

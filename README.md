@@ -122,7 +122,7 @@ When you run an install-class command:
 - `pnpm dlx PKG`, `pnpm create PKG`
 - `yarn create PKG`, and `yarn dlx PKG` on yarn 2+
 
-In bash and zsh the wrappers look up the version the command would fetch (`npm view`, which reads registry metadata and runs no package code), check that `name@version` against [OSV](https://osv.dev)'s malicious-package advisories, and refuse to run the command on a hit. A `create` command checks the `create-` package the manager would fetch. If OSV or the lookup fails the command warns and runs; `SAFE_PNPM_OSV_STRICT=1` blocks instead. Paths, URLs, git specs and packages in private scopes are not checked. In fish and PowerShell these commands are not intercepted at all, and `npx` is wrapped only when the npm wrapper is enabled. OSV only knows packages already reported as malicious, so treat anything new with care and check the name yourself.
+In bash, zsh and fish the wrappers look up the version the command would fetch (`npm view`, which reads registry metadata and runs no package code), check that `name@version` against [OSV](https://osv.dev)'s malicious-package advisories, and refuse to run the command on a hit. A `create` command checks the `create-` package the manager would fetch. If OSV or the lookup fails the command warns and runs; `SAFE_PNPM_OSV_STRICT=1` blocks instead. Paths, URLs, git specs and packages in private scopes are not checked. In PowerShell these commands are not intercepted at all. In bash, zsh and fish, `npx` is wrapped only when the npm wrapper is enabled. OSV only knows packages already reported as malicious, so treat anything new with care and check the name yourself.
 
 1. **Pre-install scan** — [Socket behavioral analysis](./docs/socket.md) if configured.
 2. **Copy only manifests** — `package.json`, the lockfile, workspace files, and `.npmrc` / `.yarnrc` go into a temp directory. Source files, `.env`, and secrets never leave the host.
@@ -255,7 +255,7 @@ scripts on the host):
 | zsh | `~/.zshrc` |
 | bash (macOS) | `~/.bash_profile` |
 | bash (Linux) | `~/.bashrc` |
-| fish | `~/.config/fish/functions/{pnpm,npm,yarn}.fish` (one per enabled manager) |
+| fish | `~/.config/fish/functions/{pnpm,npm,yarn}.fish` (one per enabled manager), plus `npx.fish` with npm |
 | PowerShell | `~/Documents/PowerShell/Microsoft.PowerShell_profile.ps1` |
 
 ---

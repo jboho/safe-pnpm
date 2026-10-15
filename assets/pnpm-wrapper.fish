@@ -7,12 +7,23 @@
 # Escape hatch: command pnpm install bypasses to native pnpm.
 
 function pnpm
+    # fish autoloads _safe_pkg_prescan.fish only by that name; it defines the
+    # other _safe_pkg_ helpers, so load it before calling any of them, and
+    # refuse the command when it is missing.
+    functions -q _safe_pkg_prescan
+    or begin
+        echo "✗ safe-pnpm: _safe_pkg_prescan.fish not installed — run `safe-pnpm update`." >&2
+        return 1
+    end
+    _safe_pkg_runner_check pnpm $argv
+    or return 1
+
     # Walk the non-flag words: an install word or alias is the subcommand, a
     # known non-install command means native, and anything else may be the value
     # of a flag missing from value_flags, so try the next word (fails closed).
     set -l install_cmds install i add update up upgrade ci clean-install ic install-clean fetch remove rm un uninstall uni install-test it unlink dislink
     set -l native_cmds run exec dlx test t start stop restart publish pack list ls ll la why outdated audit config c get set init create link ln rebuild rb approve-builds store root bin patch patch-commit patch-remove import prune dedupe deploy licenses help env self-update setup doctor server cat-file cat-index find-hash
-    set -l value_flags -C --dir -F --filter --filter-prod --workspace-dir --reporter --loglevel --config --store-dir --state-dir --registry --lockfile-dir --network-concurrency --fetch-timeout --workspace-concurrency --test-pattern --changed-files-ignore-pattern --http-proxy --https-proxy --no-proxy --user-agent
+    set -l value_flags (_safe_pkg_valueflags pnpm)
     set -l ninstall (string replace -a - '' -- $install_cmds)
     set -l nnative (string replace -a - '' -- $native_cmds)
     set -l subcmd

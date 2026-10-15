@@ -135,12 +135,169 @@ function _safe_pkg_socket_scan
     return 0
 end
 
-# Checks the lockfile the fetch phase resolved against OSV's malicious-package
-# advisories. See _safe_pkg_shared.sh for the full rationale: findings always
-# block, because a MAL- advisory marks that exact version as malware; failures
-# (OSV unreachable, unreadable lockfile, scanner not installed) warn, and
-# SAFE_PNPM_OSV_STRICT=1 makes them block too.
-function _safe_pkg_malware_scan --argument lockfile
+# _safe_pkg_valueflags manager
+#   Prints the global flags that take a separate value, one per line, so the
+#   wrappers and the runner finder can skip the value instead of reading it as
+#   a command. npx takes npm's list. Same lists as _safe_pkg_valueflags in
+#   _safe_pkg_shared.sh.
+function _safe_pkg_valueflags --argument manager
+    switch $manager
+        case pnpm
+            printf '%s\n' -C --dir -F --filter --filter-prod --workspace-dir --reporter --loglevel --config --store-dir --state-dir --registry --lockfile-dir --network-concurrency --fetch-timeout --workspace-concurrency --test-pattern --changed-files-ignore-pattern --http-proxy --https-proxy --no-proxy --user-agent
+        case npm npx
+            printf '%s\n' --prefix -w --workspace --registry --cache --userconfig --globalconfig --loglevel --otp --scope --omit --include --install-strategy --tag --before --audit-level --fetch-retries --lockfile-version --min-release-age --cpu --os --libc --script-shell --node-options --maxsockets
+        case yarn
+            printf '%s\n' --cwd --registry --modules-folder --cache-folder --preferred-cache-folder --global-folder --link-folder --network-concurrency --network-timeout --proxy --https-proxy --mutex --use-yarnrc --cafile --otp
+    end
+end
+
+# _safe_pkg_runner_specs manager args...
+#   For the commands that download a package and run it (npx, npm exec,
+#   npm init|create, pnpm dlx|create, yarn dlx|create) prints the package specs
+#   that will be fetched, one per line, and returns 0. Returns 1 for any other
+#   command. See _safe_pkg_runner_specs in _safe_pkg_shared.sh for the rules
+#   (-p/--package, unknown flags failing closed, the create- prefix).
+function _safe_pkg_runner_specs
+    set -l manager $argv[1]
+    set -e argv[1]
+    set -l value_flags (_safe_pkg_valueflags $manager)
+    set -l mode
+    set -l skip 0
+    if test "$manager" = npx
+        set mode exec
+    else
+        while set -q argv[1]
+            set -l a $argv[1]
+            set -e argv[1]
+            if test $skip -eq 1
+                set skip 0
+                continue
+            end
+            switch $a
+                case --
+                    break
+                case '-*=*'
+                    continue
+                case '-*'
+                    contains -- $a $value_flags; and set skip 1
+                    continue
+            end
+            set -l n (string lower -- $a)
+            switch "$manager:$n"
+                case npm:exec npm:x pnpm:dlx yarn:dlx
+                    set mode exec
+                case npm:init npm:create npm:innit pnpm:create yarn:create
+                    set mode create
+            end
+            break
+        end
+        test -n "$mode"; or return 1
+    end
+
+    # skip: 0, 1 (drop the next word) or pkg (the next word is a package).
+    set skip 0
+    set -l extra 0
+    set -l npos 0
+    set -l pkgs
+    set -l pos
+    while set -q argv[1]
+        set -l a $argv[1]
+        set -e argv[1]
+        if test "$skip" = pkg
+            set -a pkgs $a
+            set skip 0
+            continue
+        end
+        if test "$skip" = 1
+            set skip 0
+            continue
+        end
+        switch $a
+            case --
+                continue
+            case -p --package
+                set skip pkg
+                continue
+            case '--package=*' '-p=*'
+                set -a pkgs (string replace -r '^[^=]*=' '' -- $a)
+                continue
+            case -c --call
+                set skip 1
+                continue
+            case '-*=*'
+                continue
+            case -y --yes -n --no --no-install --ignore-existing -s --shell-mode --silent -q --quiet --verbose --json --offline --prefer-offline -ws --workspaces --no-workspaces --include-workspace-root --no-color --color --no-fund --no-audit
+                continue
+            case '-*'
+                if contains -- $a $value_flags
+                    set skip 1
+                else
+                    set extra 1
+                end
+                continue
+        end
+        set npos (math $npos + 1)
+        test (count $pkgs) -eq 0; and set -a pos $a
+        if test $extra -eq 1; and test $npos -lt 2
+            continue
+        end
+        break
+    end
+
+    if test "$mode" = create
+        for line in $pos
+            test -z "$line"; and continue
+            set -l scope ""
+            set -l rest $line
+            if string match -q -- '@*/*' $line
+                set scope (string replace -r '/.*' '' -- $line)/
+                set rest (string replace -r '^[^/]*/' '' -- $line)
+            else if string match -q -- '@*' $line
+                # `create @scope[@version]` runs @scope/create
+                set rest (string sub -s 2 -- $line)
+                set -l name (string replace -r '@.*' '' -- $rest)
+                set -l ver (string replace -r '^[^@]*' '' -- $rest)
+                printf '%s\n' "@$name/create$ver"
+                continue
+            end
+            printf '%s\n' "$scope"create-"$rest"
+            string match -q -- 'create-*' $rest; and printf '%s\n' $line
+        end
+        return 0
+    end
+    set -q pkgs[1]; and printf '%s\n' $pkgs
+    set -q pos[1]; and printf '%s\n' $pos
+    return 0
+end
+
+# _safe_pkg_runner_check manager args...
+#   Runs before a download-and-run command. Not one of them: succeeds at once.
+#   Otherwise checks the packages it would fetch against OSV (malware-scan.js
+#   --specs) and fails, so the caller does not run the command, when one has a
+#   MAL- advisory. A scan that cannot run warns, or blocks under
+#   SAFE_PNPM_OSV_STRICT=1 / SAFE_PNPM_STRICT=1, like the install path.
+#   `set` keeps the status of its command substitution, which tells "not a
+#   runner command" apart from a runner with no package spec.
+function _safe_pkg_runner_check
+    set -l specs (_safe_pkg_runner_specs $argv)
+    or return 0
+    set -l args
+    for spec in $specs
+        test -n "$spec"; and set -a args $spec
+    end
+    set -q args[1]; or return 0
+    _safe_pkg_malware_scan --specs $args
+end
+
+# _safe_pkg_malware_scan lockfile
+# _safe_pkg_malware_scan --specs spec...
+#   Checks the lockfile the fetch phase resolved, or the packages a
+#   download-and-run command would fetch, against OSV's malicious-package
+#   advisories. See _safe_pkg_shared.sh for the full rationale: findings always
+#   block, because a MAL- advisory marks that exact version as malware; failures
+#   (OSV unreachable, unreadable lockfile, failed version lookup, scanner not
+#   installed) warn, and SAFE_PNPM_OSV_STRICT=1 makes them block too.
+function _safe_pkg_malware_scan
     set -l scanner "$HOME/.safe-pnpm/malware-scan.js"
     set -l reason
     set -l verdict 4
@@ -148,7 +305,7 @@ function _safe_pkg_malware_scan --argument lockfile
     if test -f $scanner
         echo "→ Malware scan (OSV)..." >&2
         # string collect keeps the multi-line findings list as one value.
-        set reason (node $scanner $lockfile 2>&1 | string collect)
+        set reason (node $scanner $argv 2>&1 | string collect)
         set verdict $pipestatus[1]
     else
         set reason "Malware scan not installed — run `safe-pnpm setup`."
@@ -160,7 +317,11 @@ function _safe_pkg_malware_scan --argument lockfile
     end
     if test $verdict -eq 3
         printf '✗ %s\n' $reason >&2
-        echo "✗ safe-pnpm: install blocked; nothing was built or copied back." >&2
+        if test "$argv[1]" = --specs
+            echo "✗ safe-pnpm: not running it; no package code was executed." >&2
+        else
+            echo "✗ safe-pnpm: install blocked; nothing was built or copied back." >&2
+        end
         return 1
     end
     if test "$SAFE_PNPM_OSV_STRICT" = "1"
