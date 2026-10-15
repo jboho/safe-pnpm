@@ -136,6 +136,14 @@ for (const manager of ["npm", "pnpm", "yarn"]) {
   });
 }
 
+// Same check as two-phase.test.js: pnpm before 11.3 rejects --trust-lockfile.
+test("ps1 pnpm: phase 2 passes trust-lockfile as --config.trust-lockfile=true", { skip }, () => {
+  const { out, runs } = runPs1("pnpm");
+  assert.equal(runs.length, 2, out);
+  assert.match(runs[1], /--config\.trust-lockfile=true/);
+  assert.doesNotMatch(runs[1], /(^|\s)--trust-lockfile/);
+});
+
 for (const manager of ["npm", "pnpm", "yarn"]) {
   test(`ps1 ${manager}: audit runs after the fetch, before the build container`, { skip }, () => {
     const { out, read } = runPs1(manager);

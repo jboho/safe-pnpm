@@ -38,7 +38,7 @@ safe by default in the fetch phase).
 |---------|----------------------------------|-------------------------------------------------|-----------------------------------|
 | npm     | `npm … --ignore-scripts`         | `npm rebuild`                                    | `--cache /app/.safe-store`        |
 | yarn    | `yarn … --ignore-scripts`        | `yarn install --offline --force`                | `--cache-folder /app/.safe-store` |
-| pnpm    | `pnpm … --ignore-scripts`        | `pnpm install --offline --trust-lockfile`       | `--config.store-dir=/app/.safe-store` |
+| pnpm    | `pnpm … --ignore-scripts`        | `pnpm install --offline --config.trust-lockfile=true` | `--config.store-dir=/app/.safe-store` |
 
 The store/cache must live under the shared `/app` volume so phase 2 resolves with
 no network.
@@ -51,6 +51,14 @@ no network.
   that calls `registry.npmjs.org` even under `--offline`; with `--network none`
   it hangs on retries. `--trust-lockfile` skips it — safe in phase 2 because
   phase 1 already resolved with network.
+- The image's pnpm 11 hands off to the version a project pins in
+  `packageManager`. pnpm before 11.3 (where `trustLockfile` was added) rejects
+  `--trust-lockfile` as an unknown option, so phase 2 failed for those projects.
+  The flag is passed as `--config.trust-lockfile=true`: pnpm 8.15.9, 9.15.9,
+  10.34.7 and 11.2.2 accept it as an unknown setting (phase 2 exit 0, shared
+  HOME so a warm verification cache), and pnpm 11.5.3 honours it (cold verification cache, `--network none`:
+  exit 0 in ~1s with it, exit 1 with `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION`
+  after ~4 minutes without it). Probed 2026-10-15.
 - **pnpm 11** blocks *dependency* build scripts by default (`approve-builds`
   allowlist) and no longer reads the `pnpm` field in `package.json`. So for pnpm,
   dependency lifecycle scripts do not run in the sandbox at all unless the user

@@ -706,10 +706,12 @@ _safe_pkg_sandbox() {
 
   # Per-manager store/cache kept under /app so phase 2 resolves fully offline,
   # plus the phase-1 fetch flags and the phase-2 build command.
+  # trust-lockfile goes through --config. because the image's pnpm hands off
+  # to a packageManager pin, and pnpm before 11.3 rejects --trust-lockfile.
   local store_flag phase2_cmd
   case "$manager" in
     pnpm) store_flag="--config.store-dir=/app/.safe-store"
-          phase2_cmd="install --offline --trust-lockfile $store_flag" ;;
+          phase2_cmd="install --offline --config.trust-lockfile=true $store_flag" ;;
     npm)  store_flag="--cache /app/.safe-store"
           phase2_cmd="rebuild $store_flag" ;;
     yarn) store_flag="--cache-folder /app/.safe-store"
