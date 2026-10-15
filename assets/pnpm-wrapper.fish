@@ -205,7 +205,7 @@ function pnpm
 
             # Phase 2: build (no token, no .npmrc auth, network off by default).
             docker run --rm --cap-drop ALL $hardening $user_flags $net_flag -v "$tmpdir:/app" -w $workdir \
-                safe-pnpm:latest pnpm install --offline --trust-lockfile $store_flag
+                safe-pnpm:latest pnpm install --offline --config.trust-lockfile=true $store_flag
             set rc $status
         end
 

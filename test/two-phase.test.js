@@ -299,6 +299,21 @@ for (const [manager, wrapperFile] of [
   });
 }
 
+// The image's pnpm 11 hands off to the version a project pins in
+// packageManager. pnpm before 11.3 rejects --trust-lockfile as an unknown
+// option and fails phase 2; the --config. form is accepted by every version
+// and still skips pnpm 11's networked lockfile verification.
+for (const { shell, ext, available } of SHELLS) {
+  test(`pnpm (${shell}): phase 2 passes trust-lockfile as --config.trust-lockfile=true`, {
+    skip: !available,
+  }, () => {
+    const { read } = runWrapper("pnpm", `pnpm-wrapper.${ext}`, { shell });
+    const p2 = read("run2.args");
+    assert.match(p2, /--config\.trust-lockfile=true/);
+    assert.doesNotMatch(p2, /(^|\s)--trust-lockfile/);
+  });
+}
+
 // Phase 2 runs untrusted build scripts against the /app mount. Anything they
 // write outside node_modules must not reach the host: a rewritten manifest
 // script or lockfile URL would execute natively on the next host command.

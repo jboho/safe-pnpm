@@ -148,7 +148,7 @@ function global:pnpm {
 
                 # Phase 2: build (no token, no .npmrc auth, network off by default).
                 $p2 = @('run','--rm','--cap-drop','ALL') + (_Safe_Pkg_Hardening) + $userFlags + $netFlag +
-                    @('-v',"$($tmpDir.FullName):/app",'-w',$workdir,'safe-pnpm:latest','pnpm','install','--offline','--trust-lockfile') + $storeFlag
+                    @('-v',"$($tmpDir.FullName):/app",'-w',$workdir,'safe-pnpm:latest','pnpm','install','--offline','--config.trust-lockfile=true') + $storeFlag
                 & docker @p2
                 $rc = $LASTEXITCODE
             }
