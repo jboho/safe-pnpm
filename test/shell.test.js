@@ -9,6 +9,7 @@ const {
   hasSourceLine,
   addSourceLine,
   addSourceLines,
+  fishFunctionNames,
   MARKER,
 } = require("../lib/util/shell");
 
@@ -105,4 +106,10 @@ test("addSourceLines() with single manager behaves like addSourceLine()", () => 
   assert.equal(fs.readFileSync(tmp1, "utf8"), fs.readFileSync(tmp2, "utf8"));
   fs.unlinkSync(tmp1);
   fs.unlinkSync(tmp2);
+});
+
+test("fishFunctionNames() adds npx after npm, and only when npm is enabled", () => {
+  assert.deepEqual(fishFunctionNames(["pnpm", "npm"]), ["pnpm", "npm", "npx"]);
+  assert.deepEqual(fishFunctionNames(["pnpm", "yarn"]), ["pnpm", "yarn"]);
+  assert.deepEqual(fishFunctionNames([]), []);
 });

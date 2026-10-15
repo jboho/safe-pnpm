@@ -1,5 +1,6 @@
 # npm Docker isolation wrapper — fish shell
-# Install: copy to ~/.config/fish/functions/npm.fish
+# Install: copy to ~/.config/fish/functions/npm.fish, and again as npx.fish
+# (fish autoloads the npx function below only from a file of that name)
 # (safe-pnpm setup handles this automatically)
 #
 # Intercepts install-class npm commands and runs them in an isolated Docker
@@ -8,9 +9,13 @@
 
 function npm
     # fish autoloads _safe_pkg_prescan.fish only by that name; it defines the
-    # other _safe_pkg_ helpers, so load it before calling any of them. Without
-    # it the runner check is an unknown command and every call is refused.
+    # other _safe_pkg_ helpers, so load it before calling any of them, and
+    # refuse the command when it is missing.
     functions -q _safe_pkg_prescan
+    or begin
+        echo "✗ safe-pnpm: _safe_pkg_prescan.fish not installed — run `safe-pnpm update`." >&2
+        return 1
+    end
     _safe_pkg_runner_check npm $argv
     or return 1
 
@@ -227,6 +232,10 @@ end
 # setup also installs this file as npx.fish, so fish autoloads it for npx.
 function npx
     functions -q _safe_pkg_prescan
+    or begin
+        echo "✗ safe-pnpm: _safe_pkg_prescan.fish not installed — run `safe-pnpm update`." >&2
+        return 1
+    end
     _safe_pkg_runner_check npx $argv
     or return 1
     command npx $argv

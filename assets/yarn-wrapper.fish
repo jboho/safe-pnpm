@@ -9,9 +9,13 @@
 
 function yarn
     # fish autoloads _safe_pkg_prescan.fish only by that name; it defines the
-    # other _safe_pkg_ helpers, so load it before calling any of them. Without
-    # it the runner check is an unknown command and every call is refused.
+    # other _safe_pkg_ helpers, so load it before calling any of them, and
+    # refuse the command when it is missing.
     functions -q _safe_pkg_prescan
+    or begin
+        echo "✗ safe-pnpm: _safe_pkg_prescan.fish not installed — run `safe-pnpm update`." >&2
+        return 1
+    end
     _safe_pkg_runner_check yarn $argv
     or return 1
 

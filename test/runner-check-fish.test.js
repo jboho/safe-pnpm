@@ -291,14 +291,38 @@ test(
     assert.equal(p.status, 0, p.out);
     assert.match(p.calls, /npm view create-vite version --json/);
     assert.match(p.calls, /RAN pnpm create vite app/);
-    // The stub flags only names that start with mal-, which a create- package
-    // never does, so these check what was looked up.
     const y = run("yarn-wrapper.fish", "yarn create react-app dir");
     assert.equal(y.status, 0, y.out);
     assert.match(y.calls, /npm view create-react-app version --json/);
     assert.match(y.calls, /RAN yarn create react-app dir/);
+    // npm init is not install-class, so the wrapper hands it to the npm stub,
+    // which logs it.
     const s = run("npm-wrapper.fish", "npm init @acme@2");
+    assert.equal(s.status, 0, s.out);
     assert.match(s.calls, /npm view @acme\/create@2 version --json/);
+    assert.match(s.calls, /npm init @acme@2/);
+  },
+);
+
+test(
+  "fish: a create command whose create- package is known-malicious is blocked and never runs",
+  opts,
+  () => {
+    for (const [wrapper, line] of [
+      ["npm-wrapper.fish", "npm create mal-x"],
+      ["pnpm-wrapper.fish", "pnpm create mal-x"],
+      ["yarn-wrapper.fish", "yarn create mal-x"],
+    ]) {
+      const r = run(wrapper, line);
+      assert.equal(r.status, 1, `${line}: ${r.out}`);
+      assert.match(r.out, /create-mal-x@1\.2\.3\s+MAL-2099-1/, line);
+      assert.match(
+        r.out,
+        /✗ safe-pnpm: not running it; no package code was executed\./,
+        line,
+      );
+      assert.doesNotMatch(r.calls, /RAN|npm create|DOCKER/, line);
+    }
   },
 );
 
@@ -514,7 +538,12 @@ test(
     fs.rmSync(path.join(fnDir, "_safe_pkg_prescan.fish"));
     for (const line of ["npx cowsay", "npm run build"]) {
       const r = runInstalled(line);
-      assert.notEqual(r.status, 0, `${line}: ${r.out}`);
+      assert.equal(r.status, 1, `${line}: ${r.out}`);
+      assert.match(
+        r.out,
+        /✗ safe-pnpm: _safe_pkg_prescan\.fish not installed — run `safe-pnpm update`/,
+        line,
+      );
       assert.doesNotMatch(r.calls, /RAN|npm run/, line);
     }
   },
