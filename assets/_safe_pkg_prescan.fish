@@ -506,3 +506,55 @@ function _safe_pkg_is_global
     end
     return 1
 end
+
+# _safe_pkg_dir_flag manager args...
+#   Prints the first flag that points the package manager at another directory
+#   and succeeds; fails when there is none. See _safe_pkg_dir_flag in
+#   _safe_pkg_shared.sh for why the wrapper refuses these and which spellings
+#   each manager accepts.
+function _safe_pkg_dir_flag --argument manager
+    for a in $argv[2..-1]
+        test "$a" = --; and return 1
+        string match -q -- '-*' $a; or continue
+        set -l name (string replace -r '=.*' '' -- $a)
+        if test "$manager" = yarn
+            test "$name" = --cwd; or continue
+        else
+            set name (string replace -r '^-+' '' -- $name)
+            switch "$manager:$name"
+                case npm:prefi npm:prefix pnpm:dir pnpm:prefi pnpm:prefix pnpm:shrinkwrap-directory
+                case pnpm:lockfile-d pnpm:lockfile-di pnpm:lockfile-dir pnpm:lockfile-dire pnpm:lockfile-direc pnpm:lockfile-direct pnpm:lockfile-directo pnpm:lockfile-director pnpm:lockfile-directory
+                case 'pnpm:config.*'
+                    set -l key (string replace -r '^config\.' '' -- $name | string lower | string replace -a -r '[-_]' '')
+                    contains -- "$key" dir prefix lockfiledir; or continue
+                case '*'
+                    string match -qr -- '^[A-Za-z]*C[A-Za-z]*$' $name; or continue
+            end
+        end
+        printf '%s\n' $a
+        return 0
+    end
+    return 1
+end
+
+# _safe_pkg_lockfile_dir_setting dir
+#   Prints the file and key of the first setting in dir's .npmrc or
+#   pnpm-workspace.yaml that moves pnpm's lockfile, and succeeds; fails when
+#   there is none. See _safe_pkg_lockfile_dir_setting in _safe_pkg_shared.sh.
+function _safe_pkg_lockfile_dir_setting --argument dir
+    if test -f "$dir/.npmrc"
+        set -l m (string match -ri -- '^\s*["\']?(lockfile-dir|lockfile-directory|shrinkwrap-directory)["\']?\s*=' <"$dir/.npmrc")
+        if set -q m[2]
+            printf '%s\n' .npmrc $m[2]
+            return 0
+        end
+    end
+    if test -f "$dir/pnpm-workspace.yaml"
+        set -l m (string match -ri -- '^[^#]*(lockfile-?dir)["\']?\s*:' <"$dir/pnpm-workspace.yaml")
+        if set -q m[2]
+            printf '%s\n' pnpm-workspace.yaml $m[2]
+            return 0
+        end
+    end
+    return 1
+end

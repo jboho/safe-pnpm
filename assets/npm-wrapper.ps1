@@ -17,20 +17,30 @@ function global:npm {
     # Walk the non-flag words: an install word or alias is the subcommand, a
     # known non-install command means native, and anything else may be the value
     # of a flag missing from $valueFlags, so try the next word (fails closed).
+    # The value of a listed flag or a directory flag is skipped, unless it is an
+    # install word or a flag. See _safe_pkg_subcmd in _safe_pkg_shared.sh.
     $cmd = ''
     $seen = 0
     $skip = $false
+    # Without _Safe_Pkg_Dir_Flag every unlisted flag counts as taking a value,
+    # and the install is refused below.
+    $hasDirFlag = [bool](Get-Command _Safe_Pkg_Dir_Flag -ErrorAction SilentlyContinue)
     foreach ($a in $args) {
-        if ($skip) { $skip = $false; continue }
-        if ($a -eq '--') { break }
-        if ($a -like '-*=*') { continue }
-        if ($a -like '-*') { if ($valueFlags -ccontains $a) { $skip = $true }; continue }
+        if ($a -like '-*=*') { $skip = $false; continue }
+        if ($a -like '-*') {
+            $skip = ($valueFlags -ccontains $a) -or -not $hasDirFlag -or [bool](_Safe_Pkg_Dir_Flag -Manager npm -PassArgs @($a))
+            continue
+        }
         $n = $a.ToLower() -replace '-',''
         if (-not $n) { continue }
+        $inst = ($installN -contains $n) -or ($n.Length -ge 2 -and [bool]($installN | Where-Object { $_.StartsWith($n) }))
+        if ($skip) {
+            $skip = $false
+            if (-not $inst) { continue }
+        }
         $seen = 1
         if ($nativeN -contains $n) { break }
-        if ($installN -contains $n) { $cmd = $n; break }
-        if ($n.Length -ge 2 -and ($installN | Where-Object { $_.StartsWith($n) })) { $cmd = $n; break }
+        if ($inst) { $cmd = $n; break }
     }
     if (-not $cmd) {
         $npmExe = (Get-Command npm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
@@ -42,9 +52,25 @@ function global:npm {
     $socketFlag = $args -contains '--socket'
     $passArgs = @($args | Where-Object { $_ -ne '--socket' })
 
+    # A missing function is a non-terminating error in PowerShell, so a check
+    # that calls one would print it and let the install through.
+    if (@(Get-Command _Safe_Pkg_Is_Global, _Safe_Pkg_Dir_Flag, _Safe_Pkg_Quote_Args -ErrorAction SilentlyContinue).Count -ne 3) {
+        Write-Host "✗ safe-pnpm: _safe_pkg_shared.ps1 is missing or out of date; run safe-pnpm update." -ForegroundColor Red
+        $global:LASTEXITCODE = 1
+        return
+    }
+
     if (_Safe_Pkg_Is_Global $passArgs) {
         Write-Host "✗ safe-pnpm: global installs are not supported through the wrapper; the sandbox would install into a throwaway container and change nothing on this machine." -ForegroundColor Red
-        Write-Host "  To install globally without the safety checks, run: npm.cmd $passArgs" -ForegroundColor Red
+        Write-Host "  To install globally without the safety checks, run: npm.cmd $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
+        $global:LASTEXITCODE = 1
+        return
+    }
+
+    $dirFlag = _Safe_Pkg_Dir_Flag -Manager npm -PassArgs $passArgs
+    if ($dirFlag) {
+        Write-Host "✗ safe-pnpm: $dirFlag is not supported through the wrapper; the scan checks this directory's lockfile, so an install in another directory would go unchecked." -ForegroundColor Red
+        Write-Host "  cd into that directory and run the command there. To run it without the safety checks: npm.cmd $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
         $global:LASTEXITCODE = 1
         return
     }

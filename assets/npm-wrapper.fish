@@ -22,6 +22,8 @@ function npm
     # Walk the non-flag words: an install word or alias is the subcommand, a
     # known non-install command means native, and anything else may be the value
     # of a flag missing from value_flags, so try the next word (fails closed).
+    # The value of a listed flag or a directory flag is skipped, unless it is an
+    # install word or a flag. See _safe_pkg_subcmd in _safe_pkg_shared.sh.
     set -l install_cmds install i in ins inst insta instal isnt isnta isntal isntall add ci clean-install ic install-clean isntall-clean install-test it cit install-ci-test sit clean-install-test update up upgrade udpate u uninstall un unlink remove rm r
     set -l native_cmds run run-script rum urn test t tst start stop restart exec x publish pack version v view info show config c get set ls list la ll audit outdated login logout whoami init create innit pkg prefix root bin docs help ping search team token owner access dist-tag deprecate cache link ln rebuild rb dedupe find-dupes explain why fund diff doctor
     set -l value_flags (_safe_pkg_valueflags npm)
@@ -31,23 +33,35 @@ function npm
     set -l seen 0
     set -l skip 0
     for a in $argv
-        if test $skip -eq 1
+        if string match -q -- '-*=*' $a
             set skip 0
-        else if test "$a" = --
-            break
-        else if string match -q -- '-*=*' $a
         else if string match -q -- '-*' $a
-            contains -- $a $value_flags; and set skip 1
+            set skip 0
+            if contains -- $a $value_flags
+                set skip 1
+            else if functions -q _safe_pkg_dir_flag
+                _safe_pkg_dir_flag npm $a >/dev/null
+                test $status -ne 1; and set skip 1
+            else
+                set skip 1
+            end
         else
             set -l n (string lower -- $a | string replace -a - '')
             test -z "$n"; and continue
+            set -l inst 0
+            if contains -- $n $ninstall
+                set inst 1
+            else if test (string length -- $n) -ge 2; and string match -q -- "$n*" $ninstall
+                set inst 1
+            end
+            if test $skip -eq 1
+                set skip 0
+                test $inst -eq 1; or continue
+            end
             set seen 1
             if contains -- $n $nnative
                 break
-            else if contains -- $n $ninstall
-                set subcmd $n
-                break
-            else if test (string length -- $n) -ge 2; and string match -q -- "$n*" $ninstall
+            else if test $inst -eq 1
                 set subcmd $n
                 break
             end
@@ -69,9 +83,27 @@ function npm
         end
     end
 
+    # An older _safe_pkg_prescan.fish lacks some of the checks below, and each
+    # would then be an unknown command that lets the install through.
+    if not functions -q _safe_pkg_prescan _safe_pkg_is_global _safe_pkg_dir_flag
+        echo "✗ safe-pnpm: _safe_pkg_prescan.fish is missing or out of date; run safe-pnpm update." >&2
+        return 1
+    end
+
     if _safe_pkg_is_global $pass_args
         echo "✗ safe-pnpm: global installs are not supported through the wrapper; the sandbox would install into a throwaway container and change nothing on this machine." >&2
-        echo "  To install globally without the safety checks, run: command npm $pass_args" >&2
+        echo "  To install globally without the safety checks, run: command npm "(string join ' ' -- (string escape -- $pass_args)) >&2
+        return 1
+    end
+
+    set -l dir_flag (_safe_pkg_dir_flag npm $pass_args)
+    set -l dir_status $status
+    if test $dir_status -gt 1
+        echo "✗ safe-pnpm: the directory-flag check failed (status $dir_status); run safe-pnpm update." >&2
+        return 1
+    else if test $dir_status -eq 0
+        echo "✗ safe-pnpm: $dir_flag is not supported through the wrapper; the scan checks this directory's lockfile, so an install in another directory would go unchecked." >&2
+        echo "  cd into that directory and run the command there. To run it without the safety checks: command npm "(string join ' ' -- (string escape -- $pass_args)) >&2
         return 1
     end
 
