@@ -196,14 +196,16 @@ function _Safe_Pkg_Strip_NpmrcAuth {
 # container picks the Linux one, so tools run on a Windows or macOS host fail.
 # Fetches the host's build too, so it is malware-scanned and audited like the
 # rest. Linux hosts match the container and change nothing.
-#   pnpm: supportedArchitectures in the sandbox copy of pnpm-workspace.yaml (the
-#         only place pnpm reads it); a project's own setting wins.
+#   pnpm: supportedArchitectures through pnpm-arch.js, in the sandbox copy of
+#         pnpm-workspace.yaml, or of package.json for a project pinned to pnpm
+#         10 or earlier (the original goes to -Saved for _Safe_Pkg_Pnpm_Arch_Restore);
+#         a project's own setting wins.
 #   yarn: returns --ignore-platform (every platform's build).
 #   npm:  unchanged (see the README).
 # Returns extra package-manager flags; may edit TmpDir. -Os and -Cpu exist for
 # tests; they default to the host's.
 function _Safe_Pkg_Host_Platform {
-    param([string]$Manager, [string]$TmpDir, [string]$Os, [string]$Cpu)
+    param([string]$Manager, [string]$TmpDir, [string]$Saved, [string]$Os, [string]$Cpu)
     $P = [Runtime.InteropServices.OSPlatform]
     if (-not $Os) {
         if ([Runtime.InteropServices.RuntimeInformation]::IsOSPlatform($P::Windows)) { $Os = 'win32' }
@@ -217,20 +219,41 @@ function _Safe_Pkg_Host_Platform {
     if ($Os -notin @('win32','darwin') -or -not $Cpu) { return @() }
     switch ($Manager) {
         'pnpm' {
-            $ws = Join-Path $TmpDir 'pnpm-workspace.yaml'
-            $text = ''
-            if (Test-Path -LiteralPath $ws) { $text = [IO.File]::ReadAllText($ws) }
-            if ($text -notmatch '(?m)^supportedArchitectures:') {
-                # A file with no trailing newline would glue the key onto its last line.
-                if ($text -and -not $text.EndsWith("`n")) { $text += "`n" }
-                $text += "supportedArchitectures:`n  os: [current, $Os]`n  cpu: [current, $Cpu]`n"
-                [IO.File]::WriteAllText($ws, $text)
+            $helper = Join-Path $HOME '.safe-pnpm/pnpm-arch.js'
+            if (-not (Test-Path -LiteralPath $helper)) {
+                Write-Host "⚠️  safe-pnpm: pnpm-arch.js missing, so native packages for $Os are not fetched (run: safe-pnpm update)." -ForegroundColor Yellow
+                return @()
+            }
+            # A missing node would leave $LASTEXITCODE at an earlier command's value.
+            $global:LASTEXITCODE = 1
+            if (Get-Command node -CommandType Application -ErrorAction SilentlyContinue) {
+                # Out-Host keeps node's output out of the returned flags.
+                & node $helper apply $TmpDir $Os $Cpu $Saved 2>&1 | Out-Host
+            }
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "⚠️  safe-pnpm: could not add $Os to pnpm's supportedArchitectures, so native packages for $Os are not fetched." -ForegroundColor Yellow
             }
             return @()
         }
         'yarn' { return @('--ignore-platform') }
     }
     return @()
+}
+
+# See _safe_pkg_pnpm_arch_restore in _safe_pkg_shared.sh. Returns $false when
+# the snapshot must not be copied back.
+function _Safe_Pkg_Pnpm_Arch_Restore {
+    param([string]$File, [string]$Saved)
+    if (-not (Test-Path -LiteralPath $Saved)) { return $true }
+    $global:LASTEXITCODE = 1
+    if (Get-Command node -CommandType Application -ErrorAction SilentlyContinue) {
+        & node (Join-Path $HOME '.safe-pnpm/pnpm-arch.js') restore $File $Saved 2>&1 | Out-Host
+    }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "✗ safe-pnpm: could not take safe-pnpm's supportedArchitectures out of package.json; nothing copied back." -ForegroundColor Red
+        return $false
+    }
+    return $true
 }
 
 # npm cannot fetch several platforms at once (--os/--cpu replace the container's

@@ -162,7 +162,7 @@ function pnpm
         set hardening $hardening --memory $SAFE_PNPM_MEMORY
     end
 
-    _safe_pkg_host_platform pnpm $tmpdir
+    _safe_pkg_host_platform pnpm $tmpdir $snapdir/arch-saved.json
 
     # Phase 1: fetch (network on, token available, scripts disabled).
     docker run --rm --cap-drop ALL $hardening $user_flags -v "$tmpdir:/app" -w $workdir $token_env \
@@ -195,7 +195,11 @@ function pnpm
                 cp "$tmpdir/$m/package.json" "$snapdir/tree/$m/package.json"
             end
         end
+        _safe_pkg_pnpm_arch_restore $snapdir/tree/package.json $snapdir/arch-saved.json
+        or set rc 1
+    end
 
+    if test $rc -eq 0
         # CVE audit on the resolved tree, after the snapshot and before any
         # build script. A block discards the sandbox like a malware hit does.
         _safe_pkg_audit pnpm pnpm-lock.yaml $snapdir/tree $tmpdir

@@ -75,6 +75,11 @@ const SHELLS = [
 // opts.dockerInfo — canned answers for the `docker info --format` rootless
 //                  queries (see helpers/docker-info-stub.js); default exits 0
 //                  with no output
+// opts.mac       — put a `uname` on PATH that reports Darwin arm64
+// opts.pnpmArch  — install pnpm-arch.js in the fake ~/.safe-pnpm
+// opts.pkg       — the project's package.json text (default a minimal one)
+// opts.phase1Pkg — bash run by the stub in phase 1 instead of its default
+//                  package.json rewrite, with $src = the /app mount
 function runWrapper(manager, wrapperFile, opts = {}) {
   const shell = opts.shell ?? "bash";
   const lockfile = LOCKFILES[manager];
@@ -101,10 +106,24 @@ function runWrapper(manager, wrapperFile, opts = {}) {
       path.join(root, ".safe-pnpm", "malware-scan.js"),
     );
   }
+  if (opts.pnpmArch) {
+    fs.copyFileSync(
+      path.join(ASSETS_DIR, "pnpm-arch.js"),
+      path.join(root, ".safe-pnpm", "pnpm-arch.js"),
+    );
+  }
+  if (opts.mac) {
+    fs.writeFileSync(
+      path.join(bin, "uname"),
+      '#!/bin/sh\nif [ "$1" = -m ]; then echo arm64; else echo Darwin; fi\n',
+      { mode: 0o755 },
+    );
+  }
 
   fs.writeFileSync(
     path.join(proj, "package.json"),
-    JSON.stringify({ name: "fixture", version: "1.0.0", private: true }),
+    opts.pkg ??
+      JSON.stringify({ name: "fixture", version: "1.0.0", private: true }),
   );
   // .npmrc mixes a credential line with ordinary config; only the credential
   // must be stripped before the build phase.
@@ -152,13 +171,15 @@ echo "$n" > "${log}/count"
 # Record the full invocation and the .npmrc visible to this run.
 echo "$@" > "${log}/run$n.args"
 [ -f "$src/.npmrc" ] && cp "$src/.npmrc" "${log}/run$n.npmrc" || : > "${log}/run$n.npmrc"
+cp "$src/package.json" "${log}/run$n.pkg"
+[ -f "$src/pnpm-workspace.yaml" ] && cp "$src/pnpm-workspace.yaml" "${log}/run$n.ws"
 
 # Phase 1 populates node_modules and rewrites the manifest, as a real
 # resolving install would, so the copy-back has something to move.
 if [ "$n" = "1" ]; then
   mkdir -p "$src/node_modules/dep"
   echo "module.exports=1" > "$src/node_modules/dep/index.js"
-  echo '{"name":"fixture","version":"1.0.0","private":true,"dependencies":{"added-by-sandbox":"1.0.0"}}' > "$src/package.json"
+  ${opts.phase1Pkg ?? `echo '{"name":"fixture","version":"1.0.0","private":true,"dependencies":{"added-by-sandbox":"1.0.0"}}' > "$src/package.json"`}
   if [ -f "${log}/phase1-lock" ]; then
     cp "${log}/phase1-lock" "$src/${lockfile}"
   else
@@ -761,4 +782,83 @@ for (const { shell, ext, available } of SHELLS) {
       assert.ok(!fs.existsSync(path.join(proj, "node_modules")), "nothing copied back");
     });
   }
+}
+
+// pnpm 8 and 9 reject a pnpm-workspace.yaml without packages and only read
+// supportedArchitectures from package.json, so a project pinned to them gets the
+// setting in the sandbox package.json, and the project's own file must come
+// back without it.
+const PINNED_9 = '{\n    "name": "fixture",\n    "packageManager": "pnpm@9.15.0"\n}';
+const ADD_DEP = `node -e 'const f=process.argv[1],p=JSON.parse(require("fs").readFileSync(f,"utf8"));p.dependencies={"added-by-sandbox":"1.0.0"};require("fs").writeFileSync(f,JSON.stringify(p,null,2)+"\\n")' "$src/package.json"`;
+
+for (const { shell, ext, available } of SHELLS) {
+  const wrapperFile = `pnpm-wrapper.${ext}`;
+  const mac = { shell, mac: true, pnpmArch: true, pkg: PINNED_9 };
+
+  test(`pnpm (${shell}): a pnpm 9 pin on a Mac gets supportedArchitectures in the sandbox package.json only`, {
+    skip: !available,
+  }, () => {
+    const r = runWrapper("pnpm", wrapperFile, { ...mac, phase1Pkg: ":" });
+    assert.equal(r.runCount, 2, r.read("stderr"));
+    for (const n of [1, 2]) {
+      assert.deepEqual(
+        JSON.parse(r.read(`run${n}.pkg`)).pnpm.supportedArchitectures,
+        { os: ["current", "darwin"], cpu: ["current", "arm64"] },
+        `phase ${n}`,
+      );
+      assert.ok(!fs.existsSync(path.join(r.log, `run${n}.ws`)), `phase ${n}`);
+    }
+    assert.equal(
+      fs.readFileSync(path.join(r.proj, "package.json"), "utf8"),
+      PINNED_9,
+    );
+    assert.ok(!fs.existsSync(path.join(r.proj, "pnpm-workspace.yaml")));
+  });
+
+  test(`pnpm (${shell}): an add under a pnpm 9 pin copies back the dependency without the setting`, {
+    skip: !available,
+  }, () => {
+    const r = runWrapper("pnpm", wrapperFile, { ...mac, phase1Pkg: ADD_DEP });
+    assert.equal(r.runCount, 2, r.read("stderr"));
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(r.proj, "package.json"), "utf8"),
+    );
+    assert.deepEqual(pkg, {
+      name: "fixture",
+      packageManager: "pnpm@9.15.0",
+      dependencies: { "added-by-sandbox": "1.0.0" },
+    });
+  });
+
+  test(`pnpm (${shell}): a failed supportedArchitectures restore blocks copy-back`, {
+    skip: !available,
+  }, () => {
+    const r = runWrapper("pnpm", wrapperFile, {
+      ...mac,
+      phase1Pkg: `echo '{' > "$src/package.json"`,
+    });
+    assert.notEqual(r.status, 0);
+    assert.equal(r.runCount, 1, "no build phase");
+    assert.match(r.read("stderr"), /nothing copied back/);
+    assert.equal(
+      fs.readFileSync(path.join(r.proj, "package.json"), "utf8"),
+      PINNED_9,
+    );
+    assert.ok(!fs.existsSync(path.join(r.proj, "node_modules")));
+  });
+
+  test(`pnpm (${shell}): without a pin on a Mac only the sandbox pnpm-workspace.yaml gets the setting`, {
+    skip: !available,
+  }, () => {
+    const r = runWrapper("pnpm", wrapperFile, {
+      shell,
+      mac: true,
+      pnpmArch: true,
+      phase1Pkg: ":",
+    });
+    assert.equal(r.runCount, 2, r.read("stderr"));
+    assert.match(r.read("run1.ws"), /^supportedArchitectures:/m);
+    assert.equal(JSON.parse(r.read("run1.pkg")).pnpm, undefined);
+    assert.ok(!fs.existsSync(path.join(r.proj, "pnpm-workspace.yaml")));
+  });
 }

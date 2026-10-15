@@ -577,7 +577,7 @@ _safe_pkg_run() {
   )
 }
 
-# _safe_pkg_host_platform manager tmpdir
+# _safe_pkg_host_platform manager tmpdir saved
 #
 # Native optional dependencies (rollup, esbuild, ...) ship one package per
 # platform, and the container picks the Linux one. A macOS host then fails with
@@ -585,30 +585,36 @@ _safe_pkg_run() {
 # package manager for the host's build, so it goes through the same malware
 # scan and CVE audit as everything else (phase 1 runs no install scripts).
 # Linux hosts match the container, so nothing changes there.
-#   pnpm: supportedArchitectures in the sandbox copy of pnpm-workspace.yaml; the
+#   pnpm: supportedArchitectures, through pnpm-arch.js: in the sandbox copy of
+#         pnpm-workspace.yaml for pnpm 11 and later, in the sandbox copy of
+#         package.json for a project pinned to pnpm 10 or earlier (before 10.5
+#         pnpm rejects a workspace file without packages, and 8 and 9 ignore
+#         the setting there). The
 #         setting is not read from flags or environment. A project's own
-#         supportedArchitectures wins. The file is never copied back.
+#         supportedArchitectures wins. The workspace file is never copied back;
+#         package.json is saved to <saved> first and put back by
+#         _safe_pkg_pnpm_arch_restore.
 #   yarn: prints --ignore-platform (yarn 1 has no per-platform list), so every
 #         platform's build is fetched.
 #   npm:  unchanged. --os/--cpu replace the container's platform instead of
 #         adding to it, and esbuild's install script in the (Linux) build
 #         container then fails for want of its Linux package.
-# Prints extra package-manager flags on stdout; may edit tmpdir.
+# Prints extra package-manager flags on stdout; may edit tmpdir. Best effort:
+# without node or pnpm-arch.js it warns and the host build is missing.
 _safe_pkg_host_platform() {
-  local manager="$1" tmpdir="$2" os cpu
+  local manager="$1" tmpdir="$2" saved="$3" os cpu
   read -r os cpu <<EOF_HP || return 0
 $(_safe_pkg_host_os_cpu)
 EOF_HP
   [ -n "$cpu" ] || return 0
   case "$manager" in
     pnpm)
-      local ws="$tmpdir/pnpm-workspace.yaml"
-      if [ -f "$ws" ] && command grep -q '^supportedArchitectures:' "$ws"; then
-        return 0
+      local helper="$HOME/.safe-pnpm/pnpm-arch.js"
+      if [ ! -f "$helper" ]; then
+        echo "⚠️  safe-pnpm: pnpm-arch.js missing, so native packages for $os are not fetched (run: safe-pnpm update)." >&2
+      elif ! node "$helper" apply "$tmpdir" "$os" "$cpu" "$saved" >&2; then
+        echo "⚠️  safe-pnpm: could not add $os to pnpm's supportedArchitectures, so native packages for $os are not fetched." >&2
       fi
-      # A file with no trailing newline would glue the key onto its last line.
-      if [ -s "$ws" ] && [ -n "$(tail -c1 "$ws")" ]; then printf '\n' >> "$ws"; fi
-      printf 'supportedArchitectures:\n  os: [current, %s]\n  cpu: [current, %s]\n' "$os" "$cpu" >> "$ws"
       ;;
     yarn) printf '%s\n' "--ignore-platform" ;;
   esac
@@ -621,6 +627,21 @@ _safe_pkg_host_os_cpu() {
     arm64|aarch64) echo "darwin arm64" ;;
     x86_64)        echo "darwin x64" ;;
   esac
+}
+
+# _safe_pkg_pnpm_arch_restore file saved
+#
+# Takes the supportedArchitectures that _safe_pkg_host_platform put in the
+# sandbox package.json back out of its snapshot <file>, so the project's own
+# package.json is not changed by it. No-op when <saved> does not exist. Returns
+# 1 when it fails; the snapshot must then not be copied back.
+_safe_pkg_pnpm_arch_restore() {
+  local file="$1" saved="$2"
+  [ -f "$saved" ] || return 0
+  if ! node "$HOME/.safe-pnpm/pnpm-arch.js" restore "$file" "$saved"; then
+    echo "✗ safe-pnpm: could not take safe-pnpm's supportedArchitectures out of package.json; nothing copied back." >&2
+    return 1
+  fi
 }
 
 # _safe_pkg_npm_host_builds tmpdir hardening user_flags token_env
@@ -743,7 +764,7 @@ _safe_pkg_sandbox() {
   # Host platform's native optional dependencies (see _safe_pkg_host_platform).
   # Yarn needs its flag in phase 2 too, or --force would prune what phase 1 added.
   local host_flags
-  host_flags=$(_safe_pkg_host_platform "$manager" "$tmpdir") || return 1
+  host_flags=$(_safe_pkg_host_platform "$manager" "$tmpdir" "$snapdir/arch-saved.json") || return 1
   local phase2_host_flags=""
   [ "$manager" = "yarn" ] && phase2_host_flags="$host_flags"
 
@@ -790,6 +811,10 @@ _safe_pkg_sandbox() {
         cp "$tmpdir/$m/package.json" "$snapdir/tree/$m/package.json"
       fi
     done < "$snapdir/members"
+    if ! _safe_pkg_pnpm_arch_restore "$snapdir/tree/package.json" "$snapdir/arch-saved.json"; then
+      fetched=0
+      rc=1
+    fi
   fi
 
   # CVE audit on the resolved tree, after the snapshot and before any build

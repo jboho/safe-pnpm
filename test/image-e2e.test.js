@@ -35,7 +35,9 @@ after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 // from assets/Dockerfile. A shim in front of docker swaps the image tag for the
 // test build and logs each `docker run`, so the test sees the exact flags the
 // wrapper passed. The project has no dependencies, so nothing is downloaded.
-function install(manager) {
+// opts.pkg replaces the project's package.json text; opts.mac puts a `uname`
+// reporting Darwin arm64 in front, so the macOS host path runs on any host.
+function install(manager, opts = {}) {
   const root = fs.mkdtempSync(path.join(tmp, `${manager}-`));
   const bin = path.join(root, "bin");
   const proj = path.join(root, "proj");
@@ -43,10 +45,16 @@ function install(manager) {
   for (const d of [bin, proj, path.join(home, ".safe-pnpm")]) {
     fs.mkdirSync(d, { recursive: true });
   }
-  fs.copyFileSync(
-    path.join(ASSETS_DIR, "link-check.js"),
-    path.join(home, ".safe-pnpm", "link-check.js"),
-  );
+  for (const f of ["link-check.js", "pnpm-arch.js"]) {
+    fs.copyFileSync(path.join(ASSETS_DIR, f), path.join(home, ".safe-pnpm", f));
+  }
+  if (opts.mac) {
+    fs.writeFileSync(
+      path.join(bin, "uname"),
+      '#!/bin/sh\nif [ "$1" = -m ]; then echo arm64; else echo Darwin; fi\n',
+      { mode: 0o755 },
+    );
+  }
   const log = path.join(root, "docker-runs.log");
   fs.writeFileSync(
     path.join(bin, "docker"),
@@ -66,7 +74,8 @@ function install(manager) {
   }
   fs.writeFileSync(
     path.join(proj, "package.json"),
-    JSON.stringify({ name: "e2e", version: "1.0.0", private: true }),
+    opts.pkg ??
+      JSON.stringify({ name: "e2e", version: "1.0.0", private: true }),
   );
   // Paths go in through the environment, not the script text or argv, so a
   // TMPDIR containing quotes or `$` can't change what bash runs. CodeQL
@@ -119,3 +128,21 @@ for (const manager of ["npm", "pnpm", "yarn"]) {
     assert.equal(fs.existsSync(sandbox), false, "sandbox removed");
   });
 }
+
+// The image's pnpm hands off to the pinned version, and pnpm 8 and 9 fail every
+// command when pnpm-workspace.yaml has no packages list ("packages field
+// missing or empty"), so a Mac host must not get one for a project pinned to
+// them. Needs the registry to download pnpm 9.
+test("pnpm: a project pinned to pnpm 9 installs on a Mac host and keeps its package.json", { skip }, () => {
+  const pkg = `${JSON.stringify(
+    { name: "e2e", version: "1.0.0", private: true, packageManager: "pnpm@9.15.0" },
+    null,
+    2,
+  )}\n`;
+  const { r, proj, runs } = install("pnpm", { pkg, mac: true });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(runs.length, 2, "fetch and build phases both ran");
+  assert.ok(fs.existsSync(path.join(proj, "pnpm-lock.yaml")), "lockfile copied back");
+  assert.equal(fs.readFileSync(path.join(proj, "package.json"), "utf8"), pkg);
+  assert.ok(!fs.existsSync(path.join(proj, "pnpm-workspace.yaml")));
+});

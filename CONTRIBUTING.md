@@ -77,6 +77,7 @@ assets/
   pnpm-wrapper.ps1      pnpm shell function — PowerShell (also npm-, yarn-)
   malware-scan.js       Checks resolved versions against OSV malicious-package advisories
   link-check.js         Refuses copy-back when a symlink in node_modules points outside the project
+  pnpm-arch.js          Puts the host's platform in pnpm's supportedArchitectures in the sandbox copy
   socket-classify.js    Classifies `socket scan` output into pass / findings / failure
 docs/
   security.md           Threat model
@@ -89,6 +90,7 @@ test/
   socket-classify.test.js         Socket result classifier (assets/socket-classify.js)
   malware-scan.test.js            OSV malware check (assets/malware-scan.js)
   link-check.test.js              Copy-back symlink rule (assets/link-check.js)
+  pnpm-arch.test.js               pnpm supportedArchitectures placement (assets/pnpm-arch.js)
   helpers/osv-stub.js             Fake OSV API used by the malware check tests
   fixtures/lockfiles/             Real pnpm/npm/yarn lockfiles from the image
 ```
