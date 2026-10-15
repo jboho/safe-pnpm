@@ -9,7 +9,7 @@ const { RUNNERS, OTHERS } = require("./helpers/runner-cases");
 
 const ASSETS = path.join(__dirname, "..", "assets");
 const SHARED = path.join(ASSETS, "_safe_pkg_shared.sh");
-const { parseSpec } = require(path.join(ASSETS, "malware-scan.js"));
+const { parseSpec, npmViewCommand } = require(path.join(ASSETS, "malware-scan.js"));
 
 const zshAvailable = spawnSync("zsh", ["--version"], { stdio: "pipe" }).status === 0;
 const SHELLS = [["bash"], ...(zshAvailable ? [["zsh"]] : [])];
@@ -60,6 +60,27 @@ test("parseSpec keeps registry specs and drops paths, urls, git and aliases", ()
   ]) {
     assert.equal(parseSpec(spec), null, spec);
   }
+});
+
+test("on Windows npm view runs npm-cli.js with node instead of npm.cmd", () => {
+  const args = ["view", "foo@1 & calc", "version", "--json"];
+  assert.deepEqual(npmViewCommand("foo@1 & calc", { platform: "linux" }), { file: "npm", args });
+  const execPath = "C:\\Program Files\\nodejs\\node.exe";
+  const cli = "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js";
+  const seen = [];
+  const exists = (p) => {
+    seen.push(p);
+    return true;
+  };
+  assert.deepEqual(npmViewCommand("foo@1 & calc", { platform: "win32", execPath, exists }), {
+    file: execPath,
+    args: [cli, ...args],
+  });
+  assert.deepEqual(seen, [cli]);
+  assert.throws(
+    () => npmViewCommand("foo", { platform: "win32", execPath, exists: () => false }),
+    /could not look up foo: npm not found at C:\\Program Files\\nodejs\\node_modules/,
+  );
 });
 
 // End to end: the wrappers sourced in a throwaway HOME, the real scanner, the

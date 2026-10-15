@@ -48,6 +48,30 @@ add("malformed strict", "pnpm dlx cowsay", {
 add("broken-pkg", "npx broken-pkg");
 add("broken-pkg strict", "npx broken-pkg", { SAFE_PNPM_OSV_STRICT: "1" });
 add("npm run build", "npm run build");
+// Windows PowerShell, and pwsh for .cmd targets, drop "" before the native
+// command sees it; Legacy does the same here.
+const legacy = (line) => `$PSNativeCommandArgumentPassing = 'Legacy'; ${line}`;
+add("empty positional legacy", legacy('npx "" mal-pkg'));
+add("empty -p legacy", legacy('npx -p "" mal-pkg'));
+add("empty before exec legacy", legacy('npm "" exec mal-pkg'));
+add("empty positional standard", 'npx "" mal-pkg');
+add("NPX mal-pkg", "NPX mal-pkg");
+add("npm EXEC mal-pkg", "npm EXEC mal-pkg");
+add("npm init mal", "npm init mal");
+// Unquoted, PowerShell reads @scope as splatting $scope.
+add("npm create @scope", "npm create '@scope'");
+add("exact version", "npx mal-pkg@1.2.3");
+const noScanner = (line) =>
+  `Move-Item $HOME/.safe-pnpm/malware-scan.js /w/scan.bak; try { ${line} } finally { Move-Item /w/scan.bak $HOME/.safe-pnpm/malware-scan.js }`;
+add("no scanner", noScanner("npx cowsay"));
+add("no scanner strict", noScanner("npx cowsay"), {
+  SAFE_PNPM_OSV_STRICT: "1",
+});
+// node lives in /usr/local/bin in the image; the stubs only need /bin/sh.
+const noNode = (line) =>
+  `$p = $env:PATH; $env:PATH = '/w/bin:/usr/bin:/bin'; try { ${line} } finally { $env:PATH = $p }`;
+add("no node", noNode("npx mal-pkg"));
+add("no node strict", noNode("npx mal-pkg"), { SAFE_PNPM_OSV_STRICT: "1" });
 
 let tmp;
 const results = new Map();
@@ -310,4 +334,82 @@ test("ps1: commands that run no downloaded package skip the check", {
   assert.equal(r.status, "RC=0 ERRORS=0", r.out);
   assert.doesNotMatch(r.calls, /npm view/);
   assert.doesNotMatch(r.out, /Malware scan/);
+});
+
+test("ps1: an empty argument does not hide the package from the check", {
+  skip,
+}, () => {
+  for (const label of [
+    "empty positional legacy",
+    "empty -p legacy",
+    "empty before exec legacy",
+    "empty positional standard",
+  ]) {
+    const r = result(label);
+    assert.match(r.status, /^RC=1 /, `${label}\n${r.out}`);
+    assert.match(r.out, /mal-pkg@1\.2\.3\s+MAL-2099-1/, label);
+    assert.doesNotMatch(r.calls, /RAN|npm exec/, label);
+  }
+});
+
+test("ps1: wrapper names and subcommands are matched in any case", {
+  skip,
+}, () => {
+  for (const label of ["NPX mal-pkg", "npm EXEC mal-pkg"]) {
+    const r = result(label);
+    assert.equal(r.status, "RC=1 ERRORS=0", `${label}\n${r.out}`);
+    assert.doesNotMatch(r.calls, /RAN|npm EXEC/, label);
+  }
+});
+
+test("ps1: npm init and npm create check the create- package first", {
+  skip,
+}, () => {
+  const init = result("npm init mal");
+  assert.equal(init.status, "RC=0 ERRORS=0", init.out);
+  assert.match(init.calls, /npm view create-mal version --json\nnpm init mal$/);
+  const create = result("npm create @scope");
+  assert.equal(create.status, "RC=0 ERRORS=0", create.out);
+  assert.match(
+    create.calls,
+    /npm view @scope\/create version --json\nnpm create @scope$/,
+  );
+});
+
+test("ps1: an exact version is checked without npm view", { skip }, () => {
+  const r = result("exact version");
+  assert.equal(r.status, "RC=1 ERRORS=0", r.out);
+  assert.match(r.out, /mal-pkg@1\.2\.3\s+MAL-2099-1/);
+  assert.doesNotMatch(r.calls, /npm view|RAN/);
+});
+
+test("ps1: a missing scanner warns and runs; SAFE_PNPM_OSV_STRICT=1 blocks", {
+  skip,
+}, () => {
+  const warn = result("no scanner");
+  assert.match(warn.status, /^RC=0 /, warn.out);
+  assert.match(warn.out, /Malware scan not installed.*Continuing without it/s);
+  assert.match(warn.calls, /RAN npx cowsay/);
+  const strict = result("no scanner strict");
+  assert.match(strict.status, /^RC=1 /, strict.out);
+  assert.match(
+    strict.out,
+    /not installed.*Blocking \(SAFE_PNPM_OSV_STRICT=1\)/s,
+  );
+  assert.doesNotMatch(strict.calls, /RAN/);
+});
+
+test("ps1: a missing node is a scan failure, not a pass", { skip }, () => {
+  const warn = result("no node");
+  assert.match(warn.status, /^RC=0 /, warn.out);
+  assert.match(warn.out, /node not found.*Continuing without it/s);
+  assert.doesNotMatch(warn.out, /✓/);
+  assert.match(warn.calls, /RAN npx mal-pkg/);
+  const strict = result("no node strict");
+  assert.match(strict.status, /^RC=1 /, strict.out);
+  assert.match(
+    strict.out,
+    /node not found.*Blocking \(SAFE_PNPM_OSV_STRICT=1\)/s,
+  );
+  assert.doesNotMatch(strict.calls, /RAN/);
 });

@@ -289,7 +289,12 @@ function _Safe_Pkg_Runner_Specs {
 # _safe_pkg_shared.sh.
 function _Safe_Pkg_Runner_Check {
     param([string]$Manager, [string[]]$PassArgs)
-    $specs = @(_Safe_Pkg_Runner_Specs -Manager $Manager -PassArgs $PassArgs | Where-Object { $_ })
+    # Windows PowerShell, and pwsh for .cmd targets like npx.cmd, drop empty
+    # arguments to a native command, while pwsh elsewhere passes them on. Check
+    # what either reading of `npx "" mal-pkg` would fetch.
+    $nonEmpty = @($PassArgs | Where-Object { $_ })
+    $specs = @(@(_Safe_Pkg_Runner_Specs -Manager $Manager -PassArgs $PassArgs) +
+        @(_Safe_Pkg_Runner_Specs -Manager $Manager -PassArgs $nonEmpty) | Where-Object { $_ } | Select-Object -Unique)
     if ($specs.Count -eq 0) { return $true }
     return (_Safe_Pkg_Malware_Scan -Specs $specs)
 }
@@ -309,8 +314,15 @@ function _Safe_Pkg_Malware_Scan {
 
     if (Test-Path $scanner) {
         Write-Host "→ Malware scan (OSV)..." -ForegroundColor Cyan
-        $reason = (& node $scanner @scanArgs 2>&1 | Out-String).Trim()
-        $verdict = $LASTEXITCODE
+        # A missing `node` leaves $LASTEXITCODE at whatever an earlier native
+        # command set (often 0), which would read as a pass.
+        if (Get-Command node -CommandType Application -ErrorAction SilentlyContinue) {
+            $global:LASTEXITCODE = 4
+            $reason = (& node $scanner @scanArgs 2>&1 | Out-String).Trim()
+            $verdict = $LASTEXITCODE
+        } else {
+            $reason = "node not found; malware scan cannot run."
+        }
     }
 
     if ($verdict -eq 0) {
