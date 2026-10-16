@@ -86,7 +86,7 @@ test("ps1 npm host builds run one hardened container with the token and the plat
     r.log.trim(),
     /^run --rm --cap-drop ALL --pids-limit 1024 --user 1:1 -v \/w\/sandbox:\/app -w \/app -e NPM_TOKEN safe-pnpm:latest sh -c .*npm install --no-save --ignore-scripts --force .* sh win32 x64$/,
   );
-  assert.match(r.seen, /\.safe-host-specs\.js/);
+  assert.match(r.seen, /\.safe-host-specs\.cjs/);
   assert.deepEqual(r.left, []);
 });
 

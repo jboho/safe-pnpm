@@ -450,12 +450,14 @@ function _Safe_Pkg_Npm_Host_Builds {
     }
     if ($Os -notin @('win32','darwin') -or -not $Cpu) { return $true }
     $specs = Join-Path $HOME '.safe-pnpm/host-specs.js'
-    $dest = Join-Path $TmpDir '.safe-host-specs.js'
+    # .cjs so a "type": "module" package.json in the sandbox doesn't make node
+    # load it as an ES module (see _safe_pkg_npm_host_builds in _safe_pkg_shared.sh).
+    $dest = Join-Path $TmpDir '.safe-host-specs.cjs'
     try { Copy-Item -LiteralPath $specs -Destination $dest -ErrorAction Stop } catch {
         Write-Host "⚠️  safe-pnpm: host-specs.js missing, so native packages for $Os are not installed (run: safe-pnpm update)." -ForegroundColor Yellow
         return $true
     }
-    $script = 'specs=$(node /app/.safe-host-specs.js $1 $2) || exit 1; [ -z "$specs" ] || npm install --no-save --ignore-scripts --force --cache /app/.safe-store -- $specs'
+    $script = 'specs=$(node /app/.safe-host-specs.cjs $1 $2) || exit 1; [ -z "$specs" ] || npm install --no-save --ignore-scripts --force --cache /app/.safe-store -- $specs'
     $a = @('run','--rm','--cap-drop','ALL') + $Hardening + $UserFlags + @('-v',"${TmpDir}:/app",'-w','/app') + $TokenEnv +
         @('safe-pnpm:latest','sh','-c',$script,'sh',$Os,$Cpu)
     # Out-Host keeps docker's output out of the return value, which must be one bool.

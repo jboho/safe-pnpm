@@ -770,7 +770,10 @@ _safe_pkg_npm_host_builds() {
 $(_safe_pkg_host_os_cpu)
 EOF_HB
   [ -n "$cpu" ] || return 0
-  if ! cp "$HOME/.safe-pnpm/host-specs.js" "$tmpdir/.safe-host-specs.js" 2>/dev/null; then
+  # .cjs because the copy sits next to the project's package.json: with
+  # "type": "module" there, node would load a .js copy as an ES module, where
+  # host-specs.js's require() is not defined.
+  if ! cp "$HOME/.safe-pnpm/host-specs.js" "$tmpdir/.safe-host-specs.cjs" 2>/dev/null; then
     echo "⚠️  safe-pnpm: host-specs.js missing, so native packages for $os are not installed (run: safe-pnpm update)." >&2
     return 0
   fi
@@ -780,10 +783,10 @@ EOF_HB
     -w /app \
     $token_env \
     safe-pnpm:latest sh -c \
-    'specs=$(node /app/.safe-host-specs.js $1 $2) || exit 1; [ -z "$specs" ] || npm install --no-save --ignore-scripts --force --cache /app/.safe-store -- $specs' \
+    'specs=$(node /app/.safe-host-specs.cjs $1 $2) || exit 1; [ -z "$specs" ] || npm install --no-save --ignore-scripts --force --cache /app/.safe-store -- $specs' \
     sh "$os" "$cpu"
   local rc=$?
-  rm -f "$tmpdir/.safe-host-specs.js"
+  rm -f "$tmpdir/.safe-host-specs.cjs"
   return $rc
 }
 

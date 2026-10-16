@@ -217,13 +217,15 @@ function npm
     if test $rc -eq 0; and not contains -- "$pass_args[1]" uninstall un
         set -l host (_safe_pkg_host_os_cpu)
         if test (count $host) -eq 2
-            if cp "$HOME/.safe-pnpm/host-specs.js" "$tmpdir/.safe-host-specs.js" 2>/dev/null
+            # .cjs so a "type": "module" package.json in the sandbox doesn't
+            # make node load it as an ES module (see _safe_pkg_npm_host_builds).
+            if cp "$HOME/.safe-pnpm/host-specs.js" "$tmpdir/.safe-host-specs.cjs" 2>/dev/null
                 docker run --rm --cap-drop ALL $hardening $user_flags -v "$tmpdir:/app" -w /app $token_env \
                     safe-pnpm:latest sh -c \
-                    'specs=$(node /app/.safe-host-specs.js $1 $2) || exit 1; [ -z "$specs" ] || npm install --no-save --ignore-scripts --force --cache /app/.safe-store -- $specs' \
+                    'specs=$(node /app/.safe-host-specs.cjs $1 $2) || exit 1; [ -z "$specs" ] || npm install --no-save --ignore-scripts --force --cache /app/.safe-store -- $specs' \
                     sh $host[1] $host[2]
                 or set rc 1
-                rm -f "$tmpdir/.safe-host-specs.js"
+                rm -f "$tmpdir/.safe-host-specs.cjs"
             else
                 echo "⚠️  safe-pnpm: host-specs.js missing, so native packages for $host[1] are not installed (run: safe-pnpm update)." >&2
             end
