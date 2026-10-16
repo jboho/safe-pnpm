@@ -37,18 +37,29 @@ function run(shell, manager, sys, machine, existingYaml, opts = {}) {
   const saved = path.join(dir, "arch-saved.json");
   if (existingYaml !== undefined) fs.writeFileSync(ws, existingYaml);
   if (opts.pkg !== undefined) fs.writeFileSync(pkg, opts.pkg);
-  const env = { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` };
-  const call = `_safe_pkg_host_platform ${manager} "${tmp}" "${saved}"`;
+  // Paths go in through the environment, not the script text or argv: CodeQL
+  // counts every `bash -c` argv element as command text.
+  const env = {
+    ...process.env,
+    HOME: home,
+    PATH: `${bin}:${process.env.PATH}`,
+    SAFE_TEST_ASSETS: ASSETS,
+    SAFE_TEST_MANAGER: manager,
+    SAFE_TEST_DIR: tmp,
+    SAFE_TEST_SAVED: saved,
+  };
+  const call =
+    '_safe_pkg_host_platform "$SAFE_TEST_MANAGER" "$SAFE_TEST_DIR" "$SAFE_TEST_SAVED"';
   const r =
     shell === "bash"
       ? spawnSync(
           "bash",
-          ["-c", `source "${ASSETS}/_safe_pkg_shared.sh"; ${call}`],
+          ["-c", `source "$SAFE_TEST_ASSETS/_safe_pkg_shared.sh"; ${call}`],
           { env, encoding: "utf8" },
         )
       : spawnSync(
           "fish",
-          ["-c", `source "${ASSETS}/_safe_pkg_prescan.fish"; ${call}`],
+          ["-c", `source "$SAFE_TEST_ASSETS/_safe_pkg_prescan.fish"; ${call}`],
           { env, encoding: "utf8" },
         );
   assert.equal(r.status, 0, r.stderr);

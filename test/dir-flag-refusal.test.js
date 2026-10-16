@@ -150,17 +150,18 @@ for (const [list, expected] of [
   for (const [mgr, args] of list) {
     test(`sh: _safe_pkg_dir_flag ${label(mgr, args)} -> ${expected}`, () => {
       for (const shell of zshAvailable ? ["bash", "zsh"] : ["bash"]) {
+        // The path goes in through the environment: CodeQL counts every
+        // `bash -c` argv element as command text. The rest are constants.
         const r = spawnSync(
           shell,
           [
             "-c",
-            'source "$1"; shift; _safe_pkg_dir_flag "$@"',
+            'source "$SAFE_TEST_SHARED"; _safe_pkg_dir_flag "$@"',
             shell,
-            SHARED,
             mgr,
             ...args,
           ],
-          { stdio: "pipe" },
+          { stdio: "pipe", env: { ...process.env, SAFE_TEST_SHARED: SHARED } },
         );
         assert.equal(r.status, expected, shell);
       }
@@ -209,19 +210,26 @@ const env = (dir, bin) => ({
   HOME: dir,
 });
 
+// Paths go in through the environment for the same CodeQL reason as above.
 const runShell = (shell) => (dir, bin, mgr, args) =>
   spawnSync(
     shell,
     [
       "-c",
-      'source "$1"; source "$2"; shift 2; "$@"',
+      'source "$SAFE_TEST_SHARED"; source "$SAFE_TEST_WRAPPER"; "$@"',
       shell,
-      SHARED,
-      path.join(ASSETS, `${mgr}-wrapper.sh`),
       mgr,
       ...args,
     ],
-    { stdio: "pipe", cwd: dir, env: env(dir, bin) },
+    {
+      stdio: "pipe",
+      cwd: dir,
+      env: {
+        ...env(dir, bin),
+        SAFE_TEST_SHARED: SHARED,
+        SAFE_TEST_WRAPPER: path.join(ASSETS, `${mgr}-wrapper.sh`),
+      },
+    },
   );
 const runSh = runShell("bash");
 
