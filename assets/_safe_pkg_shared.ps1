@@ -174,8 +174,15 @@ function _Safe_Pkg_Socket_Scan {
         Out-File -FilePath $out.FullName -Encoding utf8
     $rc = $LASTEXITCODE
 
-    $reason = (& node $classifier $out.FullName $rc 2>&1 | Out-String).Trim()
-    $verdict = $LASTEXITCODE
+    # A missing `node` leaves $LASTEXITCODE at the Socket CLI's exit code, which
+    # would read as a pass; classify it as a scan failure instead.
+    if (Get-Command node -CommandType Application -ErrorAction SilentlyContinue) {
+        $reason = (& node $classifier $out.FullName $rc 2>&1 | Out-String).Trim()
+        $verdict = $LASTEXITCODE
+    } else {
+        $reason = "node not found; Socket results cannot be read."
+        $verdict = 4
+    }
     Remove-Item $out.FullName -Force -ErrorAction SilentlyContinue
 
     if ($verdict -eq 0) { return $true }

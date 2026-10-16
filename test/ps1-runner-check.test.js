@@ -78,6 +78,11 @@ const noNode = (line) =>
   `$p = $env:PATH; $env:PATH = '/w/bin:/usr/bin:/bin'; try { ${line} } finally { $env:PATH = $p }`;
 add("no node", noNode("npx mal-pkg"));
 add("no node strict", noNode("npx mal-pkg"), { SAFE_PNPM_OSV_STRICT: "1" });
+// The Socket stub exits 0, so only the classifier (run with node) decides.
+add("socket no node", noNode("_Safe_Pkg_Socket_Scan"));
+add("socket no node strict", noNode("_Safe_Pkg_Socket_Scan"), {
+  SAFE_PNPM_SOCKET_STRICT: "1",
+});
 
 let tmp;
 const results = new Map();
@@ -97,9 +102,13 @@ before(() => {
     "pnpm-wrapper.ps1",
     "yarn-wrapper.ps1",
     "malware-scan.js",
+    "socket-classify.js",
   ]) {
     fs.copyFileSync(path.join(ASSETS, f), path.join(safe, f));
   }
+  fs.writeFileSync(path.join(safe, "socket"), "#!/bin/sh\nexit 0\n", {
+    mode: 0o755,
+  });
   fs.copyFileSync(
     path.join(__dirname, "helpers", "osv-stub.js"),
     path.join(tmp, "osv-stub.js"),
@@ -128,7 +137,7 @@ fi
   // Values are PowerShell double-quoted strings, so "$osv" is the stub's URL.
   const setEnv = (env) =>
     [
-      "Remove-Item Env:SAFE_PNPM_OSV_STRICT, Env:SAFE_PNPM_STRICT -ErrorAction SilentlyContinue",
+      "Remove-Item Env:SAFE_PNPM_OSV_STRICT, Env:SAFE_PNPM_STRICT, Env:SAFE_PNPM_SOCKET_STRICT -ErrorAction SilentlyContinue",
       ...Object.entries({ SAFE_PNPM_OSV_API: "$osv/ok", ...env }).map(([k, v]) => `$env:${k} = "${v}"`),
     ].join("; ");
   const script = [
@@ -443,4 +452,16 @@ test("ps1: a missing node is a scan failure, not a pass", { skip }, () => {
     /node not found.*Blocking \(SAFE_PNPM_OSV_STRICT=1\)/s,
   );
   assert.doesNotMatch(strict.calls, /RAN/);
+});
+
+test("ps1: a Socket scan without node is a scan failure, not a pass", {
+  skip,
+}, () => {
+  const warn = result("socket no node");
+  assert.match(warn.out, /node not found/, warn.out);
+  assert.match(warn.out, /Continuing without Socket results/);
+  assert.match(warn.out, /True/);
+  const strict = result("socket no node strict");
+  assert.match(strict.out, /node not found.*Blocking \(SAFE_PNPM_SOCKET_STRICT=1\)/s, strict.out);
+  assert.match(strict.out, /False/);
 });
