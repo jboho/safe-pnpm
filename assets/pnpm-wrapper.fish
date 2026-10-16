@@ -193,8 +193,11 @@ function pnpm
         set workdir /app/$rel_path
     end
 
-    # Per-manager store kept under /app so phase 2 resolves fully offline.
-    set -l store_flag --config.store-dir=/app/.safe-store
+    # Per-manager store kept under /app so phase 2 resolves fully offline, and
+    # the lockfile directory pinned to the sandbox root, which overrides any
+    # project config that would move it. See _safe_pkg_run in
+    # _safe_pkg_shared.sh.
+    set -l store_flag --config.store-dir=/app/.safe-store --config.lockfile-dir=/app
 
     # Tokens are forwarded only into the fetch phase, where --ignore-scripts
     # guarantees no package code runs. They are never present during phase 2.

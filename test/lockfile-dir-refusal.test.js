@@ -44,6 +44,18 @@ const KEPT = [
   ["pnpm-workspace.yaml", "packages: [a] # lockfileDir: sub\n"],
 ];
 
+// Spellings the line-by-line check above misses but the manager still reads
+// (probed: pnpm 9/10 for the .npmrc escape, pnpm 10/11 for the YAML escape,
+// yarn 1.22 for .yarnrc). Phase 1 and phase 2 pin the lockfile directory on
+// the command line, which overrides every config file.
+// [manager, file, contents, pinned flag]
+const PINNED = [
+  ["pnpm", ".npmrc", '"lockfile\\u002ddir"=sub\n', "--config.lockfile-dir=/app"],
+  ["pnpm", "pnpm-workspace.yaml", '"lockfile\\x44ir": sub\n', "--config.lockfile-dir=/app"],
+  ["yarn", ".yarnrc", "--cwd sub\n", "--cwd /app"],
+  ["yarn", ".yarnrc", '"--\\u0063wd" sub\n', "--cwd /app"],
+];
+
 const label = (file, contents) => `${file} ${JSON.stringify(contents)}`;
 
 // A docker whose `info` succeeds and whose `run` is logged and fails, so a
@@ -127,6 +139,21 @@ for (const shell of ["bash", "zsh", "fish"]) {
       }
     });
   }
+  for (const [mgr, file, contents, flag] of PINNED) {
+    test(`${shell}: ${mgr} install with ${label(file, contents)} pins the lockfile directory`, {
+      skip,
+    }, () => {
+      const p = project(file, contents);
+      try {
+        const { err } = runShell(shell, mgr, p);
+        const runs = p.runs();
+        assert.equal(runs.length, 1, err);
+        assert.ok(runs[0].includes(` ${flag}`), runs[0]);
+      } finally {
+        fs.rmSync(p.root, { recursive: true, force: true });
+      }
+    });
+  }
   // The check is pnpm's: npm does not read lockfile-dir.
   test(`${shell}: npm install with lockfile-dir in .npmrc reaches phase 1`, {
     skip,
@@ -187,6 +214,7 @@ function runPs1Cases() {
     "_safe_pkg_shared.ps1",
     "npm-wrapper.ps1",
     "pnpm-wrapper.ps1",
+    "yarn-wrapper.ps1",
   ]) {
     fs.copyFileSync(path.join(ASSETS, f), path.join(safe, f));
   }
@@ -200,6 +228,7 @@ function runPs1Cases() {
     ...KEPT.map(([file, contents]) => ["pnpm", file, contents]),
     ["npm", ".npmrc", "lockfile-dir=sub\n"],
     ["stale", ".npmrc", "registry=https://r.example/\n"],
+    ...PINNED.map(([mgr, file, contents]) => [mgr, file, contents]),
   ].map(([mgr, file, contents], i) => {
     const proj = path.join(root, `p${i}`);
     fs.mkdirSync(proj);
@@ -213,7 +242,7 @@ function runPs1Cases() {
   fs.writeFileSync(path.join(root, "cases.json"), JSON.stringify(cases));
   const script = [
     "$env:PATH = '/w/bin:' + $env:PATH",
-    '. "$HOME/.safe-pnpm/npm-wrapper.ps1"; . "$HOME/.safe-pnpm/pnpm-wrapper.ps1"',
+    '. "$HOME/.safe-pnpm/npm-wrapper.ps1"; . "$HOME/.safe-pnpm/pnpm-wrapper.ps1"; . "$HOME/.safe-pnpm/yarn-wrapper.ps1"',
     "foreach ($c in (Get-Content /w/cases.json -Raw | ConvertFrom-Json)) {",
     "  Set-Location $c.dir; $env:CASE = $c.id; $global:LASTEXITCODE = 0",
     "  if ($c.mgr -eq 'stale') {",
@@ -257,9 +286,10 @@ function runPs1Cases() {
   try {
     dockerLog = fs.readFileSync(path.join(root, "docker.log"), "utf8");
   } catch {}
-  const runs = (id) =>
-    dockerLog.split("\n").filter((l) => l.startsWith(`${id} run `)).length;
-  ps1Result = { get, runs, out: r.stdout + r.stderr };
+  const runLines = (id) =>
+    dockerLog.split("\n").filter((l) => l.startsWith(`${id} run `));
+  const runs = (id) => runLines(id).length;
+  ps1Result = { get, runs, runLines, out: r.stdout + r.stderr };
   return ps1Result;
 }
 
@@ -322,4 +352,18 @@ test("ps1: a _safe_pkg_shared.ps1 without the lockfile-dir check refuses to inst
     /_safe_pkg_shared\.ps1 is missing or out of date/,
   );
   assert.equal(runs(`c${i}`), 0);
+});
+
+PINNED.forEach(([mgr, file, contents, flag], j) => {
+  const i = REFUSED.length + KEPT.length + 2 + j;
+  test(`ps1: ${mgr} install with ${label(file, contents)} pins the lockfile directory`, {
+    skip: skipPs1,
+  }, () => {
+    const { get, runLines, out } = runPs1Cases();
+    const r = get(`c${i}`);
+    assert.ok(r, out);
+    const lines = runLines(`c${i}`);
+    assert.equal(lines.length, 1, r.join("|"));
+    assert.ok(lines[0].includes(` ${flag}`), lines[0]);
+  });
 });

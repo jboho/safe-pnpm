@@ -169,8 +169,10 @@ function yarn
         end
     end
 
-    # Per-manager cache kept under /app so phase 2 resolves fully offline.
-    set -l store_flag --cache-folder /app/.safe-store
+    # Per-manager cache kept under /app so phase 2 resolves fully offline, and
+    # the working directory pinned to the sandbox root, which overrides a
+    # --cwd in .yarnrc. See _safe_pkg_run in _safe_pkg_shared.sh.
+    set -l store_flag --cache-folder /app/.safe-store --cwd /app
 
     # Tokens are forwarded only into the fetch phase, where --ignore-scripts
     # guarantees no package code runs. They are never present during phase 2.

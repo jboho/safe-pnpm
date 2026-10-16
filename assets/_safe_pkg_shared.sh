@@ -926,13 +926,17 @@ _safe_pkg_sandbox() {
   # plus the phase-1 fetch flags and the phase-2 build command.
   # trust-lockfile goes through --config. because the image's pnpm hands off
   # to a packageManager pin, and pnpm before 11.3 rejects --trust-lockfile.
+  # The lockfile directory (pnpm) and working directory (yarn) are pinned to
+  # the sandbox root on the command line, which overrides any project config
+  # that would move them away from the lockfile the scan reads; the
+  # lockfile-dir check above only catches the plain spellings.
   local store_flag phase2_cmd
   case "$manager" in
-    pnpm) store_flag="--config.store-dir=/app/.safe-store"
+    pnpm) store_flag="--config.store-dir=/app/.safe-store --config.lockfile-dir=/app"
           phase2_cmd="install --offline --config.trust-lockfile=true $store_flag" ;;
     npm)  store_flag="--cache /app/.safe-store"
           phase2_cmd="rebuild $store_flag" ;;
-    yarn) store_flag="--cache-folder /app/.safe-store"
+    yarn) store_flag="--cache-folder /app/.safe-store --cwd /app"
           phase2_cmd="install --offline --force $store_flag" ;;
     *)    store_flag=""; phase2_cmd="" ;;
   esac
