@@ -456,12 +456,18 @@ _safe_pkg_malware_scan() {
 }
 
 # _safe_pkg_is_global [args...]
-#   True when the args ask for a global install (-g, a short-flag cluster
-#   containing g, --global, --global=true, --location=global, --location global). The sandbox
+#   True when the args ask for a global install. The sandbox
 #   writes to the container's own global prefix, which is thrown away, so a
 #   global install through the wrapper would exit 0 and change nothing.
+#   npm and pnpm read any number of leading dashes, abbreviate long names
+#   (pnpm: --g, --glo; npm: --g, --locat) and take any value but false as
+#   true (--global=0 is global), so this matches any long flag whose name is a
+#   prefix of global, unless its value is false; a location prefix of three or
+#   more letters with the value global; and a short-flag cluster containing g,
+#   unless it is -g=false. It may refuse a spelling a manager would read
+#   otherwise, never the reverse.
 _safe_pkg_is_global() {
-  local prev="" a
+  local a name key val loc=""
   # yarn v1 spells it as a subcommand: yarn global add|remove|upgrade
   local first="" second=""
   for a in "$@"; do
@@ -474,14 +480,34 @@ _safe_pkg_is_global() {
     case "$second" in add|remove|upgrade) return 0 ;; esac
   fi
   for a in "$@"; do
+    [ -n "$loc" ] && [ "$a" = "global" ] && return 0
+    loc=""
     case "$a" in
       --) return 1 ;;
-      --global|--global=true|--global=1|--location=global) return 0 ;;
-      --*) ;;
-      -*g*) return 0 ;;
+      -*) ;;
+      *) continue ;;
     esac
-    [ "$prev" = "--location" ] && [ "$a" = "global" ] && return 0
-    prev="$a"
+    name="${a#"${a%%[!-]*}"}"
+    key="${name%%=*}"
+    val=""
+    case "$name" in *=*) val="${name#*=}" ;; esac
+    [ -n "$key" ] || continue
+    case "$a" in
+      --*)
+        case "global" in
+          "$key"*) [ "$val" = "false" ] || return 0 ;;
+        esac
+        case "${#key}:location" in
+          [12]:*) ;;
+          *:"$key"*) case "$name" in *=*) [ "$val" = "global" ] && return 0 ;; *) loc=1 ;; esac ;;
+        esac
+        ;;
+      *)
+        case "$key" in
+          *g*) [ "$key" = "g" ] && [ "$val" = "false" ] || return 0 ;;
+        esac
+        ;;
+    esac
   done
   return 1
 }

@@ -61,16 +61,30 @@ function _Safe_Pkg_Audit {
 # _safe_pkg_shared.sh for why the wrapper refuses these.
 function _Safe_Pkg_Is_Global {
     param([string[]]$PassArgs)
-    $prev = ''
     # yarn v1 spells it as a subcommand: yarn global add|remove|upgrade
     $words = @($PassArgs | Where-Object { $_ -notlike '-*' })
     if ($words.Count -ge 2 -and $words[0] -eq 'global' -and $words[1] -in @('add','remove','upgrade')) { return $true }
+    $loc = $false
     foreach ($a in $PassArgs) {
+        $a = [string]$a
+        if ($loc -and $a -ceq 'global') { return $true }
+        $loc = $false
         if ($a -eq '--') { return $false }
-        if ($a -in @('--global','--global=true','--global=1','--location=global')) { return $true }
-        if ($a -notlike '--*' -and $a -clike '-*g*') { return $true }
-        if ($prev -eq '--location' -and $a -eq 'global') { return $true }
-        $prev = $a
+        if ($a -notlike '-*') { continue }
+        $name = $a -replace '^-+', ''
+        $parts = $name -split '=', 2
+        $key = $parts[0]
+        $hasVal = $parts.Count -eq 2
+        $val = if ($hasVal) { $parts[1] } else { '' }
+        if (-not $key) { continue }
+        if ($a -like '--*') {
+            if ('global'.StartsWith($key, [StringComparison]::Ordinal) -and $val -cne 'false') { return $true }
+            if ($key.Length -ge 3 -and 'location'.StartsWith($key, [StringComparison]::Ordinal)) {
+                if ($hasVal) { if ($val -ceq 'global') { return $true } } else { $loc = $true }
+            }
+        } elseif ($key -clike '*g*') {
+            if ($key -cne 'g' -or $val -cne 'false') { return $true }
+        }
     }
     return $false
 }

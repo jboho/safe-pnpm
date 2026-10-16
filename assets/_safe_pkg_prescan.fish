@@ -557,7 +557,6 @@ end
 #   True when the args ask for a global install. See _safe_pkg_is_global in
 #   _safe_pkg_shared.sh for why the wrapper refuses these.
 function _safe_pkg_is_global
-    set -l prev ""
     # yarn v1 spells it as a subcommand: yarn global add|remove|upgrade
     set -l words
     for a in $argv
@@ -566,20 +565,35 @@ function _safe_pkg_is_global
     if test "$words[1]" = global; and contains -- "$words[2]" add remove upgrade
         return 0
     end
+    set -l loc ""
     for a in $argv
-        switch $a
-            case --
-                return 1
-            case --global --global=true --global=1 --location=global
-                return 0
-            case '--*'
-            case '-*g*'
-                return 0
-        end
-        if test "$prev" = --location -a "$a" = global
+        if test -n "$loc" -a "$a" = global
             return 0
         end
-        set prev $a
+        set loc ""
+        test "$a" = --; and return 1
+        string match -q -- '-*' $a; or continue
+        set -l name (string replace -r -- '^-+' '' $a)
+        set -l key (string split -m 1 -- = $name)[1]
+        set -l val ""
+        string match -q -- '*=*' $name; and set val (string split -m 1 -- = $name)[2]
+        test -n "$key"; or continue
+        if string match -q -- '--*' $a
+            if string match -q -- "$key*" global; and test "$val" != false
+                return 0
+            end
+            if test (string length -- $key) -ge 3; and string match -q -- "$key*" location
+                if string match -q -- '*=*' $name
+                    test "$val" = global; and return 0
+                else
+                    set loc 1
+                end
+            end
+        else if string match -q -- '*g*' $key
+            if test "$key" != g -o "$val" != false
+                return 0
+            end
+        end
     end
     return 1
 end

@@ -101,6 +101,16 @@ const GLOBAL = [
   ["global", "add", "pkg"],
   ["global", "remove", "pkg"],
   ["global", "upgrade"],
+  // Spellings npm or pnpm also read as global (probed on npm 10, pnpm 9/10).
+  ["---global", "pkg"],
+  ["--global=yes", "pkg"],
+  ["--global=0", "pkg"],
+  ["-g=0", "pkg"],
+  ["--g", "pkg"],
+  ["--glo", "pkg"],
+  ["---location=global", "pkg"],
+  ["--locat=global", "pkg"],
+  ["--locat", "global", "pkg"],
 ];
 const LOCAL = [
   ["pkg"],
@@ -109,6 +119,11 @@ const LOCAL = [
   ["--", "-g"],
   ["--legacy-peer-deps", "pkg"],
   ["--global=false", "pkg"],
+  ["-g=false", "pkg"],
+  ["--no-global", "pkg"],
+  ["--global-style", "pkg"],
+  ["--location=user", "pkg"],
+  ["-G", "pkg"],
   ["global", "list"],
 ];
 
