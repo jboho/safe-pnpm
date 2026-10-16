@@ -331,3 +331,18 @@ function pnpx
     or return 1
     command pnpx $argv
 end
+
+# On a disk that ignores case (macOS by default) fish finds the real program
+# under any spelling of its name, and autoloads this file for it too, so
+# every other spelling runs the wrapper.
+for _safe_pkg_n in PNPM PNPm PNpM PNpm PnPM PnPm PnpM Pnpm pNPM pNPm pNpM pNpm pnPM pnPm pnpM
+    function $_safe_pkg_n --wraps pnpm
+        pnpm $argv
+    end
+end
+for _safe_pkg_n in PNPX PNPx PNpX PNpx PnPX PnPx PnpX Pnpx pNPX pNPx pNpX pNpx pnPX pnPx pnpX
+    function $_safe_pkg_n --wraps pnpx
+        pnpx $argv
+    end
+end
+set -e _safe_pkg_n

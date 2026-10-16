@@ -223,6 +223,26 @@ test("fish: pnpx is checked like pnpm dlx before it runs", opts, () => {
   assert.match(ok.calls, /RAN pnpx cowsay hi/);
 });
 
+// On a disk that ignores case (macOS by default) fish finds the real program
+// under any spelling of its name, so every spelling must reach the wrapper.
+test("fish: any spelling of a wrapped name runs the wrapper", opts, () => {
+  for (const [wrapper, line] of [
+    ["npm-wrapper.fish", "NPX mal-pkg"],
+    ["npm-wrapper.fish", "Npm exec mal-pkg"],
+    ["pnpm-wrapper.fish", "PNPM dlx mal-pkg"],
+    ["pnpm-wrapper.fish", "pnpX mal-pkg"],
+    ["yarn-wrapper.fish", "Yarn dlx mal-pkg"],
+  ]) {
+    const r = run(wrapper, line);
+    assert.equal(r.status, 1, `${line}\n${r.out}`);
+    assert.match(r.out, /mal-pkg@1\.2\.3\s+MAL-2099-1/, line);
+    assert.doesNotMatch(r.calls, /RAN/, line);
+  }
+  const ok = run("npm-wrapper.fish", "NPM run build");
+  assert.equal(ok.status, 0, ok.out);
+  assert.match(ok.calls, /^npm run build$/m);
+});
+
 test(
   "fish: npx of a known-malicious package is blocked and never runs",
   opts,
@@ -482,6 +502,12 @@ test(
     const pnpx = runInstalled("pnpx mal-pkg");
     assert.equal(pnpx.status, 1, pnpx.out);
     assert.doesNotMatch(pnpx.calls, /RAN/);
+    // fish autoloads NPX from npx.fish only where the disk ignores case.
+    if (fs.existsSync(path.join(fnDir, "NPX.fish"))) {
+      const upper = runInstalled("NPX mal-pkg");
+      assert.equal(upper.status, 1, upper.out);
+      assert.doesNotMatch(upper.calls, /RAN/);
+    }
     const bad = runInstalled("npx mal-pkg");
     assert.equal(bad.status, 1, bad.out);
     assert.match(bad.out, /no package code was executed/);

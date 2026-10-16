@@ -135,9 +135,9 @@ after(() => {
 
 // Runs `wrapper` then the command line in bash and reports exit, output and
 // the stub log.
-function run(wrapper, line, extraEnv = {}) {
+function run(wrapper, line, extraEnv = {}, shell = "bash") {
   fs.writeFileSync(log, "");
-  const r = spawnSync("bash", ["-c", `source "$HOME/.safe-pnpm/${wrapper}"; ${line}`], {
+  const r = spawnSync(shell, ["-c", `source "$HOME/.safe-pnpm/${wrapper}"; ${line}`], {
     encoding: "utf8",
     env: { ...env, ...extraEnv },
     cwd: root,
@@ -162,6 +162,30 @@ test("pnpx is checked like pnpm dlx before it runs", () => {
   assert.equal(ok.status, 0, ok.out);
   assert.match(ok.calls, /npm view cowsay version --json/);
   assert.match(ok.calls, /RAN pnpx cowsay hi/);
+});
+
+// On a disk that ignores case (macOS by default) the shell finds the real
+// program under any spelling of its name, so every spelling must reach the
+// wrapper. Where the disk is case-sensitive the program would not be found.
+test("any spelling of a wrapped name runs the wrapper", () => {
+  for (const [wrapper, line] of [
+    ["npm-wrapper.sh", "NPX mal-pkg"],
+    ["npm-wrapper.sh", "Npm exec mal-pkg"],
+    ["pnpm-wrapper.sh", "PNPM dlx mal-pkg"],
+    ["pnpm-wrapper.sh", "pnpX mal-pkg"],
+    ["yarn-wrapper.sh", "Yarn dlx mal-pkg"],
+  ]) {
+    for (const shell of ["bash", "zsh"]) {
+      if (shell === "zsh" && !zshAvailable) continue;
+      const r = run(wrapper, line, {}, shell);
+      assert.equal(r.status, 1, `${shell}: ${line}\n${r.out}`);
+      assert.match(r.out, /mal-pkg@1\.2\.3\s+MAL-2099-1/, `${shell}: ${line}`);
+      assert.doesNotMatch(r.calls, /RAN/, `${shell}: ${line}`);
+    }
+  }
+  const ok = run("npm-wrapper.sh", "NPM run build");
+  assert.equal(ok.status, 0, ok.out);
+  assert.match(ok.calls, /^npm run build$/m);
 });
 
 test("npx of a known-malicious package is blocked and never runs", () => {

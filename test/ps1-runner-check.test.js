@@ -58,6 +58,7 @@ add("empty -p legacy", legacy('npx -p "" mal-pkg'));
 add("empty before exec legacy", legacy('npm "" exec mal-pkg'));
 add("empty positional standard", 'npx "" mal-pkg');
 add("NPX mal-pkg", "NPX mal-pkg");
+add("PnPx mal-pkg", "PnPx mal-pkg");
 add("npm EXEC mal-pkg", "npm EXEC mal-pkg");
 add("npm init mal", "npm init mal");
 // Unquoted, PowerShell reads @scope as splatting $scope.
@@ -368,7 +369,7 @@ test("ps1: an empty argument does not hide the package from the check", {
 test("ps1: wrapper names and subcommands are matched in any case", {
   skip,
 }, () => {
-  for (const label of ["NPX mal-pkg", "npm EXEC mal-pkg"]) {
+  for (const label of ["NPX mal-pkg", "PnPx mal-pkg", "npm EXEC mal-pkg"]) {
     const r = result(label);
     assert.equal(r.status, "RC=1 ERRORS=0", `${label}\n${r.out}`);
     assert.doesNotMatch(r.calls, /RAN|npm EXEC/, label);

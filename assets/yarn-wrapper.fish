@@ -262,3 +262,13 @@ function yarn
     _safe_pkg_untrack $tmpdir $snapdir
     return $rc
 end
+
+# On a disk that ignores case (macOS by default) fish finds the real program
+# under any spelling of its name, and autoloads this file for it too, so
+# every other spelling runs the wrapper.
+for _safe_pkg_n in YARN YARn YArN YArn YaRN YaRn YarN Yarn yARN yARn yArN yArn yaRN yaRn yarN
+    function $_safe_pkg_n --wraps yarn
+        yarn $argv
+    end
+end
+set -e _safe_pkg_n

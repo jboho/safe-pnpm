@@ -25,3 +25,14 @@ npx() {
   _safe_pkg_runner_check npx "$@" || return 1
   command npx "$@"
 }
+
+# On a disk that ignores case (macOS by default) the shell finds the real
+# program under any spelling of its name, so every other spelling runs the
+# wrapper too. The function keyword keeps zsh from alias-expanding the names.
+for _safe_pkg_n in NPM NPm NpM Npm nPM nPm npM; do
+  eval "function $_safe_pkg_n { npm \"\$@\"; }"
+done
+for _safe_pkg_n in NPX NPx NpX Npx nPX nPx npX; do
+  eval "function $_safe_pkg_n { npx \"\$@\"; }"
+done
+unset _safe_pkg_n

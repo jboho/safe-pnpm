@@ -20,3 +20,11 @@ yarn() {
   _safe_pkg_dispatch "yarn" "yarn.lock" "" \
     "package.json yarn.lock .yarnrc .npmrc" "$@"
 }
+
+# On a disk that ignores case (macOS by default) the shell finds the real
+# program under any spelling of its name, so every other spelling runs the
+# wrapper too. The function keyword keeps zsh from alias-expanding the names.
+for _safe_pkg_n in YARN YARn YArN YArn YaRN YaRn YarN Yarn yARN yARn yArN yArn yaRN yaRn yarN; do
+  eval "function $_safe_pkg_n { yarn \"\$@\"; }"
+done
+unset _safe_pkg_n
