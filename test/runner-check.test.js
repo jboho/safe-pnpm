@@ -5,50 +5,14 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { startOsvStub } = require("./helpers/osv-stub");
+const { RUNNERS, OTHERS } = require("./helpers/runner-cases");
 
 const ASSETS = path.join(__dirname, "..", "assets");
 const SHARED = path.join(ASSETS, "_safe_pkg_shared.sh");
-const { parseSpec } = require(path.join(ASSETS, "malware-scan.js"));
+const { parseSpec, npmViewCommand } = require(path.join(ASSETS, "malware-scan.js"));
 
 const zshAvailable = spawnSync("zsh", ["--version"], { stdio: "pipe" }).status === 0;
 const SHELLS = [["bash"], ...(zshAvailable ? [["zsh"]] : [])];
-
-// Commands that fetch a package and run it, and the specs the finder reports.
-const RUNNERS = [
-  ["npx", ["cowsay", "hi"], ["cowsay"]],
-  ["npx", ["-y", "cowsay@1.5.0"], ["cowsay@1.5.0"]],
-  ["npx", ["-p", "lodash", "-p", "cowsay", "cowsay"], ["lodash", "cowsay"]],
-  ["npx", ["--package=foo", "bar"], ["foo"]],
-  ["npx", ["--registry", "http://r", "cowsay"], ["cowsay"]],
-  // an unlisted flag may take a value, so the next word is checked too
-  ["npx", ["--future-flag", "val", "cowsay"], ["val", "cowsay"]],
-  ["npx", ["--", "cowsay"], ["cowsay"]],
-  ["npm", ["exec", "cowsay"], ["cowsay"]],
-  ["npm", ["--prefix", "web", "exec", "cowsay"], ["cowsay"]],
-  ["npm", ["x", "--", "cowsay"], ["cowsay"]],
-  ["npm", ["init", "vite"], ["create-vite"]],
-  ["npm", ["create", "@scope/foo"], ["@scope/create-foo"]],
-  ["npm", ["create", "@scope"], ["@scope/create"]],
-  ["npm", ["create", "@scope@2"], ["@scope/create@2"]],
-  // already prefixed: npm adds create- again, pnpm and yarn do not
-  ["npm", ["init", "create-foo"], ["create-create-foo", "create-foo"]],
-  ["pnpm", ["dlx", "cowsay"], ["cowsay"]],
-  ["pnpm", ["-C", "web", "dlx", "cowsay"], ["cowsay"]],
-  ["pnpm", ["create", "vite@latest", "app"], ["create-vite@latest"]],
-  ["yarn", ["dlx", "cowsay"], ["cowsay"]],
-  ["yarn", ["create", "react-app", "app"], ["create-react-app"]],
-];
-
-// Not download-and-run: the finder must report nothing and return 1.
-const OTHERS = [
-  ["npm", ["install", "x"]],
-  ["npm", ["run", "build"]],
-  ["npm", ["--version"]],
-  ["pnpm", ["exec", "cowsay"]],
-  ["pnpm", ["add", "x"]],
-  ["yarn", ["add", "x"]],
-  ["yarn", []],
-];
 
 for (const [shell] of SHELLS) {
   test(`${shell}: _safe_pkg_runner_specs finds the packages a runner command fetches`, () => {
@@ -96,6 +60,27 @@ test("parseSpec keeps registry specs and drops paths, urls, git and aliases", ()
   ]) {
     assert.equal(parseSpec(spec), null, spec);
   }
+});
+
+test("on Windows npm view runs npm-cli.js with node instead of npm.cmd", () => {
+  const args = ["view", "foo@1 & calc", "version", "--json"];
+  assert.deepEqual(npmViewCommand("foo@1 & calc", { platform: "linux" }), { file: "npm", args });
+  const execPath = "C:\\Program Files\\nodejs\\node.exe";
+  const cli = "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js";
+  const seen = [];
+  const exists = (p) => {
+    seen.push(p);
+    return true;
+  };
+  assert.deepEqual(npmViewCommand("foo@1 & calc", { platform: "win32", execPath, exists }), {
+    file: execPath,
+    args: [cli, ...args],
+  });
+  assert.deepEqual(seen, [cli]);
+  assert.throws(
+    () => npmViewCommand("foo", { platform: "win32", execPath, exists: () => false }),
+    /could not look up foo: npm not found at C:\\Program Files\\nodejs\\node_modules/,
+  );
 });
 
 // End to end: the wrappers sourced in a throwaway HOME, the real scanner, the

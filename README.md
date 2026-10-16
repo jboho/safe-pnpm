@@ -46,6 +46,7 @@ Published to npm as `@jboho/safe-pnpm` (first public release 2026.10.2, with pro
 - Unless your uid is 1000 (the image's `node` user), it has no user name inside the image, so a build script that looks up the current user (`whoami`, `os.userInfo()`) gets an error.
 - The CVE audit runs on the host after the fetch, on a throwaway copy of the resolved manifests and lockfile plus your registry config. It does not run in your project directory, and pnpm skips `.pnpmfile.cjs` for it. A `yarn-path` line in `.yarnrc` is dropped for the audit.
 - PowerShell is the least-tested shell: the wrappers and copy-back are tested on Linux pwsh only.
+- PowerShell removes an unquoted `--` before the wrapper function sees it, so `npm run build -- --watch` reaches npm as `npm run build --watch`. Quote it to keep it: `npm run build '--' --watch`.
 - Requires Docker; developed and tested on macOS and Linux CI. Windows is not tested.
 
 ## Install
@@ -126,7 +127,7 @@ When you run an install-class command:
 - `pnpm dlx PKG`, `pnpm create PKG`
 - `yarn create PKG`, and `yarn dlx PKG` on yarn 2+
 
-In bash, zsh and fish the wrappers look up the version the command would fetch (`npm view`, which reads registry metadata and runs no package code), check that `name@version` against [OSV](https://osv.dev)'s malicious-package advisories, and refuse to run the command on a hit. A `create` command checks the `create-` package the manager would fetch. If OSV or the lookup fails the command warns and runs; `SAFE_PNPM_OSV_STRICT=1` blocks instead. Paths, URLs, git specs and packages in private scopes are not checked. In PowerShell these commands are not intercepted at all. In bash, zsh and fish, `npx` is wrapped only when the npm wrapper is enabled. OSV only knows packages already reported as malicious, so treat anything new with care and check the name yourself.
+In bash, zsh, fish and PowerShell (not yet tested on native Windows) the wrappers look up the version the command would fetch (`npm view`, which reads registry metadata and runs no package code), check that `name@version` against [OSV](https://osv.dev)'s malicious-package advisories, and refuse to run the command on a hit. A `create` command checks the `create-` package the manager would fetch. If OSV or the lookup fails the command warns and runs; `SAFE_PNPM_OSV_STRICT=1` blocks instead. Paths, URLs, git specs and packages in private scopes are not checked. `npx` is wrapped only when the npm wrapper is enabled. OSV only knows packages already reported as malicious, so treat anything new with care and check the name yourself.
 
 1. **Pre-install scan** — [Socket behavioral analysis](./docs/socket.md) if configured.
 2. **Copy only manifests** — `package.json`, the lockfile, workspace files, and `.npmrc` / `.yarnrc` go into a temp directory. Source files, `.env`, and secrets never leave the host.

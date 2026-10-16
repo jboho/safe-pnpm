@@ -3,93 +3,9 @@ const assert = require("node:assert/strict");
 const { spawnSync } = require("node:child_process");
 const path = require("node:path");
 
+const { SCANNED, NATIVE } = require("./helpers/wrapper-cases");
+
 const ASSETS = path.join(__dirname, "..", "assets");
-
-const SCANNED = [
-  "pnpm install",
-  "pnpm i",
-  "pnpm up",
-  "pnpm upgrade",
-  "pnpm it",
-  "pnpm rm x",
-  "pnpm un x",
-  "pnpm uninstall x",
-  "pnpm --filter app add x",
-  "pnpm -C web install",
-  "pnpm -r install",
-  "npm ci",
-  "npm add lodash",
-  "npm clean-install",
-  "npm cit",
-  "npm rm x",
-  "npm --prefix web ci",
-  "npm --workspace a install x",
-  "yarn add x",
-  "yarn",
-  "yarn --cwd web add x",
-  "yarn upgrade-interactive",
-  // aliases and abbreviations reported in review
-  "pnpm ic",
-  "pnpm clean-install",
-  "pnpm uni x",
-  "pnpm unlink",
-  "npm u",
-  "npm sit",
-  "npm clean-install-test",
-  "npm uninst x",
-  "npm updat",
-  "npm installTest",
-  // value-taking flags, listed and unlisted
-  "pnpm --store-dir /s add x",
-  "pnpm --registry http://r add y",
-  "pnpm --network-concurrency 4 install",
-  "pnpm --some-future-flag value add x",
-  "pnpm --filter test add x",
-  "pnpm -rC web add x",
-  "npm --audit-level high i",
-  "npm --lockfile-version 3 i",
-  "npm --some-future-flag value i",
-  "yarn --emoji false add x",
-  "yarn --some-future-flag value add x",
-  "pnpm --socket install",
-  "yarn global add x",
-  "yarn --silent global add x",
-  "yarn global remove x",
-  // -- ends the flags but not the search for the command
-  "npm -- install x",
-  "pnpm -- install x",
-  "yarn global -- add x",
-  // a directory named like a command is still a flag's value
-  "npm -C test install",
-  "npm --prefix bin install",
-  "pnpm --prefix server install",
-  // pnpm's string flags never take a flag as their value
-  "pnpm -C --dir server install",
-  "pnpm --reporter --dir server install",
-];
-
-const NATIVE = [
-  "pnpm",
-  "pnpm run build",
-  "pnpm --filter app run add",
-  "pnpm exec install",
-  "npm run install",
-  "npm --version",
-  "npm test",
-  "yarn --version",
-  "yarn run x",
-  "yarn --silent --version",
-  "yarn --json -h",
-  "yarn build",
-  "pnpm --some-future-flag value run add",
-  "npm cache clean",
-  "npm c set x y",
-  "yarn global list",
-  "yarn global bin",
-  "yarn global",
-  "npm -C docs run build",
-  "pnpm --dir test run build",
-];
 
 // Stub the two exits so nothing installs: the scan path prints "scanned" and
 // the pass-through path prints "NATIVE".
@@ -199,12 +115,18 @@ for (const m of ["pnpm", "npm", "yarn"]) {
       k === "value_flags"
         ? fishFlags.split(" ")
         : fish.match(new RegExp(`set -l ${k} ([^\\n]*)`))[1].split(" ");
+    // ps1 keeps its value-flag lists in _Safe_Pkg_Valueflags too.
     const ps = read(`${m}-wrapper.ps1`);
+    const psShared = read("_safe_pkg_shared.ps1").split(
+      "function _Safe_Pkg_Valueflags",
+    )[1];
     const psList = (k) =>
       [
-        ...ps
-          .match(new RegExp(`\\$${k} = @\\(([^)]*)\\)`))[1]
-          .matchAll(/'([^']*)'/g),
+        ...(k === "valueFlags"
+          ? psShared.match(new RegExp(`\\n        ${m} = @\\(([^)]*)\\)`))
+          : ps.match(new RegExp(`\\$${k} = @\\(([^)]*)\\)`)))[1].matchAll(
+          /'([^']*)'/g,
+        ),
       ].map((x) => x[1]);
     for (const [k, fk, pk] of [
       ["install", "install_cmds", "installCmds"],

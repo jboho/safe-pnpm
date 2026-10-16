@@ -4,37 +4,13 @@ const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { GLOBAL, LOCAL, WRAPPER_CASES } = require("./helpers/wrapper-cases");
 
 const SHARED = path.join(__dirname, "..", "assets", "_safe_pkg_shared.sh");
 const PRESCAN = path.join(__dirname, "..", "assets", "_safe_pkg_prescan.fish");
 
 const fishAvailable =
   spawnSync("fish", ["--version"], { stdio: "pipe" }).status === 0;
-
-const GLOBAL = [
-  ["-g", "pkg"],
-  ["pkg", "-g"],
-  ["-gD", "pkg"],
-  ["--global", "pkg"],
-  ["--location=global", "pkg"],
-  ["--location", "global", "pkg"],
-  ["--global=true", "pkg"],
-  ["--global=1", "pkg"],
-  ["--prefix", "/x", "-g", "pkg"],
-  ["-gg", "pkg"],
-  ["global", "add", "pkg"],
-  ["global", "remove", "pkg"],
-  ["global", "upgrade"],
-];
-const LOCAL = [
-  ["pkg"],
-  ["--save-dev", "pkg"],
-  ["--location", "project", "pkg"],
-  ["--", "-g"],
-  ["--legacy-peer-deps", "pkg"],
-  ["--global=false", "pkg"],
-  ["global", "list"],
-];
 
 // `yarn global ...` is a subcommand, covered end to end below.
 for (const args of GLOBAL.filter((a) => a[0] !== "global")) {
@@ -95,13 +71,6 @@ for (const [list, expected] of [
 
 // End to end: the wrapper function itself must refuse before any prescan or
 // docker call. A fake docker on PATH records every call.
-const WRAPPER_CASES = [
-  ["npm", ["install", "-g", "pkg"]],
-  ["npm", ["install", "--global=true", "pkg"]],
-  ["pnpm", ["add", "-g", "pkg"]],
-  ["yarn", ["global", "add", "pkg"]],
-];
-
 for (const [mgr, args] of WRAPPER_CASES) {
   test(`sh: ${mgr} ${args.join(" ")} is refused before docker is called`, () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "safe-pnpm-glob-"));
