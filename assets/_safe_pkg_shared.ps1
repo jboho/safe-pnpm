@@ -223,6 +223,9 @@ function _Safe_Pkg_Runner_Specs {
     $exec = @('npm:exec','npm:exe','npm:x','pnpm:dlx','yarn:dlx')
     $create = @('npm:init','npm:ini','npm:inn','npm:inni','npm:innit','npm:cr','npm:cre','npm:crea','npm:creat','npm:create','pnpm:create','yarn:create')
     $pkgs = [System.Collections.Generic.List[string]]::new()
+    # The wrapper refuses an install when an update left this function out; here
+    # an unknown directory flag just reads like any unlisted flag.
+    $hasDirFlag = [bool](Get-Command _Safe_Pkg_Dir_Flag -ErrorAction SilentlyContinue)
     # skip: '', 'value' (drop the next word) or 'pkg' (the next word is a package).
     $skip = ''
     $maybe = $false
@@ -253,7 +256,7 @@ function _Safe_Pkg_Runner_Specs {
             if ($a -like '-*=*') { $maybe = $false; continue }
             if ($a -like '-*') {
                 $maybe = $true
-                if (($valueFlags -ccontains $a) -or [bool](_Safe_Pkg_Dir_Flag -Manager $Manager -PassArgs @($a))) { $maybe = $false; $skip = 'value' }
+                if (($valueFlags -ccontains $a) -or ($hasDirFlag -and [bool](_Safe_Pkg_Dir_Flag -Manager $Manager -PassArgs @($a)))) { $maybe = $false; $skip = 'value' }
                 continue
             }
         }
@@ -584,13 +587,14 @@ function _Safe_Pkg_Native_Fallback {
         }
         Write-Host "✗ safe-pnpm: Docker not running and no TTY — refusing native $Manager (set SAFE_PNPM_ALLOW_NATIVE_FALLBACK=1 to override)." -ForegroundColor Red
         $global:LASTEXITCODE = 1
-        return
+        throw 'safe-pnpm: command refused'
     }
     $ans = Read-Host "⚠️  safe-pnpm: Docker not running. Use native $Manager? [y/N]"
     if ($ans -match '^[Yy]') {
         & $exe @PassArgs
     } else {
         $global:LASTEXITCODE = 1
+        throw 'safe-pnpm: command refused'
     }
 }
 

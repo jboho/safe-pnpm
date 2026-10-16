@@ -10,7 +10,7 @@
 . "$HOME\.safe-pnpm\_safe_pkg_shared.ps1"
 
 function global:yarn {
-    if (-not (_Safe_Pkg_Runner_Check -Manager yarn -PassArgs $args)) { $global:LASTEXITCODE = 1; return }
+    if (-not (_Safe_Pkg_Runner_Check -Manager yarn -PassArgs $args)) { $global:LASTEXITCODE = 1; throw 'safe-pnpm: command refused' }
     $installCmds = @('install','add','remove','upgrade','upgrade-interactive')
     $nativeCmds = @('run','test','start','publish','pack','create','init','list','ls','info','why','outdated','audit','cache','check','config','link','unlink','login','logout','owner','tag','team','version','versions','bin','generate-lock-entry','import','licenses','autoclean','help','exec','node')
     $valueFlags = @(_Safe_Pkg_Valueflags yarn)
@@ -68,7 +68,7 @@ function global:yarn {
     if (@(Get-Command _Safe_Pkg_Is_Global, _Safe_Pkg_Dir_Flag, _Safe_Pkg_Quote_Args -ErrorAction SilentlyContinue).Count -ne 3) {
         Write-Host "✗ safe-pnpm: _safe_pkg_shared.ps1 is missing or out of date; run safe-pnpm update." -ForegroundColor Red
         $global:LASTEXITCODE = 1
-        return
+        throw 'safe-pnpm: command refused'
     }
 
     # npm, pnpm and yarn stop reading flags at --, and npm and pnpm at any
@@ -79,14 +79,14 @@ function global:yarn {
         Write-Host "✗ safe-pnpm: $($dashes[0]) is not supported through the wrapper; the sandbox adds --ignore-scripts and its other flags after your arguments, and after $($dashes[0]) they would not be read as flags." -ForegroundColor Red
         Write-Host "  To run it without the safety checks: yarn.cmd $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
         $global:LASTEXITCODE = 1
-        return
+        throw 'safe-pnpm: command refused'
     }
 
     if (_Safe_Pkg_Is_Global $passArgs) {
         Write-Host "✗ safe-pnpm: global installs are not supported through the wrapper; the sandbox would install into a throwaway container and change nothing on this machine." -ForegroundColor Red
         Write-Host "  To install globally without the safety checks, run: yarn.cmd $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
         $global:LASTEXITCODE = 1
-        return
+        throw 'safe-pnpm: command refused'
     }
 
     $dirFlag = _Safe_Pkg_Dir_Flag -Manager yarn -PassArgs $passArgs
@@ -94,10 +94,10 @@ function global:yarn {
         Write-Host "✗ safe-pnpm: $dirFlag is not supported through the wrapper; the scan checks this directory's lockfile, so an install in another directory would go unchecked." -ForegroundColor Red
         Write-Host "  cd into that directory and run the command there. To run it without the safety checks: yarn.cmd $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
         $global:LASTEXITCODE = 1
-        return
+        throw 'safe-pnpm: command refused'
     }
 
-    if (-not (_Safe_Pkg_Prescan -Manager yarn -Lockfile 'yarn.lock' -Socket:$socketFlag)) { return }
+    if (-not (_Safe_Pkg_Prescan -Manager yarn -Lockfile 'yarn.lock' -Socket:$socketFlag)) { $global:LASTEXITCODE = 1; throw 'safe-pnpm: command refused' }
 
     docker info 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) {
@@ -108,7 +108,7 @@ function global:yarn {
     try { $userFlags = @(_Safe_Pkg_User) } catch {
         Write-Host "✗ $($_.Exception.Message)" -ForegroundColor Red
         $global:LASTEXITCODE = 1
-        return
+        throw 'safe-pnpm: command refused'
     }
 
     $tmpDir = New-TemporaryFile | ForEach-Object { Remove-Item $_ -Force; New-Item -Type Directory $_ }
