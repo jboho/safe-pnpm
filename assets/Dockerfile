@@ -1,6 +1,6 @@
 # Pinned by digest for reproducibility — a floating tag could pull a compromised
 # image. This tag/digest ships yarn 1.22.22, so only pnpm is installed below.
-# To refresh: docker buildx imagetools inspect node:22.22.3-alpine3.24
+# To refresh: docker buildx imagetools inspect node:24.21.0-alpine3.24
 FROM node:24.21.0-alpine3.24@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1
 ARG CUSTOM_CA=""
 ARG PNPM_VERSION=11.5.3
