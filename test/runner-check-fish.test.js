@@ -155,7 +155,7 @@ fi
 `,
     { mode: 0o755 },
   );
-  for (const name of ["npx", "pnpm", "yarn"]) {
+  for (const name of ["npx", "pnpx", "pnpm", "yarn"]) {
     fs.writeFileSync(
       path.join(bin, name),
       `#!/bin/sh\necho "RAN ${name} $*" >> "${log}"\n`,
@@ -210,6 +210,17 @@ test("fish: npx of a clean package checks it, then runs it", opts, () => {
   assert.match(r.out, /✓ 1 package checked against OSV; none known malicious/);
   assert.match(r.calls, /npm view cowsay version --json/);
   assert.match(r.calls, /RAN npx cowsay hi/);
+});
+
+test("fish: pnpx is checked like pnpm dlx before it runs", opts, () => {
+  const bad = run("pnpm-wrapper.fish", "pnpx mal-pkg");
+  assert.equal(bad.status, 1, bad.out);
+  assert.match(bad.out, /mal-pkg@1\.2\.3\s+MAL-2099-1/);
+  assert.doesNotMatch(bad.calls, /RAN/);
+  const ok = run("pnpm-wrapper.fish", "pnpx cowsay hi");
+  assert.equal(ok.status, 0, ok.out);
+  assert.match(ok.calls, /npm view cowsay version --json/);
+  assert.match(ok.calls, /RAN pnpx cowsay hi/);
 });
 
 test(
@@ -457,7 +468,7 @@ function runInstalled(line, extraEnv = {}) {
 }
 
 test(
-  "fish: setup installs npx.fish next to npm.fish, and npx autoloads with the check",
+  "fish: setup installs npx.fish and pnpx.fish next to their managers, and both autoload with the check",
   opts,
   () => {
     const fnDir = installFish(["pnpm", "npm"]);
@@ -466,7 +477,11 @@ test(
       "npm.fish",
       "npx.fish",
       "pnpm.fish",
+      "pnpx.fish",
     ]);
+    const pnpx = runInstalled("pnpx mal-pkg");
+    assert.equal(pnpx.status, 1, pnpx.out);
+    assert.doesNotMatch(pnpx.calls, /RAN/);
     const bad = runInstalled("npx mal-pkg");
     assert.equal(bad.status, 1, bad.out);
     assert.match(bad.out, /no package code was executed/);
@@ -488,6 +503,7 @@ test(
     assert.deepEqual(fs.readdirSync(fnDir).sort(), [
       "_safe_pkg_prescan.fish",
       "pnpm.fish",
+      "pnpx.fish",
     ]);
   },
 );

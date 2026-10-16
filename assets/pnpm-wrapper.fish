@@ -1,5 +1,6 @@
 # pnpm Docker isolation wrapper — fish shell
-# Install: copy to ~/.config/fish/functions/pnpm.fish
+# Install: copy to ~/.config/fish/functions/pnpm.fish, and again as pnpx.fish
+# (fish autoloads the pnpx function below only from a file of that name)
 # (safe-pnpm setup handles this automatically)
 #
 # Intercepts install-class pnpm commands and runs them in an isolated Docker
@@ -316,4 +317,17 @@ function pnpm
 
     _safe_pkg_untrack $tmpdir $snapdir
     return $rc
+end
+
+# pnpx is pnpm dlx: same OSV check, then native.
+# setup also installs this file as pnpx.fish, so fish autoloads it for pnpx.
+function pnpx
+    functions -q _safe_pkg_prescan
+    or begin
+        echo "✗ safe-pnpm: _safe_pkg_prescan.fish not installed — run `safe-pnpm update`." >&2
+        return 1
+    end
+    _safe_pkg_runner_check pnpx $argv
+    or return 1
+    command pnpx $argv
 end

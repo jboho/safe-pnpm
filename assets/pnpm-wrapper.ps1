@@ -219,3 +219,11 @@ function global:pnpm {
         Remove-Item -Recurse -Force $tmpDir.FullName, $snapDir.FullName -ErrorAction SilentlyContinue
     }
 }
+
+# pnpx is pnpm dlx: same OSV check, then native.
+# Escape hatch: pnpx.cmd.
+function global:pnpx {
+    if (-not (_Safe_Pkg_Runner_Check -Manager pnpx -PassArgs $args)) { $global:LASTEXITCODE = 1; return }
+    $pnpxExe = (Get-Command pnpx -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+    & $pnpxExe @args
+}

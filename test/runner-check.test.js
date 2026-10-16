@@ -116,7 +116,7 @@ fi
 `,
     { mode: 0o755 },
   );
-  for (const name of ["npx", "pnpm", "yarn"]) {
+  for (const name of ["npx", "pnpx", "pnpm", "yarn"]) {
     fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho "RAN ${name} $*" >> "${log}"\n`, { mode: 0o755 });
   }
   env = {
@@ -151,6 +151,17 @@ test("npx of a clean package checks it, then runs it", () => {
   assert.match(r.out, /1 package checked against OSV; none known malicious/);
   assert.match(r.calls, /npm view cowsay version --json/);
   assert.match(r.calls, /RAN npx cowsay hi/);
+});
+
+test("pnpx is checked like pnpm dlx before it runs", () => {
+  const bad = run("pnpm-wrapper.sh", "pnpx mal-pkg");
+  assert.equal(bad.status, 1, bad.out);
+  assert.match(bad.out, /mal-pkg@1\.2\.3\s+MAL-2099-1/);
+  assert.doesNotMatch(bad.calls, /RAN/);
+  const ok = run("pnpm-wrapper.sh", "pnpx cowsay hi");
+  assert.equal(ok.status, 0, ok.out);
+  assert.match(ok.calls, /npm view cowsay version --json/);
+  assert.match(ok.calls, /RAN pnpx cowsay hi/);
 });
 
 test("npx of a known-malicious package is blocked and never runs", () => {

@@ -19,3 +19,9 @@ pnpm() {
   _safe_pkg_dispatch "pnpm" "pnpm-lock.yaml" "pnpm-workspace.yaml" \
     "package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc" "$@"
 }
+
+# pnpx is pnpm dlx: same OSV check, then native.
+pnpx() {
+  _safe_pkg_runner_check pnpx "$@" || return 1
+  command pnpx "$@"
+}

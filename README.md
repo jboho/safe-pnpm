@@ -124,10 +124,10 @@ When you run an install-class command:
 **Download-and-run commands get a malware check only.** These fetch a package and run it straight away, so they skip the Docker sandbox, the CVE audit and Socket, and the package's code runs on your machine with your permissions:
 
 - `npx PKG`, `npm exec PKG`, `npm init PKG`, `npm create PKG`
-- `pnpm dlx PKG`, `pnpm create PKG`
+- `pnpm dlx PKG`, `pnpx PKG`, `pnpm create PKG`
 - `yarn create PKG`, and `yarn dlx PKG` on yarn 2+
 
-In bash, zsh, fish and PowerShell (not yet tested on native Windows) the wrappers look up the version the command would fetch (`npm view`, which reads registry metadata and runs no package code), check that `name@version` against [OSV](https://osv.dev)'s malicious-package advisories, and refuse to run the command on a hit. A `create` command checks the `create-` package the manager would fetch. If OSV or the lookup fails the command warns and runs; `SAFE_PNPM_OSV_STRICT=1` blocks instead. Paths, URLs, git specs and packages in private scopes are not checked. `npx` is wrapped only when the npm wrapper is enabled. OSV only knows packages already reported as malicious, so treat anything new with care and check the name yourself.
+In bash, zsh, fish and PowerShell (not yet tested on native Windows) the wrappers look up the version the command would fetch (`npm view`, which reads registry metadata and runs no package code), check that `name@version` against [OSV](https://osv.dev)'s malicious-package advisories, and refuse to run the command on a hit. A `create` command checks the `create-` package the manager would fetch. If OSV or the lookup fails the command warns and runs; `SAFE_PNPM_OSV_STRICT=1` blocks instead. Paths, URLs, git specs and packages in private scopes are not checked. `npx` is wrapped only when the npm wrapper is enabled, and `pnpx` only with the pnpm wrapper. OSV only knows packages already reported as malicious, so treat anything new with care and check the name yourself.
 
 1. **Pre-install scan** — [Socket behavioral analysis](./docs/socket.md) if configured.
 2. **Copy only manifests** — `package.json`, the lockfile, workspace files, and `.npmrc` / `.yarnrc` go into a temp directory. Source files, `.env`, and secrets never leave the host.
@@ -260,7 +260,7 @@ scripts on the host):
 | zsh | `~/.zshrc` |
 | bash (macOS) | `~/.bash_profile` |
 | bash (Linux) | `~/.bashrc` |
-| fish | `~/.config/fish/functions/{pnpm,npm,yarn}.fish` (one per enabled manager), plus `npx.fish` with npm |
+| fish | `~/.config/fish/functions/{pnpm,npm,yarn}.fish` (one per enabled manager), plus `npx.fish` with npm and `pnpx.fish` with pnpm |
 | PowerShell | `~/Documents/PowerShell/Microsoft.PowerShell_profile.ps1` |
 
 ---

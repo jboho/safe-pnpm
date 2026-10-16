@@ -29,6 +29,8 @@ const DEAD = { SAFE_PNPM_OSV_API: "http://127.0.0.1:1" };
 add("npx cowsay hi", "npx cowsay hi");
 add("npx mal-pkg", "npx mal-pkg");
 add("npx -p mal-pkg cowsay", "npx -p mal-pkg cowsay");
+add("pnpx mal-pkg", "pnpx mal-pkg");
+add("pnpx cowsay hi", "pnpx cowsay hi");
 add("pnpm dlx mal-pkg", "pnpm dlx mal-pkg");
 add("yarn dlx mal-pkg", "yarn dlx mal-pkg");
 add("pnpm dlx cowsay", "pnpm dlx cowsay");
@@ -112,7 +114,7 @@ fi
 `,
     { mode: 0o755 },
   );
-  for (const name of ["npx", "pnpm", "yarn"]) {
+  for (const name of ["npx", "pnpx", "pnpm", "yarn"]) {
     fs.writeFileSync(
       path.join(bin, name),
       `#!/bin/sh\necho "RAN ${name} $*" >> /w/log\n`,
@@ -236,6 +238,17 @@ test("ps1: a malicious package passed with -p is blocked even when the command w
   const r = result("npx -p mal-pkg cowsay");
   assert.equal(r.status, "RC=1 ERRORS=0", r.out);
   assert.doesNotMatch(r.calls, /RAN/);
+});
+
+test("ps1: pnpx is checked like pnpm dlx before it runs", { skip }, () => {
+  const bad = result("pnpx mal-pkg");
+  assert.equal(bad.status, "RC=1 ERRORS=0", bad.out);
+  assert.match(bad.out, /mal-pkg@1\.2\.3\s+MAL-2099-1/);
+  assert.doesNotMatch(bad.calls, /RAN/);
+  const ok = result("pnpx cowsay hi");
+  assert.equal(ok.status, "RC=0 ERRORS=0", ok.out);
+  assert.match(ok.calls, /npm view cowsay version --json/);
+  assert.match(ok.calls, /RAN pnpx cowsay hi/);
 });
 
 test("ps1: pnpm dlx, yarn dlx and npm exec are checked before they run", {
