@@ -202,62 +202,122 @@ function _Safe_Pkg_Valueflags {
     param([string]$Manager)
     $lists = @{
         pnpm = @('-C','--dir','-F','--filter','--filter-prod','--workspace-dir','--reporter','--loglevel','--config','--store-dir','--state-dir','--registry','--lockfile-dir','--network-concurrency','--fetch-timeout','--workspace-concurrency','--test-pattern','--changed-files-ignore-pattern','--http-proxy','--https-proxy','--no-proxy','--user-agent')
-        npm = @('--prefix','-w','--workspace','--registry','--cache','--userconfig','--globalconfig','--loglevel','--otp','--scope','--omit','--include','--install-strategy','--tag','--before','--audit-level','--fetch-retries','--lockfile-version','--min-release-age','--cpu','--os','--libc','--script-shell','--node-options','--maxsockets')
+        npm = @('--prefix','-w','--workspace','--registry','--cache','--userconfig','--globalconfig','--loglevel','--otp','--scope','--omit','--include','--install-strategy','--tag','--before','--audit-level','--fetch-retries','--lockfile-version','--min-release-age','--cpu','--os','--libc','--script-shell','--node-options','--maxsockets','--location')
         yarn = @('--cwd','--registry','--modules-folder','--cache-folder','--preferred-cache-folder','--global-folder','--link-folder','--network-concurrency','--network-timeout','--proxy','--https-proxy','--mutex','--use-yarnrc','--cafile','--otp')
     }
     if ($Manager -eq 'npx') { $Manager = 'npm' }
+    if ($Manager -eq 'pnpx') { $Manager = 'pnpm' }
     return $lists[$Manager]
 }
 
-# For the commands that download a package and run it (npx, npm exec,
+# For the commands that download a package and run it (npx, pnpx, npm exec,
 # npm init|create, pnpm dlx|create, yarn dlx|create) outputs the package specs
 # that will be fetched; for any other command, nothing. A port of
-# _safe_pkg_runner_specs in _safe_pkg_shared.sh, which has the rules.
+# _safe_pkg_runner_specs in _safe_pkg_shared.sh, which has the rules: every
+# reading of an ambiguous parse is scanned.
 function _Safe_Pkg_Runner_Specs {
     param([string]$Manager, [string[]]$PassArgs)
+    if ($Manager -eq 'npx') { return _Safe_Pkg_Runner_Tail -Manager npm -Mode exec -PassArgs $PassArgs }
+    if ($Manager -eq 'pnpx') { return _Safe_Pkg_Runner_Tail -Manager pnpm -Mode exec -PassArgs $PassArgs }
     $valueFlags = @(_Safe_Pkg_Valueflags $Manager)
-    $mode = ''
-    $i = 0
-    if ($Manager -eq 'npx') {
-        $mode = 'exec'
-    } else {
-        $skip = $false
-        while ($i -lt $PassArgs.Count) {
-            $a = $PassArgs[$i]; $i++
-            if ($skip) { $skip = $false; continue }
-            if ($a -eq '--') { break }
-            if ($a -like '-*=*') { continue }
-            if ($a -like '-*') { if ($valueFlags -ccontains $a) { $skip = $true }; continue }
-            $n = $a.ToLower()
-            if ("${Manager}:$n" -in 'npm:exec','npm:x','pnpm:dlx','yarn:dlx') { $mode = 'exec' }
-            if ("${Manager}:$n" -in 'npm:init','npm:create','npm:innit','pnpm:create','yarn:create') { $mode = 'create' }
-            break
-        }
-        if (-not $mode) { return }
-    }
-    $bools = @('-y','--yes','-n','--no','--no-install','--ignore-existing','-s','--shell-mode','--silent','-q','--quiet','--verbose','--json','--offline','--prefer-offline','-ws','--workspaces','--no-workspaces','--include-workspace-root','--no-color','--color','--no-fund','--no-audit')
+    $exec = @('npm:exec','npm:exe','npm:x','pnpm:dlx','yarn:dlx')
+    $create = @('npm:init','npm:ini','npm:inn','npm:inni','npm:innit','npm:cr','npm:cre','npm:crea','npm:creat','npm:create','pnpm:create','yarn:create')
     $pkgs = [System.Collections.Generic.List[string]]::new()
-    $pos = [System.Collections.Generic.List[string]]::new()
+    # skip: '', 'value' (drop the next word) or 'pkg' (the next word is a package).
     $skip = ''
-    $extra = $false
-    $npos = 0
+    $maybe = $false
+    $dd = $false
+    $i = 0
     while ($i -lt $PassArgs.Count) {
-        $a = $PassArgs[$i]; $i++
-        if ($skip -eq 'pkg') { $pkgs.Add($a); $skip = ''; continue }
-        if ($skip -eq 'value') { $skip = ''; continue }
-        if ($a -eq '--') { continue }
-        if ($a -ceq '-p' -or $a -ceq '--package') { $skip = 'pkg'; continue }
-        if ($a -clike '--package=*' -or $a -clike '-p=*') { $pkgs.Add($a.Substring($a.IndexOf('=') + 1)); continue }
-        if ($a -ceq '-c' -or $a -ceq '--call') { $skip = 'value'; continue }
-        if ($a -like '-*=*') { continue }
-        if ($bools -ccontains $a) { continue }
-        if ($a -like '-*') { if ($valueFlags -ccontains $a) { $skip = 'value' } else { $extra = $true }; continue }
-        $npos++
-        if ($pkgs.Count -eq 0) { $pos.Add($a) }
-        if ($extra -and $npos -lt 2) { continue }
+        $a = [string]$PassArgs[$i]; $i++
+        if (-not $dd) {
+            if ($skip) {
+                if ($a -like '-*') { $skip = ''; $maybe = $true; continue }
+                if ($skip -eq 'pkg') { $pkgs.Add($a) }
+                $skip = ''
+                continue
+            }
+            if ($a -eq '--') {
+                if ($Manager -eq 'yarn') { break }
+                $dd = $true; $maybe = $false; continue
+            }
+            if ($a -clike '--package=*') {
+                $maybe = $false
+                if ($Manager -ne 'yarn') { $pkgs.Add($a.Substring($a.IndexOf('=') + 1)) }
+                continue
+            }
+            if ($a -ceq '--package') {
+                if ($Manager -eq 'yarn') { $maybe = $true } else { $maybe = $false; $skip = 'pkg' }
+                continue
+            }
+            if ($a -like '-*=*') { $maybe = $false; continue }
+            if ($a -like '-*') {
+                $maybe = $true
+                if (($valueFlags -ccontains $a) -or [bool](_Safe_Pkg_Dir_Flag -Manager $Manager -PassArgs @($a))) { $maybe = $false; $skip = 'value' }
+                continue
+            }
+        }
+        $key = "${Manager}:$a"
+        $mode = if ($exec -contains $key) { 'exec' } elseif ($create -contains $key) { 'create' } else { '' }
+        if ($mode) {
+            $rest = if ($i -lt $PassArgs.Count) { @($PassArgs[$i..($PassArgs.Count - 1)]) } else { @() }
+            _Safe_Pkg_Runner_Tail -Manager $Manager -Mode $mode -Pkgs @($pkgs) -DashDash:$dd -PassArgs $rest
+        }
+        # A word that may be a flag's value: the next word may be the command.
+        if ($maybe -and -not $dd) { $maybe = $false; continue }
         break
     }
-    if ($mode -eq 'create') {
+}
+
+# The spec finder for one reading of the command word; see
+# _Safe_Pkg_Runner_Specs. Pkgs are the --package values read before the
+# command word; -DashDash means a -- came before it, so no word is a flag.
+function _Safe_Pkg_Runner_Tail {
+    param([string]$Manager, [string]$Mode, [string[]]$Pkgs, [switch]$DashDash, [string[]]$PassArgs)
+    $valueFlags = @(_Safe_Pkg_Valueflags $Manager)
+    $bools = @('-y','--yes','-n','--no','--no-install','--ignore-existing','-s','--shell-mode','--silent','-q','--quiet','--verbose','--json','--offline','--prefer-offline','-ws','--workspaces','--no-workspaces','--include-workspace-root','--no-color','--color','--no-fund','--no-audit')
+    $pkgList = [System.Collections.Generic.List[string]]::new()
+    foreach ($p in @($Pkgs)) { if ($null -ne $p) { $pkgList.Add($p) } }
+    $pos = [System.Collections.Generic.List[string]]::new()
+    $dd = [bool]$DashDash
+    $skip = ''
+    $maybe = $false
+    $found = $false
+    $npmLike = $Manager -in @('npm','pnpm')
+    foreach ($a in @($PassArgs)) {
+        $a = [string]$a
+        if (-not $dd) {
+            if ($skip) {
+                if ($a -like '-*') { $skip = ''; $maybe = $true; continue }
+                if ($skip -eq 'pkg') { $pkgList.Add($a) }
+                $skip = ''
+                continue
+            }
+            if ($a -eq '--') {
+                $dd = $true
+                if ($found) { break }
+                $maybe = $false; continue
+            }
+            if ($npmLike -and ($a -ceq '-p' -or $a -ceq '--package')) { $maybe = $false; $skip = 'pkg'; continue }
+            if ($npmLike -and ($a -clike '--package=*' -or $a -clike '-p=*')) { $maybe = $false; $pkgList.Add($a.Substring($a.IndexOf('=') + 1)); continue }
+            if ($Manager -eq 'npm' -and ($a -ceq '-c' -or $a -ceq '--call')) { $maybe = $false; $skip = 'value'; continue }
+            if (($a -like '-*=*') -or ($Manager -eq 'pnpm' -and $a -ceq '-c') -or ($bools -ccontains $a)) { $maybe = $false; continue }
+            if ($a -like '-*') {
+                $maybe = $true
+                if ($valueFlags -ccontains $a) { $maybe = $false; $skip = 'value' }
+                continue
+            }
+        }
+        # npm reads flags after the command name too; only --package matters there.
+        if ($found) { continue }
+        $pos.Add($a)
+        if ($maybe -and -not $dd) { $maybe = $false; continue }
+        $found = $true
+        if ($Manager -eq 'npm' -and -not $dd) { continue }
+        break
+    }
+    if ($Mode -eq 'create') {
+        $pkgList
         foreach ($line in $pos) {
             if (-not $line) { continue }
             if ($line -like '@*/*') {
@@ -279,8 +339,7 @@ function _Safe_Pkg_Runner_Specs {
         }
         return
     }
-    $pkgs
-    $pos
+    if ($pkgList.Count) { $pkgList } else { $pos }
 }
 
 # Runs before a download-and-run command: $true at once for any other command,

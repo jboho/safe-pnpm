@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { startOsvStub } = require("./helpers/osv-stub");
+const { RUNNERS, OTHERS } = require("./helpers/runner-cases");
 
 // Fish counterpart of test/runner-check.test.js: the download-and-run check in
 // _safe_pkg_prescan.fish and the fish wrappers.
@@ -14,40 +15,6 @@ const SHARED = path.join(ASSETS, "_safe_pkg_shared.sh");
 const fishAvailable =
   spawnSync("fish", ["--version"], { stdio: "pipe" }).status === 0;
 const opts = { skip: !fishAvailable && "fish not installed" };
-
-// Same table as test/runner-check.test.js.
-const RUNNERS = [
-  ["npx", ["cowsay", "hi"], ["cowsay"]],
-  ["npx", ["-y", "cowsay@1.5.0"], ["cowsay@1.5.0"]],
-  ["npx", ["-p", "lodash", "-p", "cowsay", "cowsay"], ["lodash", "cowsay"]],
-  ["npx", ["--package=foo", "bar"], ["foo"]],
-  ["npx", ["--registry", "http://r", "cowsay"], ["cowsay"]],
-  ["npx", ["--future-flag", "val", "cowsay"], ["val", "cowsay"]],
-  ["npx", ["--", "cowsay"], ["cowsay"]],
-  ["npm", ["exec", "cowsay"], ["cowsay"]],
-  ["npm", ["--prefix", "web", "exec", "cowsay"], ["cowsay"]],
-  ["npm", ["x", "--", "cowsay"], ["cowsay"]],
-  ["npm", ["init", "vite"], ["create-vite"]],
-  ["npm", ["create", "@scope/foo"], ["@scope/create-foo"]],
-  ["npm", ["create", "@scope"], ["@scope/create"]],
-  ["npm", ["create", "@scope@2"], ["@scope/create@2"]],
-  ["npm", ["init", "create-foo"], ["create-create-foo", "create-foo"]],
-  ["pnpm", ["dlx", "cowsay"], ["cowsay"]],
-  ["pnpm", ["-C", "web", "dlx", "cowsay"], ["cowsay"]],
-  ["pnpm", ["create", "vite@latest", "app"], ["create-vite@latest"]],
-  ["yarn", ["dlx", "cowsay"], ["cowsay"]],
-  ["yarn", ["create", "react-app", "app"], ["create-react-app"]],
-];
-
-const OTHERS = [
-  ["npm", ["install", "x"]],
-  ["npm", ["run", "build"]],
-  ["npm", ["--version"]],
-  ["pnpm", ["exec", "cowsay"]],
-  ["pnpm", ["add", "x"]],
-  ["yarn", ["add", "x"]],
-  ["yarn", []],
-];
 
 // Edge cases outside the table, where fish must print what bash prints.
 const EDGES = [
@@ -69,6 +36,16 @@ const EDGES = [
   ["pnpm", ["create", "@scope@latest", "dir"]],
   ["pnpm", ["--filter", "dlx", "add", "x"]],
   ["yarn", ["--cwd", "dlx", "create", "foo"]],
+  ["npm", ["exec", "--", "-p", "x"]],
+  ["npm", ["exec", "x", "--", "--package=y"]],
+  ["npm", ["--", "--package=x", "exec", "y"]],
+  ["npm", ["--future", "exec", "exec", "y"]],
+  ["npm", ["init", "--package=x", "y"]],
+  ["npx", ["-p"]],
+  ["pnpm", ["--package"]],
+  ["pnpm", ["dlx", "-p", "--yes", "x"]],
+  ["yarn", ["--package", "create", "x"]],
+  ["pnpx", []],
 ];
 
 const fishSpecs = (manager, args) =>
