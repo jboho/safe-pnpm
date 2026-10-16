@@ -77,6 +77,7 @@ const SHELLS = [
 //                  with no output
 // opts.mac       — put a `uname` on PATH that reports Darwin arm64
 // opts.pnpmArch  — install pnpm-arch.js in the fake ~/.safe-pnpm
+// opts.hostSpecs — install host-specs.js in the fake ~/.safe-pnpm
 // opts.pkg       — the project's package.json text (default a minimal one)
 // opts.phase1Pkg — bash run by the stub in phase 1 instead of its default
 //                  package.json rewrite, with $src = the /app mount
@@ -110,6 +111,12 @@ function runWrapper(manager, wrapperFile, opts = {}) {
     fs.copyFileSync(
       path.join(ASSETS_DIR, "pnpm-arch.js"),
       path.join(root, ".safe-pnpm", "pnpm-arch.js"),
+    );
+  }
+  if (opts.hostSpecs) {
+    fs.copyFileSync(
+      path.join(ASSETS_DIR, "host-specs.js"),
+      path.join(root, ".safe-pnpm", "host-specs.js"),
     );
   }
   if (opts.mac) {
@@ -860,5 +867,43 @@ for (const { shell, ext, available } of SHELLS) {
     assert.match(r.read("run1.ws"), /^supportedArchitectures:/m);
     assert.equal(JSON.parse(r.read("run1.pkg")).pnpm, undefined);
     assert.ok(!fs.existsSync(path.join(r.proj, "pnpm-workspace.yaml")));
+  });
+}
+
+// On a Mac the npm wrapper runs host-specs.js inside the sandbox, next to the
+// project's package.json, so a "type": "module" project must not turn it into
+// an ES module. The stub's second run is that step; it runs the copied script
+// the way the container would and records what it printed.
+const HOST_LOCK = JSON.stringify({
+  packages: {
+    "": { name: "fixture" },
+    "node_modules/@esbuild/darwin-arm64": {
+      version: "0.21.5",
+      optional: true,
+      os: ["darwin"],
+      cpu: ["arm64"],
+    },
+  },
+});
+
+for (const { shell, ext, available } of SHELLS) {
+  test(`npm (${shell}): Mac host builds run host-specs in a "type": "module" project`, {
+    skip: !available,
+  }, () => {
+    const r = runWrapper("npm", `npm-wrapper.${ext}`, {
+      shell,
+      mac: true,
+      hostSpecs: true,
+      pkg: JSON.stringify({ name: "fixture", type: "module" }),
+      phase1Pkg: ":",
+      phase1Lock: HOST_LOCK,
+      phase2: 'specs=$(find "$src" -maxdepth 1 -name ".safe-host-specs.*"); (cd "$src" && node "$specs" darwin arm64) > "$HOME/specs.out" 2>&1',
+    });
+    assert.equal(r.runCount, 3, r.read("stderr"));
+    assert.match(r.read("run2.args"), /node \/app\/\.safe-host-specs\.cjs/);
+    assert.equal(
+      fs.readFileSync(path.join(r.root, "specs.out"), "utf8").trim(),
+      "@esbuild/darwin-arm64@0.21.5",
+    );
   });
 }
