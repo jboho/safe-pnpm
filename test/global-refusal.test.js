@@ -32,19 +32,21 @@ for (const args of GLOBAL.filter((a) => a[0] !== "global")) {
   test(`sh: dispatch refuses "${args.join(" ")}" with exit 1`, () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "safe-pnpm-glob-"));
     try {
+      // Paths go in through the environment: CodeQL counts every `bash -c`
+      // argv element as command text.
       const env = {
         ...process.env,
         PATH: `${fakeBin(dir)}:${process.env.PATH}`,
         HOME: dir,
+        SAFE_TEST_SHARED: SHARED,
       };
       delete env.SAFE_PNPM_ALLOW_NATIVE_FALLBACK;
       const r = spawnSync(
         "bash",
         [
           "-c",
-          'source "$1"; shift; _safe_pkg_dispatch npm package-lock.json "" "package.json" install "$@"',
+          'source "$SAFE_TEST_SHARED"; _safe_pkg_dispatch npm package-lock.json "" "package.json" install "$@"',
           "bash",
-          SHARED,
           ...args,
         ],
         { stdio: "pipe", cwd: dir, env },
@@ -70,12 +72,11 @@ for (const [list, expected] of [
         "bash",
         [
           "-c",
-          'source "$1"; shift; _safe_pkg_is_global "$@"',
+          'source "$SAFE_TEST_SHARED"; _safe_pkg_is_global "$@"',
           "bash",
-          SHARED,
           ...args,
         ],
-        { stdio: "pipe" },
+        { stdio: "pipe", env: { ...process.env, SAFE_TEST_SHARED: SHARED } },
       );
       assert.equal(r.status, expected);
     });
@@ -86,11 +87,12 @@ for (const [list, expected] of [
         "fish",
         [
           "-c",
-          "source $argv[1]; _safe_pkg_is_global $argv[2..-1]",
-          PRESCAN,
+          "source $SAFE_TEST_PRESCAN; _safe_pkg_is_global $argv",
+          // Ends fish's own option parsing, so "-g" reaches $argv.
+          "--",
           ...args,
         ],
-        { stdio: "pipe" },
+        { stdio: "pipe", env: { ...process.env, SAFE_TEST_PRESCAN: PRESCAN } },
       );
       assert.equal(r.status, expected);
     });
@@ -114,10 +116,8 @@ for (const [mgr, args] of WRAPPER_CASES) {
         "bash",
         [
           "-c",
-          'source "$1"; source "$2"; shift 2; "$@"',
+          'source "$SAFE_TEST_SHARED"; source "$SAFE_TEST_WRAPPER"; "$@"',
           "bash",
-          SHARED,
-          path.join(__dirname, "..", "assets", `${mgr}-wrapper.sh`),
           mgr,
           ...args,
         ],
@@ -128,6 +128,13 @@ for (const [mgr, args] of WRAPPER_CASES) {
             ...process.env,
             PATH: `${bin}:${process.env.PATH}`,
             HOME: dir,
+            SAFE_TEST_SHARED: SHARED,
+            SAFE_TEST_WRAPPER: path.join(
+              __dirname,
+              "..",
+              "assets",
+              `${mgr}-wrapper.sh`,
+            ),
           },
         },
       );
