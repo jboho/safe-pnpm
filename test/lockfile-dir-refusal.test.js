@@ -50,8 +50,18 @@ const KEPT = [
 // the command line, which overrides every config file.
 // [manager, file, contents, pinned flag]
 const PINNED = [
-  ["pnpm", ".npmrc", '"lockfile\\u002ddir"=sub\n', "--config.lockfile-dir=/app"],
-  ["pnpm", "pnpm-workspace.yaml", '"lockfile\\x44ir": sub\n', "--config.lockfile-dir=/app"],
+  [
+    "pnpm",
+    ".npmrc",
+    '"lockfile\\u002ddir"=sub\n',
+    "--config.lockfile-dir=/app",
+  ],
+  [
+    "pnpm",
+    "pnpm-workspace.yaml",
+    '"lockfile\\x44ir": sub\n',
+    "--config.lockfile-dir=/app",
+  ],
   ["yarn", ".yarnrc", "--cwd sub\n", "--cwd /app"],
   ["yarn", ".yarnrc", '"--\\u0063wd" sub\n', "--cwd /app"],
 ];

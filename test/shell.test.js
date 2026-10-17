@@ -109,7 +109,12 @@ test("addSourceLines() with single manager behaves like addSourceLine()", () => 
 });
 
 test("fishFunctionNames() adds npx after npm and pnpx after pnpm, only for enabled managers", () => {
-  assert.deepEqual(fishFunctionNames(["pnpm", "npm"]), ["pnpm", "pnpx", "npm", "npx"]);
+  assert.deepEqual(fishFunctionNames(["pnpm", "npm"]), [
+    "pnpm",
+    "pnpx",
+    "npm",
+    "npx",
+  ]);
   assert.deepEqual(fishFunctionNames(["npm", "yarn"]), ["npm", "npx", "yarn"]);
   assert.deepEqual(fishFunctionNames([]), []);
 });

@@ -45,7 +45,11 @@ const RUNNERS = [
   ["npm", ["ini", "vite"], ["create-vite"]],
   ["npm", ["inni", "vite"], ["create-vite"]],
   // every word after an unlisted flag may be its value
-  ["npx", ["--proxy", "http://p", "--cafile", "ca.pem", "cowsay"], ["http://p", "ca.pem", "cowsay"]],
+  [
+    "npx",
+    ["--proxy", "http://p", "--cafile", "ca.pem", "cowsay"],
+    ["http://p", "ca.pem", "cowsay"],
+  ],
   ["npm", ["exec", "--a", "x", "--b", "y", "cowsay"], ["x", "y", "cowsay"]],
   // before the command word: a flag value, a directory flag, an unlisted
   // flag (with or without a value), or --
