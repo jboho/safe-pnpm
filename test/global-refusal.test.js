@@ -12,23 +12,51 @@ const PRESCAN = path.join(__dirname, "..", "assets", "_safe_pkg_prescan.fish");
 const fishAvailable =
   spawnSync("fish", ["--version"], { stdio: "pipe" }).status === 0;
 
+// Fake docker and npm on PATH, in a throwaway directory: if a spelling slips
+// past the check, the test fails without a real install landing in the repo.
+function fakeBin(dir) {
+  const bin = path.join(dir, "bin");
+  fs.mkdirSync(bin);
+  for (const tool of ["docker", "npm"]) {
+    fs.writeFileSync(
+      path.join(bin, tool),
+      `#!/bin/sh\necho "$@" >> "${dir}/${tool}.log"\nexit 1\n`,
+      { mode: 0o755 },
+    );
+  }
+  return bin;
+}
+
 // `yarn global ...` is a subcommand, covered end to end below.
 for (const args of GLOBAL.filter((a) => a[0] !== "global")) {
   test(`sh: dispatch refuses "${args.join(" ")}" with exit 1`, () => {
-    const r = spawnSync(
-      "bash",
-      [
-        "-c",
-        'source "$1"; shift; _safe_pkg_dispatch npm package-lock.json "" "package.json" install "$@"',
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "safe-pnpm-glob-"));
+    try {
+      const env = {
+        ...process.env,
+        PATH: `${fakeBin(dir)}:${process.env.PATH}`,
+        HOME: dir,
+      };
+      delete env.SAFE_PNPM_ALLOW_NATIVE_FALLBACK;
+      const r = spawnSync(
         "bash",
-        SHARED,
-        ...args,
-      ],
-      { stdio: "pipe", cwd: __dirname },
-    );
-    assert.equal(r.status, 1);
-    assert.match(r.stderr.toString(), /global installs are not supported/);
-    assert.match(r.stderr.toString(), /command npm install/);
+        [
+          "-c",
+          'source "$1"; shift; _safe_pkg_dispatch npm package-lock.json "" "package.json" install "$@"',
+          "bash",
+          SHARED,
+          ...args,
+        ],
+        { stdio: "pipe", cwd: dir, env },
+      );
+      assert.equal(r.status, 1);
+      assert.match(r.stderr.toString(), /global installs are not supported/);
+      assert.match(r.stderr.toString(), /command npm install/);
+      assert.equal(fs.existsSync(path.join(dir, "docker.log")), false);
+      assert.equal(fs.existsSync(path.join(dir, "npm.log")), false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 }
 
