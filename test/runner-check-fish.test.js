@@ -146,7 +146,7 @@ before(async () => {
     `#!/bin/sh
 echo "npm $*" >> "${log}"
 if [ "$1" = view ]; then
-  case "$2" in
+  case "$4" in
     unknown-*) echo "npm error code E404" >&2; exit 1 ;;
     broken-*) echo "npm error code ECONNRESET" >&2; exit 1 ;;
     *) echo '"1.2.3"'; exit 0 ;;
@@ -208,7 +208,7 @@ test("fish: npx of a clean package checks it, then runs it", opts, () => {
   assert.equal(r.status, 0, r.out);
   assert.match(r.out, /→ Malware scan \(OSV\)/);
   assert.match(r.out, /✓ 1 package checked against OSV; none known malicious/);
-  assert.match(r.calls, /npm view cowsay version --json/);
+  assert.match(r.calls, /npm view --json -- cowsay version/);
   assert.match(r.calls, /RAN npx cowsay hi/);
 });
 
@@ -219,7 +219,7 @@ test("fish: pnpx is checked like pnpm dlx before it runs", opts, () => {
   assert.doesNotMatch(bad.calls, /RAN/);
   const ok = run("pnpm-wrapper.fish", "pnpx cowsay hi");
   assert.equal(ok.status, 0, ok.out);
-  assert.match(ok.calls, /npm view cowsay version --json/);
+  assert.match(ok.calls, /npm view --json -- cowsay version/);
   assert.match(ok.calls, /RAN pnpx cowsay hi/);
 });
 
@@ -297,17 +297,17 @@ test(
   () => {
     const p = run("pnpm-wrapper.fish", "pnpm create vite app");
     assert.equal(p.status, 0, p.out);
-    assert.match(p.calls, /npm view create-vite version --json/);
+    assert.match(p.calls, /npm view --json -- create-vite version/);
     assert.match(p.calls, /RAN pnpm create vite app/);
     const y = run("yarn-wrapper.fish", "yarn create react-app dir");
     assert.equal(y.status, 0, y.out);
-    assert.match(y.calls, /npm view create-react-app version --json/);
+    assert.match(y.calls, /npm view --json -- create-react-app version/);
     assert.match(y.calls, /RAN yarn create react-app dir/);
     // npm init is not install-class, so the wrapper hands it to the npm stub,
     // which logs it.
     const s = run("npm-wrapper.fish", "npm init @acme@2");
     assert.equal(s.status, 0, s.out);
-    assert.match(s.calls, /npm view @acme\/create@2 version --json/);
+    assert.match(s.calls, /npm view --json -- @acme\/create@2 version/);
     assert.match(s.calls, /npm init @acme@2/);
   },
 );

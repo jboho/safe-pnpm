@@ -118,7 +118,7 @@ before(() => {
     `#!/bin/sh
 echo "npm $*" >> /w/log
 if [ "$1" = view ]; then
-  case "$2" in
+  case "$4" in
     unknown-*) echo "npm error code E404" >&2; exit 1 ;;
     broken-*) echo "npm error code ECONNRESET" >&2; exit 1 ;;
     *) echo '"1.2.3"'; exit 0 ;;
@@ -228,7 +228,7 @@ test("ps1: npx of a clean package checks it, then runs it", { skip }, () => {
   const r = result("npx cowsay hi");
   assert.equal(r.status, "RC=0 ERRORS=0", r.out);
   assert.match(r.out, /1 package checked against OSV; none known malicious/);
-  assert.match(r.calls, /npm view cowsay version --json/);
+  assert.match(r.calls, /npm view --json -- cowsay version/);
   assert.match(r.calls, /RAN npx cowsay hi/);
 });
 
@@ -274,7 +274,7 @@ test("ps1: pnpx is checked like pnpm dlx before it runs", { skip }, () => {
   assert.doesNotMatch(bad.calls, /RAN/);
   const ok = result("pnpx cowsay hi");
   assert.equal(ok.status, "RC=0 ERRORS=0", ok.out);
-  assert.match(ok.calls, /npm view cowsay version --json/);
+  assert.match(ok.calls, /npm view --json -- cowsay version/);
   assert.match(ok.calls, /RAN pnpx cowsay hi/);
 });
 
@@ -303,11 +303,11 @@ test("ps1: create commands check the create- package the manager would fetch", {
 }, () => {
   const p = result("pnpm create vite app");
   assert.equal(p.status, "RC=0 ERRORS=0", p.out);
-  assert.match(p.calls, /npm view create-vite version --json/);
+  assert.match(p.calls, /npm view --json -- create-vite version/);
   assert.match(p.calls, /RAN pnpm create vite app/);
   const y = result("yarn create react-app app");
   assert.equal(y.status, "RC=0 ERRORS=0", y.out);
-  assert.match(y.calls, /npm view create-react-app version --json/);
+  assert.match(y.calls, /npm view --json -- create-react-app version/);
   assert.match(y.calls, /RAN yarn create react-app app/);
 });
 
@@ -407,12 +407,12 @@ test("ps1: npm init and npm create check the create- package first", {
 }, () => {
   const init = result("npm init mal");
   assert.equal(init.status, "RC=0 ERRORS=0", init.out);
-  assert.match(init.calls, /npm view create-mal version --json\nnpm init mal$/);
+  assert.match(init.calls, /npm view --json -- create-mal version\nnpm init mal$/);
   const create = result("npm create @scope");
   assert.equal(create.status, "RC=0 ERRORS=0", create.out);
   assert.match(
     create.calls,
-    /npm view @scope\/create version --json\nnpm create @scope$/,
+    /npm view --json -- @scope\/create version\nnpm create @scope$/,
   );
 });
 
