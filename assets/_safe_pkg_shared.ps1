@@ -147,6 +147,46 @@ function _Safe_Pkg_Lockfile_Dir_Setting {
     return $null
 }
 
+# Returns what turns off pnpm's shared workspace lockfile, or $null. See
+# _safe_pkg_unshared_lockfile_setting in _safe_pkg_shared.sh.
+function _Safe_Pkg_Unshared_Lockfile_Setting {
+    param([string]$Dir, [string]$Root, [string[]]$PassArgs)
+    $keyRe = 'shared-?workspace-?(?:lockfile|shrinkwrap)'
+    $checks = @(
+        @('.npmrc', "^\s*[""']?($keyRe)[""']?\s*=\s*[""']?false(?:[^a-z0-9]|$)"),
+        @('pnpm-workspace.yaml', "^[^#]*?($keyRe)[""']?\s*:\s*[""']?false(?:[^a-z0-9]|$)")
+    )
+    foreach ($c in $checks) {
+        $path = Join-Path $Dir $c[0]
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        foreach ($line in Get-Content -LiteralPath $path) {
+            if ($line -match $c[1]) { return "$(Join-Path $Root $c[0]) sets $($Matches[1]) to false" }
+        }
+    }
+    $prev = $null
+    foreach ($a in $PassArgs) {
+        if ($prev) {
+            if ($a -eq 'false') { return "$prev $a sets shared-workspace-lockfile to false" }
+            $prev = $null
+        }
+        if ($a -ceq '--') { return $null }
+        if ($a -notlike '-*') { continue }
+        $parts = ([string]$a -split '=', 2)
+        $key = ($parts[0] -replace '^-+', '').ToLowerInvariant() -replace '^config\.', '' -replace '[-_]', ''
+        $neg = $key.StartsWith('no')
+        if ($neg) { $key = $key.Substring(2) }
+        if ($key -notmatch '^shared[a-z]*$') { continue }
+        if (-not ('sharedworkspacelockfile'.StartsWith($key) -or 'sharedworkspaceshrinkwrap'.StartsWith($key))) { continue }
+        if ($parts.Count -eq 2) {
+            if ($neg -ne ($parts[1] -eq 'false')) { return "$a sets shared-workspace-lockfile to false" }
+            continue
+        }
+        if ($neg) { return "$a sets shared-workspace-lockfile to false" }
+        $prev = $a
+    }
+    return $null
+}
+
 function _Safe_Pkg_Prescan {
     param([string]$Manager, [string]$Lockfile, [switch]$Socket)
 
