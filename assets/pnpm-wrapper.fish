@@ -1,5 +1,6 @@
 # pnpm Docker isolation wrapper — fish shell
-# Install: copy to ~/.config/fish/functions/pnpm.fish
+# Install: copy to ~/.config/fish/functions/pnpm.fish, and again as pnpx.fish
+# (fish autoloads the pnpx function below only from a file of that name)
 # (safe-pnpm setup handles this automatically)
 #
 # Intercepts install-class pnpm commands and runs them in an isolated Docker
@@ -192,8 +193,11 @@ function pnpm
         set workdir /app/$rel_path
     end
 
-    # Per-manager store kept under /app so phase 2 resolves fully offline.
-    set -l store_flag --config.store-dir=/app/.safe-store
+    # Per-manager store kept under /app so phase 2 resolves fully offline, and
+    # the lockfile directory pinned to the sandbox root, which overrides any
+    # project config that would move it. See _safe_pkg_run in
+    # _safe_pkg_shared.sh.
+    set -l store_flag --config.store-dir=/app/.safe-store --config.lockfile-dir=/app
 
     # Tokens are forwarded only into the fetch phase, where --ignore-scripts
     # guarantees no package code runs. They are never present during phase 2.
@@ -317,3 +321,31 @@ function pnpm
     _safe_pkg_untrack $tmpdir $snapdir
     return $rc
 end
+
+# pnpx is pnpm dlx: same OSV check, then native.
+# setup also installs this file as pnpx.fish, so fish autoloads it for pnpx.
+function pnpx
+    functions -q _safe_pkg_prescan
+    or begin
+        echo "✗ safe-pnpm: _safe_pkg_prescan.fish not installed — run `safe-pnpm update`." >&2
+        return 1
+    end
+    _safe_pkg_runner_check pnpx $argv
+    or return 1
+    command pnpx $argv
+end
+
+# On a disk that ignores case (macOS by default) fish finds the real program
+# under any spelling of its name, and autoloads this file for it too, so
+# every other spelling runs the wrapper.
+for _safe_pkg_n in PNPM PNPm PNpM PNpm PnPM PnPm PnpM Pnpm pNPM pNPm pNpM pNpm pnPM pnPm pnpM
+    function $_safe_pkg_n --wraps pnpm
+        pnpm $argv
+    end
+end
+for _safe_pkg_n in PNPX PNPx PNpX PNpx PnPX PnPx PnpX Pnpx pNPX pNPx pNpX pNpx pnPX pnPx pnpX
+    function $_safe_pkg_n --wraps pnpx
+        pnpx $argv
+    end
+end
+set -e _safe_pkg_n

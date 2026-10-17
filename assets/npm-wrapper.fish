@@ -283,3 +283,18 @@ function npx
     or return 1
     command npx $argv
 end
+
+# On a disk that ignores case (macOS by default) fish finds the real program
+# under any spelling of its name, and autoloads this file for it too, so
+# every other spelling runs the wrapper.
+for _safe_pkg_n in NPM NPm NpM Npm nPM nPm npM
+    function $_safe_pkg_n --wraps npm
+        npm $argv
+    end
+end
+for _safe_pkg_n in NPX NPx NpX Npx nPX nPx npX
+    function $_safe_pkg_n --wraps npx
+        npx $argv
+    end
+end
+set -e _safe_pkg_n

@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { startOsvStub } = require("./helpers/osv-stub");
+const { RUNNERS, OTHERS } = require("./helpers/runner-cases");
 
 // Fish counterpart of test/runner-check.test.js: the download-and-run check in
 // _safe_pkg_prescan.fish and the fish wrappers.
@@ -14,40 +15,6 @@ const SHARED = path.join(ASSETS, "_safe_pkg_shared.sh");
 const fishAvailable =
   spawnSync("fish", ["--version"], { stdio: "pipe" }).status === 0;
 const opts = { skip: !fishAvailable && "fish not installed" };
-
-// Same table as test/runner-check.test.js.
-const RUNNERS = [
-  ["npx", ["cowsay", "hi"], ["cowsay"]],
-  ["npx", ["-y", "cowsay@1.5.0"], ["cowsay@1.5.0"]],
-  ["npx", ["-p", "lodash", "-p", "cowsay", "cowsay"], ["lodash", "cowsay"]],
-  ["npx", ["--package=foo", "bar"], ["foo"]],
-  ["npx", ["--registry", "http://r", "cowsay"], ["cowsay"]],
-  ["npx", ["--future-flag", "val", "cowsay"], ["val", "cowsay"]],
-  ["npx", ["--", "cowsay"], ["cowsay"]],
-  ["npm", ["exec", "cowsay"], ["cowsay"]],
-  ["npm", ["--prefix", "web", "exec", "cowsay"], ["cowsay"]],
-  ["npm", ["x", "--", "cowsay"], ["cowsay"]],
-  ["npm", ["init", "vite"], ["create-vite"]],
-  ["npm", ["create", "@scope/foo"], ["@scope/create-foo"]],
-  ["npm", ["create", "@scope"], ["@scope/create"]],
-  ["npm", ["create", "@scope@2"], ["@scope/create@2"]],
-  ["npm", ["init", "create-foo"], ["create-create-foo", "create-foo"]],
-  ["pnpm", ["dlx", "cowsay"], ["cowsay"]],
-  ["pnpm", ["-C", "web", "dlx", "cowsay"], ["cowsay"]],
-  ["pnpm", ["create", "vite@latest", "app"], ["create-vite@latest"]],
-  ["yarn", ["dlx", "cowsay"], ["cowsay"]],
-  ["yarn", ["create", "react-app", "app"], ["create-react-app"]],
-];
-
-const OTHERS = [
-  ["npm", ["install", "x"]],
-  ["npm", ["run", "build"]],
-  ["npm", ["--version"]],
-  ["pnpm", ["exec", "cowsay"]],
-  ["pnpm", ["add", "x"]],
-  ["yarn", ["add", "x"]],
-  ["yarn", []],
-];
 
 // Edge cases outside the table, where fish must print what bash prints.
 const EDGES = [
@@ -69,6 +36,16 @@ const EDGES = [
   ["pnpm", ["create", "@scope@latest", "dir"]],
   ["pnpm", ["--filter", "dlx", "add", "x"]],
   ["yarn", ["--cwd", "dlx", "create", "foo"]],
+  ["npm", ["exec", "--", "-p", "x"]],
+  ["npm", ["exec", "x", "--", "--package=y"]],
+  ["npm", ["--", "--package=x", "exec", "y"]],
+  ["npm", ["--future", "exec", "exec", "y"]],
+  ["npm", ["init", "--package=x", "y"]],
+  ["npx", ["-p"]],
+  ["pnpm", ["--package"]],
+  ["pnpm", ["dlx", "-p", "--yes", "x"]],
+  ["yarn", ["--package", "create", "x"]],
+  ["pnpx", []],
 ];
 
 const fishSpecs = (manager, args) =>
@@ -178,7 +155,7 @@ fi
 `,
     { mode: 0o755 },
   );
-  for (const name of ["npx", "pnpm", "yarn"]) {
+  for (const name of ["npx", "pnpx", "pnpm", "yarn"]) {
     fs.writeFileSync(
       path.join(bin, name),
       `#!/bin/sh\necho "RAN ${name} $*" >> "${log}"\n`,
@@ -233,6 +210,37 @@ test("fish: npx of a clean package checks it, then runs it", opts, () => {
   assert.match(r.out, /✓ 1 package checked against OSV; none known malicious/);
   assert.match(r.calls, /npm view cowsay version --json/);
   assert.match(r.calls, /RAN npx cowsay hi/);
+});
+
+test("fish: pnpx is checked like pnpm dlx before it runs", opts, () => {
+  const bad = run("pnpm-wrapper.fish", "pnpx mal-pkg");
+  assert.equal(bad.status, 1, bad.out);
+  assert.match(bad.out, /mal-pkg@1\.2\.3\s+MAL-2099-1/);
+  assert.doesNotMatch(bad.calls, /RAN/);
+  const ok = run("pnpm-wrapper.fish", "pnpx cowsay hi");
+  assert.equal(ok.status, 0, ok.out);
+  assert.match(ok.calls, /npm view cowsay version --json/);
+  assert.match(ok.calls, /RAN pnpx cowsay hi/);
+});
+
+// On a disk that ignores case (macOS by default) fish finds the real program
+// under any spelling of its name, so every spelling must reach the wrapper.
+test("fish: any spelling of a wrapped name runs the wrapper", opts, () => {
+  for (const [wrapper, line] of [
+    ["npm-wrapper.fish", "NPX mal-pkg"],
+    ["npm-wrapper.fish", "Npm exec mal-pkg"],
+    ["pnpm-wrapper.fish", "PNPM dlx mal-pkg"],
+    ["pnpm-wrapper.fish", "pnpX mal-pkg"],
+    ["yarn-wrapper.fish", "Yarn dlx mal-pkg"],
+  ]) {
+    const r = run(wrapper, line);
+    assert.equal(r.status, 1, `${line}\n${r.out}`);
+    assert.match(r.out, /mal-pkg@1\.2\.3\s+MAL-2099-1/, line);
+    assert.doesNotMatch(r.calls, /RAN/, line);
+  }
+  const ok = run("npm-wrapper.fish", "NPM run build");
+  assert.equal(ok.status, 0, ok.out);
+  assert.match(ok.calls, /^npm run build$/m);
 });
 
 test(
@@ -480,7 +488,7 @@ function runInstalled(line, extraEnv = {}) {
 }
 
 test(
-  "fish: setup installs npx.fish next to npm.fish, and npx autoloads with the check",
+  "fish: setup installs npx.fish and pnpx.fish next to their managers, and both autoload with the check",
   opts,
   () => {
     const fnDir = installFish(["pnpm", "npm"]);
@@ -489,7 +497,17 @@ test(
       "npm.fish",
       "npx.fish",
       "pnpm.fish",
+      "pnpx.fish",
     ]);
+    const pnpx = runInstalled("pnpx mal-pkg");
+    assert.equal(pnpx.status, 1, pnpx.out);
+    assert.doesNotMatch(pnpx.calls, /RAN/);
+    // fish autoloads NPX from npx.fish only where the disk ignores case.
+    if (fs.existsSync(path.join(fnDir, "NPX.fish"))) {
+      const upper = runInstalled("NPX mal-pkg");
+      assert.equal(upper.status, 1, upper.out);
+      assert.doesNotMatch(upper.calls, /RAN/);
+    }
     const bad = runInstalled("npx mal-pkg");
     assert.equal(bad.status, 1, bad.out);
     assert.match(bad.out, /no package code was executed/);
@@ -511,6 +529,7 @@ test(
     assert.deepEqual(fs.readdirSync(fnDir).sort(), [
       "_safe_pkg_prescan.fish",
       "pnpm.fish",
+      "pnpx.fish",
     ]);
   },
 );

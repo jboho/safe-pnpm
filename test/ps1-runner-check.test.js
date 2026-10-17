@@ -29,6 +29,11 @@ const DEAD = { SAFE_PNPM_OSV_API: "http://127.0.0.1:1" };
 add("npx cowsay hi", "npx cowsay hi");
 add("npx mal-pkg", "npx mal-pkg");
 add("npx -p mal-pkg cowsay", "npx -p mal-pkg cowsay");
+add("pnpx mal-pkg", "pnpx mal-pkg");
+add("chain refused", "npx mal-pkg && Add-Content /w/log 'NEXT'");
+add("chain install refused", "npm install -g left-pad && Add-Content /w/log 'NEXT'");
+add("chain ok", "npx cowsay && Add-Content /w/log 'NEXT'");
+add("pnpx cowsay hi", "pnpx cowsay hi");
 add("pnpm dlx mal-pkg", "pnpm dlx mal-pkg");
 add("yarn dlx mal-pkg", "yarn dlx mal-pkg");
 add("pnpm dlx cowsay", "pnpm dlx cowsay");
@@ -56,6 +61,7 @@ add("empty -p legacy", legacy('npx -p "" mal-pkg'));
 add("empty before exec legacy", legacy('npm "" exec mal-pkg'));
 add("empty positional standard", 'npx "" mal-pkg');
 add("NPX mal-pkg", "NPX mal-pkg");
+add("PnPx mal-pkg", "PnPx mal-pkg");
 add("npm EXEC mal-pkg", "npm EXEC mal-pkg");
 add("npm init mal", "npm init mal");
 // Unquoted, PowerShell reads @scope as splatting $scope.
@@ -72,6 +78,11 @@ const noNode = (line) =>
   `$p = $env:PATH; $env:PATH = '/w/bin:/usr/bin:/bin'; try { ${line} } finally { $env:PATH = $p }`;
 add("no node", noNode("npx mal-pkg"));
 add("no node strict", noNode("npx mal-pkg"), { SAFE_PNPM_OSV_STRICT: "1" });
+// The Socket stub exits 0, so only the classifier (run with node) decides.
+add("socket no node", noNode("_Safe_Pkg_Socket_Scan"));
+add("socket no node strict", noNode("_Safe_Pkg_Socket_Scan"), {
+  SAFE_PNPM_SOCKET_STRICT: "1",
+});
 
 let tmp;
 const results = new Map();
@@ -91,9 +102,13 @@ before(() => {
     "pnpm-wrapper.ps1",
     "yarn-wrapper.ps1",
     "malware-scan.js",
+    "socket-classify.js",
   ]) {
     fs.copyFileSync(path.join(ASSETS, f), path.join(safe, f));
   }
+  fs.writeFileSync(path.join(safe, "socket"), "#!/bin/sh\nexit 0\n", {
+    mode: 0o755,
+  });
   fs.copyFileSync(
     path.join(__dirname, "helpers", "osv-stub.js"),
     path.join(tmp, "osv-stub.js"),
@@ -112,7 +127,7 @@ fi
 `,
     { mode: 0o755 },
   );
-  for (const name of ["npx", "pnpm", "yarn"]) {
+  for (const name of ["npx", "pnpx", "pnpm", "yarn"]) {
     fs.writeFileSync(
       path.join(bin, name),
       `#!/bin/sh\necho "RAN ${name} $*" >> /w/log\n`,
@@ -122,7 +137,7 @@ fi
   // Values are PowerShell double-quoted strings, so "$osv" is the stub's URL.
   const setEnv = (env) =>
     [
-      "Remove-Item Env:SAFE_PNPM_OSV_STRICT, Env:SAFE_PNPM_STRICT -ErrorAction SilentlyContinue",
+      "Remove-Item Env:SAFE_PNPM_OSV_STRICT, Env:SAFE_PNPM_STRICT, Env:SAFE_PNPM_SOCKET_STRICT -ErrorAction SilentlyContinue",
       ...Object.entries({ SAFE_PNPM_OSV_API: "$osv/ok", ...env }).map(([k, v]) => `$env:${k} = "${v}"`),
     ].join("; ");
   const script = [
@@ -137,9 +152,9 @@ fi
     ...CASES.flatMap(({ line, env }, i) => [
       setEnv(env),
       `$global:LASTEXITCODE = 0; $Error.Clear(); Add-Content /w/log 'CASE ${i}'`,
-      `$o = & { ${line} } *>&1 | Out-String`,
+      `$o = & { try { ${line} } catch { "THROWN: $($_.Exception.Message)" } } *>&1 | Out-String`,
       `Set-Content /w/out/${i}.txt $o`,
-      `Add-Content /w/log "RC=$LASTEXITCODE ERRORS=$($Error.Count)"`,
+      `Add-Content /w/log "RC=$LASTEXITCODE ERRORS=$(@($Error | Where-Object { "$_" -ne 'safe-pnpm: command refused' }).Count)"`,
     ]),
     "Stop-Process $stub",
     "",
@@ -236,6 +251,31 @@ test("ps1: a malicious package passed with -p is blocked even when the command w
   const r = result("npx -p mal-pkg cowsay");
   assert.equal(r.status, "RC=1 ERRORS=0", r.out);
   assert.doesNotMatch(r.calls, /RAN/);
+});
+
+test("ps1: a refused command fails the pipeline chain, so && does not run the next step", {
+  skip,
+}, () => {
+  for (const label of ["chain refused", "chain install refused"]) {
+    const r = result(label);
+    assert.equal(r.status, "RC=1 ERRORS=0", `${label}\n${r.out}`);
+    assert.match(r.out, /THROWN: safe-pnpm: command refused/, label);
+    assert.doesNotMatch(r.calls, /RAN|NEXT/, label);
+  }
+  const ok = result("chain ok");
+  assert.equal(ok.status, "RC=0 ERRORS=0", ok.out);
+  assert.match(ok.calls, /RAN npx cowsay\nNEXT/);
+});
+
+test("ps1: pnpx is checked like pnpm dlx before it runs", { skip }, () => {
+  const bad = result("pnpx mal-pkg");
+  assert.equal(bad.status, "RC=1 ERRORS=0", bad.out);
+  assert.match(bad.out, /mal-pkg@1\.2\.3\s+MAL-2099-1/);
+  assert.doesNotMatch(bad.calls, /RAN/);
+  const ok = result("pnpx cowsay hi");
+  assert.equal(ok.status, "RC=0 ERRORS=0", ok.out);
+  assert.match(ok.calls, /npm view cowsay version --json/);
+  assert.match(ok.calls, /RAN pnpx cowsay hi/);
 });
 
 test("ps1: pnpm dlx, yarn dlx and npm exec are checked before they run", {
@@ -355,7 +395,7 @@ test("ps1: an empty argument does not hide the package from the check", {
 test("ps1: wrapper names and subcommands are matched in any case", {
   skip,
 }, () => {
-  for (const label of ["NPX mal-pkg", "npm EXEC mal-pkg"]) {
+  for (const label of ["NPX mal-pkg", "PnPx mal-pkg", "npm EXEC mal-pkg"]) {
     const r = result(label);
     assert.equal(r.status, "RC=1 ERRORS=0", `${label}\n${r.out}`);
     assert.doesNotMatch(r.calls, /RAN|npm EXEC/, label);
@@ -412,4 +452,16 @@ test("ps1: a missing node is a scan failure, not a pass", { skip }, () => {
     /node not found.*Blocking \(SAFE_PNPM_OSV_STRICT=1\)/s,
   );
   assert.doesNotMatch(strict.calls, /RAN/);
+});
+
+test("ps1: a Socket scan without node is a scan failure, not a pass", {
+  skip,
+}, () => {
+  const warn = result("socket no node");
+  assert.match(warn.out, /node not found/, warn.out);
+  assert.match(warn.out, /Continuing without Socket results/);
+  assert.match(warn.out, /True/);
+  const strict = result("socket no node strict");
+  assert.match(strict.out, /node not found.*Blocking \(SAFE_PNPM_SOCKET_STRICT=1\)/s, strict.out);
+  assert.match(strict.out, /False/);
 });

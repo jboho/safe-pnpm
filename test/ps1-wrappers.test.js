@@ -103,7 +103,7 @@ function runPs1(manager, { env = {}, emptyId = false, noId = false, dockerInfo, 
   const winSetup = win
     ? "$hp = (Get-Item function:_Safe_Pkg_Host_Platform).ScriptBlock; function global:_Safe_Pkg_Host_Platform { param($Manager, $TmpDir, $Saved) & $hp -Manager $Manager -TmpDir $TmpDir -Saved $Saved -Os win32 -Cpu x64 };"
     : "";
-  const script = `${pathSetup} . "$HOME/.safe-pnpm/${manager}-wrapper.ps1"; ${winSetup} Set-Location /w/proj; ${manager} install; "RC=$LASTEXITCODE"`;
+  const script = `${pathSetup} . "$HOME/.safe-pnpm/${manager}-wrapper.ps1"; ${winSetup} Set-Location /w/proj; try { ${manager} install } catch { "THROWN: $($_.Exception.Message)" }; "RC=$LASTEXITCODE"`;
   const r = spawnSync(
     "docker",
     [

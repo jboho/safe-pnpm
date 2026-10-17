@@ -145,106 +145,180 @@ function _safe_pkg_valueflags --argument manager
         case pnpm
             printf '%s\n' -C --dir -F --filter --filter-prod --workspace-dir --reporter --loglevel --config --store-dir --state-dir --registry --lockfile-dir --network-concurrency --fetch-timeout --workspace-concurrency --test-pattern --changed-files-ignore-pattern --http-proxy --https-proxy --no-proxy --user-agent
         case npm npx
-            printf '%s\n' --prefix -w --workspace --registry --cache --userconfig --globalconfig --loglevel --otp --scope --omit --include --install-strategy --tag --before --audit-level --fetch-retries --lockfile-version --min-release-age --cpu --os --libc --script-shell --node-options --maxsockets
+            printf '%s\n' --prefix -w --workspace --registry --cache --userconfig --globalconfig --loglevel --otp --scope --omit --include --install-strategy --tag --before --audit-level --fetch-retries --lockfile-version --min-release-age --cpu --os --libc --script-shell --node-options --maxsockets --location
         case yarn
             printf '%s\n' --cwd --registry --modules-folder --cache-folder --preferred-cache-folder --global-folder --link-folder --network-concurrency --network-timeout --proxy --https-proxy --mutex --use-yarnrc --cafile --otp
     end
 end
 
 # _safe_pkg_runner_specs manager args...
-#   For the commands that download a package and run it (npx, npm exec,
+#   For the commands that download a package and run it (npx, pnpx, npm exec,
 #   npm init|create, pnpm dlx|create, yarn dlx|create) prints the package specs
 #   that will be fetched, one per line, and returns 0. Returns 1 for any other
 #   command. See _safe_pkg_runner_specs in _safe_pkg_shared.sh for the rules
-#   (-p/--package, unknown flags failing closed, the create- prefix).
+#   (every reading of an ambiguous parse is scanned, -p/--package, npm's
+#   abbreviations, the create- prefix).
 function _safe_pkg_runner_specs
     set -l manager $argv[1]
     set -e argv[1]
+    switch $manager
+        case npx
+            _safe_pkg_runner_tail npm exec 0 -- $argv
+            return 0
+        case pnpx
+            _safe_pkg_runner_tail pnpm exec 0 -- $argv
+            return 0
+    end
     set -l value_flags (_safe_pkg_valueflags $manager)
-    set -l mode
+    # skip: 0, 1 (drop the next word) or pkg (the next word is a package).
     set -l skip 0
-    if test "$manager" = npx
-        set mode exec
-    else
-        while set -q argv[1]
-            set -l a $argv[1]
-            set -e argv[1]
-            if test $skip -eq 1
+    set -l maybe 0
+    set -l dd 0
+    set -l found 1
+    set -l pkgs
+    while set -q argv[1]
+        set -l a $argv[1]
+        set -e argv[1]
+        if test $dd -eq 0
+            if test "$skip" != 0
+                if string match -q -- '-*' $a
+                    set skip 0
+                    set maybe 1
+                    continue
+                end
+                test "$skip" = pkg; and set -a pkgs $a
                 set skip 0
                 continue
             end
             switch $a
                 case --
-                    break
+                    test "$manager" = yarn; and break
+                    set dd 1
+                    set maybe 0
+                    continue
+                case '--package=*'
+                    set maybe 0
+                    test "$manager" = yarn; or set -a pkgs (string replace -r '^[^=]*=' '' -- $a)
+                    continue
+                case --package
+                    set maybe 0
+                    if test "$manager" = yarn
+                        set maybe 1
+                    else
+                        set skip pkg
+                    end
+                    continue
                 case '-*=*'
+                    set maybe 0
                     continue
                 case '-*'
-                    contains -- $a $value_flags; and set skip 1
+                    set maybe 1
+                    if contains -- $a $value_flags; or _safe_pkg_dir_flag $manager $a >/dev/null
+                        set maybe 0
+                        set skip 1
+                    end
                     continue
             end
-            set -l n (string lower -- $a)
-            switch "$manager:$n"
-                case npm:exec npm:x pnpm:dlx yarn:dlx
-                    set mode exec
-                case npm:init npm:create npm:innit pnpm:create yarn:create
-                    set mode create
-            end
-            break
         end
-        test -n "$mode"; or return 1
-    end
-
-    # skip: 0, 1 (drop the next word) or pkg (the next word is a package).
-    set skip 0
-    set -l extra 0
-    set -l npos 0
-    set -l pkgs
-    set -l pos
-    while set -q argv[1]
-        set -l a $argv[1]
-        set -e argv[1]
-        if test "$skip" = pkg
-            set -a pkgs $a
-            set skip 0
-            continue
+        set -l n (string lower -- $a)
+        set -l mode
+        switch "$manager:$n"
+            case npm:exec npm:exe npm:x pnpm:dlx yarn:dlx
+                set mode exec
+            case npm:init npm:ini npm:inn npm:inni npm:innit npm:cr npm:cre npm:crea npm:creat npm:create pnpm:create yarn:create
+                set mode create
         end
-        if test "$skip" = 1
-            set skip 0
-            continue
+        if test -n "$mode"
+            set found 0
+            _safe_pkg_runner_tail $manager $mode $dd $pkgs -- $argv
         end
-        switch $a
-            case --
-                continue
-            case -p --package
-                set skip pkg
-                continue
-            case '--package=*' '-p=*'
-                set -a pkgs (string replace -r '^[^=]*=' '' -- $a)
-                continue
-            case -c --call
-                set skip 1
-                continue
-            case '-*=*'
-                continue
-            case -y --yes -n --no --no-install --ignore-existing -s --shell-mode --silent -q --quiet --verbose --json --offline --prefer-offline -ws --workspaces --no-workspaces --include-workspace-root --no-color --color --no-fund --no-audit
-                continue
-            case '-*'
-                if contains -- $a $value_flags
-                    set skip 1
-                else
-                    set extra 1
-                end
-                continue
-        end
-        set npos (math $npos + 1)
-        test (count $pkgs) -eq 0; and set -a pos $a
-        if test $extra -eq 1; and test $npos -lt 2
+        # A word that may be a flag's value: the next word may be the command.
+        if test $maybe -eq 1; and test $dd -eq 0
+            set maybe 0
             continue
         end
         break
     end
+    return $found
+end
+
+# _safe_pkg_runner_tail manager mode dashdash [pkgs...] -- [args after the command word...]
+#   The spec finder for one reading of the command word; see
+#   _safe_pkg_runner_specs. pkgs are the --package values read before the
+#   command word; dashdash 1 means a -- came before it, so no word is a flag.
+function _safe_pkg_runner_tail
+    set -l manager $argv[1]
+    set -l mode $argv[2]
+    set -l dd $argv[3]
+    set -e argv[1..3]
+    set -l pkgs
+    while set -q argv[1]
+        set -l a $argv[1]
+        set -e argv[1]
+        test "$a" = --; and break
+        set -a pkgs $a
+    end
+    set -l value_flags (_safe_pkg_valueflags $manager)
+    set -l skip 0
+    set -l maybe 0
+    set -l found 0
+    set -l pos
+    for a in $argv
+        if test $dd -eq 0
+            if test "$skip" != 0
+                if string match -q -- '-*' $a
+                    set skip 0
+                    set maybe 1
+                    continue
+                end
+                test "$skip" = pkg; and set -a pkgs $a
+                set skip 0
+                continue
+            end
+            switch "$manager:$a"
+                case '*:--'
+                    set dd 1
+                    test $found -eq 1; and break
+                    set maybe 0
+                    continue
+                case npm:-p npm:--package pnpm:-p pnpm:--package
+                    set maybe 0
+                    set skip pkg
+                    continue
+                case 'npm:--package=*' 'npm:-p=*' 'pnpm:--package=*' 'pnpm:-p=*'
+                    set maybe 0
+                    set -a pkgs (string replace -r '^[^=]*=' '' -- $a)
+                    continue
+                case npm:-c npm:--call
+                    set maybe 0
+                    set skip 1
+                    continue
+                case '*:-*=*' pnpm:-c '*:-y' '*:--yes' '*:-n' '*:--no' '*:--no-install' '*:--ignore-existing' '*:-s' '*:--shell-mode' '*:--silent' '*:-q' '*:--quiet' '*:--verbose' '*:--json' '*:--offline' '*:--prefer-offline' '*:-ws' '*:--workspaces' '*:--no-workspaces' '*:--include-workspace-root' '*:--no-color' '*:--color' '*:--no-fund' '*:--no-audit'
+                    set maybe 0
+                    continue
+                case '*:-*'
+                    set maybe 1
+                    if contains -- $a $value_flags
+                        set maybe 0
+                        set skip 1
+                    end
+                    continue
+            end
+        end
+        # npm reads flags after the command name too; only --package matters there.
+        test $found -eq 1; and continue
+        set -a pos $a
+        if test $maybe -eq 1; and test $dd -eq 0
+            set maybe 0
+            continue
+        end
+        set found 1
+        test "$manager" = npm; and test $dd -eq 0; and continue
+        break
+    end
 
     if test "$mode" = create
+        set -q pkgs[1]; and printf '%s\n' $pkgs
         for line in $pos
             test -z "$line"; and continue
             set -l scope ""
@@ -265,8 +339,11 @@ function _safe_pkg_runner_specs
         end
         return 0
     end
-    set -q pkgs[1]; and printf '%s\n' $pkgs
-    set -q pos[1]; and printf '%s\n' $pos
+    if set -q pkgs[1]
+        printf '%s\n' $pkgs
+    else if set -q pos[1]
+        printf '%s\n' $pos
+    end
     return 0
 end
 
@@ -480,7 +557,6 @@ end
 #   True when the args ask for a global install. See _safe_pkg_is_global in
 #   _safe_pkg_shared.sh for why the wrapper refuses these.
 function _safe_pkg_is_global
-    set -l prev ""
     # yarn v1 spells it as a subcommand: yarn global add|remove|upgrade
     set -l words
     for a in $argv
@@ -489,20 +565,35 @@ function _safe_pkg_is_global
     if test "$words[1]" = global; and contains -- "$words[2]" add remove upgrade
         return 0
     end
+    set -l loc ""
     for a in $argv
-        switch $a
-            case --
-                return 1
-            case --global --global=true --global=1 --location=global
-                return 0
-            case '--*'
-            case '-*g*'
-                return 0
-        end
-        if test "$prev" = --location -a "$a" = global
+        if test -n "$loc" -a "$a" = global
             return 0
         end
-        set prev $a
+        set loc ""
+        test "$a" = --; and return 1
+        string match -q -- '-*' $a; or continue
+        set -l name (string replace -r -- '^-+' '' $a)
+        set -l key (string split -m 1 -- = $name)[1]
+        set -l val ""
+        string match -q -- '*=*' $name; and set val (string split -m 1 -- = $name)[2]
+        test -n "$key"; or continue
+        if string match -q -- '--*' $a
+            if string match -q -- "$key*" global; and test "$val" != false
+                return 0
+            end
+            if test (string length -- $key) -ge 3; and string match -q -- "$key*" location
+                if string match -q -- '*=*' $name
+                    test "$val" = global; and return 0
+                else
+                    set loc 1
+                end
+            end
+        else if string match -q -- '*g*' $key
+            if test "$key" != g -o "$val" != false
+                return 0
+            end
+        end
     end
     return 1
 end

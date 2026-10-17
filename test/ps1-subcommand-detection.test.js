@@ -103,9 +103,9 @@ before(() => {
     "Set-Location /w/proj",
     ...CASES.flatMap(({ line }, i) => [
       `$global:LASTEXITCODE = 0; $Error.Clear(); Add-Content /w/log 'CASE ${i}'`,
-      `$o = & { ${line} } *>&1 | Out-String`,
+      `$o = & { try { ${line} } catch { "THROWN: $($_.Exception.Message)" } } *>&1 | Out-String`,
       `Set-Content /w/out/${i}.txt $o`,
-      `Add-Content /w/log "RC=$LASTEXITCODE ERRORS=$($Error.Count)"`,
+      `Add-Content /w/log "RC=$LASTEXITCODE ERRORS=$(@($Error | Where-Object { "$_" -ne 'safe-pnpm: command refused' }).Count)"`,
     ]),
     "",
   ].join("\n");

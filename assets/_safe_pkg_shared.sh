@@ -10,7 +10,7 @@ _SAFE_PKG_SHARED_LOADED=1
 _safe_pkg_valueflags() {
   case "$1" in
     pnpm) printf '%s' "-C --dir -F --filter --filter-prod --workspace-dir --reporter --loglevel --config --store-dir --state-dir --registry --lockfile-dir --network-concurrency --fetch-timeout --workspace-concurrency --test-pattern --changed-files-ignore-pattern --http-proxy --https-proxy --no-proxy --user-agent" ;;
-    npm|npx) printf '%s' "--prefix -w --workspace --registry --cache --userconfig --globalconfig --loglevel --otp --scope --omit --include --install-strategy --tag --before --audit-level --fetch-retries --lockfile-version --min-release-age --cpu --os --libc --script-shell --node-options --maxsockets" ;;
+    npm|npx) printf '%s' "--prefix -w --workspace --registry --cache --userconfig --globalconfig --loglevel --otp --scope --omit --include --install-strategy --tag --before --audit-level --fetch-retries --lockfile-version --min-release-age --cpu --os --libc --script-shell --node-options --maxsockets --location" ;;
     yarn) printf '%s' "--cwd --registry --modules-folder --cache-folder --preferred-cache-folder --global-folder --link-folder --network-concurrency --network-timeout --proxy --https-proxy --mutex --use-yarnrc --cafile --otp" ;;
   esac
 }
@@ -98,63 +98,116 @@ _safe_pkg_is_install() {
 }
 
 # _safe_pkg_runner_specs manager [args...]
-#   For the commands that download a package and run it (npx, npm exec,
+#   For the commands that download a package and run it (npx, pnpx, npm exec,
 #   npm init|create, pnpm dlx|create, yarn dlx|create) prints the package
 #   specs that will be fetched, one per line, and returns 0. Returns 1 for any
 #   other command. The specs are candidates: malware-scan.js drops what is not
 #   a registry package (paths, URLs, git) and what the registry does not know.
+#   Where the parse is ambiguous, every reading is scanned:
+#     The command word: listed value flags and directory flags have their value
+#       skipped. A word after any other flag may be that flag's value or the
+#       command, so it is tried as the command and the next word is tried too.
+#       npm and pnpm still read the command after --, yarn does not. npm
+#       accepts the abbreviations exe (exec), cr..creat (create), ini and
+#       inn..inni (init); pnpm and yarn none (checked against npm 10.9 and
+#       11, pnpm 9.15, 10 and 11, yarn 1.22).
 #     -p/--package values are the packages; the first word after the flags is
-#       then a command name, not a package.
-#     A flag missing from the lists makes the next word a candidate too, so an
-#       unknown value-taking flag cannot hide the package (fails closed).
+#       then a command name, not a package. npm reads them anywhere before --,
+#       also after the command name; pnpm before dlx (--package only, its
+#       global -p is another flag) and among dlx's flags.
+#     A word after a flag missing from the lists may be its value, so it is a
+#       candidate and the next word is too; any number of such flags can come
+#       first. A flag where a value was expected is treated the same way.
+#     pnpm's -c (shell mode) takes no value; npm's -c/--call takes a script.
 #     create adds the create- prefix the managers add (foo -> create-foo,
 #       @scope/foo -> @scope/create-foo, @scope -> @scope/create).
 _safe_pkg_runner_specs() {
-  local manager="$1" mode="" valueflags a n skip=0 extra=0 npos=0 pkgs="" pos="" nl="
+  local manager="$1" valueflags a n mode skip=0 maybe=0 dd=0 found=1 pkgs="" nl="
 "
   shift
+  case "$manager" in
+    npx) _safe_pkg_runner_tail npm exec "" 0 "$@"; return 0 ;;
+    pnpx) _safe_pkg_runner_tail pnpm exec "" 0 "$@"; return 0 ;;
+  esac
   valueflags=" $(_safe_pkg_valueflags "$manager") "
-  if [ "$manager" = "npx" ]; then
-    mode=exec
-  else
-    while [ $# -gt 0 ]; do
-      a="$1"; shift
-      if [ "$skip" = 1 ]; then skip=0; continue; fi
-      case "$a" in
-        --) break ;;
-        -*=*) continue ;;
-        -*) case "$valueflags" in *" $a "*) skip=1 ;; esac; continue ;;
-      esac
-      n="$(printf '%s' "$a" | tr '[:upper:]' '[:lower:]')"
-      case "$manager:$n" in
-        npm:exec|npm:x|pnpm:dlx|yarn:dlx) mode=exec ;;
-        npm:init|npm:create|npm:innit|pnpm:create|yarn:create) mode=create ;;
-      esac
-      break
-    done
-    [ -z "$mode" ] && return 1
-  fi
-  skip=0
   while [ $# -gt 0 ]; do
     a="$1"; shift
-    if [ "$skip" = pkg ]; then pkgs="$pkgs$a$nl"; skip=0; continue; fi
-    if [ "$skip" = 1 ]; then skip=0; continue; fi
-    case "$a" in
-      --) continue ;;
-      -p|--package) skip=pkg; continue ;;
-      --package=*|-p=*) pkgs="$pkgs${a#*=}$nl"; continue ;;
-      -c|--call) skip=1; continue ;;
-      -*=*) continue ;;
-      -y|--yes|-n|--no|--no-install|--ignore-existing|-s|--shell-mode|--silent|-q|--quiet|--verbose|--json|--offline|--prefer-offline|-ws|--workspaces|--no-workspaces|--include-workspace-root|--no-color|--color|--no-fund|--no-audit) continue ;;
-      -*) case "$valueflags" in *" $a "*) skip=1 ;; *) extra=1 ;; esac; continue ;;
+    if [ "$dd" = 0 ]; then
+      case "$skip:$a" in
+        pkg:-*|1:-*) skip=0; maybe=1; continue ;;
+        pkg:*) pkgs="$pkgs$a$nl"; skip=0; continue ;;
+        1:*) skip=0; continue ;;
+      esac
+      case "$a" in
+        --) [ "$manager" = yarn ] && break; dd=1; maybe=0; continue ;;
+        --package=*) maybe=0; [ "$manager" = yarn ] || pkgs="$pkgs${a#*=}$nl"; continue ;;
+        --package) maybe=0; [ "$manager" = yarn ] && maybe=1 || skip=pkg; continue ;;
+        -*=*) maybe=0; continue ;;
+        -*)
+          maybe=1
+          case "$valueflags" in *" $a "*) maybe=0; skip=1 ;; esac
+          [ "$maybe" = 1 ] && _safe_pkg_dir_flag "$manager" "$a" > /dev/null && { maybe=0; skip=1; }
+          continue ;;
+      esac
+    fi
+    n="$(printf '%s' "$a" | tr '[:upper:]' '[:lower:]')"
+    mode=""
+    case "$manager:$n" in
+      npm:exec|npm:exe|npm:x|pnpm:dlx|yarn:dlx) mode=exec ;;
+      npm:init|npm:ini|npm:inn|npm:inni|npm:innit|npm:cr|npm:cre|npm:crea|npm:creat|npm:create|pnpm:create|yarn:create) mode=create ;;
     esac
-    npos=$((npos + 1))
-    [ -z "$pkgs" ] && pos="$pos$a$nl"
-    if [ "$extra" = 1 ] && [ "$npos" -lt 2 ]; then continue; fi
+    if [ -n "$mode" ]; then
+      found=0
+      _safe_pkg_runner_tail "$manager" "$mode" "$pkgs" "$dd" "$@"
+    fi
+    # A word that may be a flag's value: the next word may be the command.
+    [ "$maybe" = 1 ] && [ "$dd" = 0 ] && { maybe=0; continue; }
+    break
+  done
+  return "$found"
+}
+
+# _safe_pkg_runner_tail manager mode pkgs dashdash [args after the command word...]
+#   The spec finder for one reading of the command word; see
+#   _safe_pkg_runner_specs. pkgs holds the --package values read before the
+#   command word, one per line; dashdash 1 means a -- came before it, so no
+#   word is a flag.
+_safe_pkg_runner_tail() {
+  local manager="$1" mode="$2" pkgs="$3" dd="$4" valueflags a skip=0 maybe=0 found=0 pos="" nl="
+"
+  shift 4
+  valueflags=" $(_safe_pkg_valueflags "$manager") "
+  for a in "$@"; do
+    if [ "$dd" = 0 ]; then
+      case "$skip:$a" in
+        pkg:-*|1:-*) skip=0; maybe=1; continue ;;
+        pkg:*) pkgs="$pkgs$a$nl"; skip=0; continue ;;
+        1:*) skip=0; continue ;;
+      esac
+      case "$manager:$a" in
+        *:--) dd=1; [ "$found" = 1 ] && break; maybe=0; continue ;;
+        npm:-p|npm:--package|pnpm:-p|pnpm:--package) maybe=0; skip=pkg; continue ;;
+        npm:--package=*|npm:-p=*|pnpm:--package=*|pnpm:-p=*) maybe=0; pkgs="$pkgs${a#*=}$nl"; continue ;;
+        npm:-c|npm:--call) maybe=0; skip=1; continue ;;
+        *:-*=*|pnpm:-c) maybe=0; continue ;;
+        *:-y|*:--yes|*:-n|*:--no|*:--no-install|*:--ignore-existing|*:-s|*:--shell-mode|*:--silent|*:-q|*:--quiet|*:--verbose|*:--json|*:--offline|*:--prefer-offline|*:-ws|*:--workspaces|*:--no-workspaces|*:--include-workspace-root|*:--no-color|*:--color|*:--no-fund|*:--no-audit) maybe=0; continue ;;
+        *:-*)
+          maybe=1
+          case "$valueflags" in *" $a "*) maybe=0; skip=1 ;; esac
+          continue ;;
+      esac
+    fi
+    # npm reads flags after the command name too; only --package matters there.
+    [ "$found" = 1 ] && continue
+    pos="$pos$a$nl"
+    if [ "$maybe" = 1 ] && [ "$dd" = 0 ]; then maybe=0; continue; fi
+    found=1
+    [ "$manager" = npm ] && [ "$dd" = 0 ] && continue
     break
   done
   if [ "$mode" = create ]; then
     local line rest scope
+    printf '%s' "$pkgs"
     while IFS= read -r line; do
       [ -z "$line" ] && continue
       case "$line" in
@@ -171,7 +224,7 @@ $pos
 SPECS_END
     return 0
   fi
-  printf '%s%s' "$pkgs" "$pos"
+  if [ -n "$pkgs" ]; then printf '%s' "$pkgs"; else printf '%s' "$pos"; fi
   return 0
 }
 
@@ -403,12 +456,18 @@ _safe_pkg_malware_scan() {
 }
 
 # _safe_pkg_is_global [args...]
-#   True when the args ask for a global install (-g, a short-flag cluster
-#   containing g, --global, --global=true, --location=global, --location global). The sandbox
+#   True when the args ask for a global install. The sandbox
 #   writes to the container's own global prefix, which is thrown away, so a
 #   global install through the wrapper would exit 0 and change nothing.
+#   npm and pnpm read any number of leading dashes, abbreviate long names
+#   (pnpm: --g, --glo; npm: --g, --locat) and take any value but false as
+#   true (--global=0 is global), so this matches any long flag whose name is a
+#   prefix of global, unless its value is false; a location prefix of three or
+#   more letters with the value global; and a short-flag cluster containing g,
+#   unless it is -g=false. It may refuse a spelling a manager would read
+#   otherwise, never the reverse.
 _safe_pkg_is_global() {
-  local prev="" a
+  local a name key val loc=""
   # yarn v1 spells it as a subcommand: yarn global add|remove|upgrade
   local first="" second=""
   for a in "$@"; do
@@ -421,14 +480,34 @@ _safe_pkg_is_global() {
     case "$second" in add|remove|upgrade) return 0 ;; esac
   fi
   for a in "$@"; do
+    [ -n "$loc" ] && [ "$a" = "global" ] && return 0
+    loc=""
     case "$a" in
       --) return 1 ;;
-      --global|--global=true|--global=1|--location=global) return 0 ;;
-      --*) ;;
-      -*g*) return 0 ;;
+      -*) ;;
+      *) continue ;;
     esac
-    [ "$prev" = "--location" ] && [ "$a" = "global" ] && return 0
-    prev="$a"
+    name="${a#"${a%%[!-]*}"}"
+    key="${name%%=*}"
+    val=""
+    case "$name" in *=*) val="${name#*=}" ;; esac
+    [ -n "$key" ] || continue
+    case "$a" in
+      --*)
+        case "global" in
+          "$key"*) [ "$val" = "false" ] || return 0 ;;
+        esac
+        case "${#key}:location" in
+          [12]:*) ;;
+          *:"$key"*) case "$name" in *=*) [ "$val" = "global" ] && return 0 ;; *) loc=1 ;; esac ;;
+        esac
+        ;;
+      *)
+        case "$key" in
+          *g*) [ "$key" = "g" ] && [ "$val" = "false" ] || return 0 ;;
+        esac
+        ;;
+    esac
   done
   return 1
 }
@@ -847,13 +926,17 @@ _safe_pkg_sandbox() {
   # plus the phase-1 fetch flags and the phase-2 build command.
   # trust-lockfile goes through --config. because the image's pnpm hands off
   # to a packageManager pin, and pnpm before 11.3 rejects --trust-lockfile.
+  # The lockfile directory (pnpm) and working directory (yarn) are pinned to
+  # the sandbox root on the command line, which overrides any project config
+  # that would move them away from the lockfile the scan reads; the
+  # lockfile-dir check above only catches the plain spellings.
   local store_flag phase2_cmd
   case "$manager" in
-    pnpm) store_flag="--config.store-dir=/app/.safe-store"
+    pnpm) store_flag="--config.store-dir=/app/.safe-store --config.lockfile-dir=/app"
           phase2_cmd="install --offline --config.trust-lockfile=true $store_flag" ;;
     npm)  store_flag="--cache /app/.safe-store"
           phase2_cmd="rebuild $store_flag" ;;
-    yarn) store_flag="--cache-folder /app/.safe-store"
+    yarn) store_flag="--cache-folder /app/.safe-store --cwd /app"
           phase2_cmd="install --offline --force $store_flag" ;;
     *)    store_flag=""; phase2_cmd="" ;;
   esac

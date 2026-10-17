@@ -47,6 +47,7 @@ Published to npm as `@jboho/safe-pnpm` (first public release 2026.10.2, with pro
 - The CVE audit runs on the host after the fetch, on a throwaway copy of the resolved manifests and lockfile plus your registry config. It does not run in your project directory, and pnpm skips `.pnpmfile.cjs` for it. A `yarn-path` line in `.yarnrc` is dropped for the audit.
 - PowerShell is the least-tested shell: the wrappers and copy-back are tested on Linux pwsh only.
 - PowerShell removes an unquoted `--` before the wrapper function sees it, so `npm run build -- --watch` reaches npm as `npm run build --watch`. Quote it to keep it: `npm run build '--' --watch`.
+- In PowerShell a refusal is a terminating error (`safe-pnpm: command refused`), so `&&` chains and scripts stop there; catch it with `try`/`catch` if a script should go on. A command the wrapper passes to the real manager sets `$LASTEXITCODE` but leaves `$?` true even when it fails, as with any PowerShell function, so check `$LASTEXITCODE` rather than `&&` after a wrapped command.
 - Requires Docker; developed and tested on macOS and Linux CI. Windows is not tested.
 
 ## Install
@@ -124,10 +125,10 @@ When you run an install-class command:
 **Download-and-run commands get a malware check only.** These fetch a package and run it straight away, so they skip the Docker sandbox, the CVE audit and Socket, and the package's code runs on your machine with your permissions:
 
 - `npx PKG`, `npm exec PKG`, `npm init PKG`, `npm create PKG`
-- `pnpm dlx PKG`, `pnpm create PKG`
+- `pnpm dlx PKG`, `pnpx PKG`, `pnpm create PKG`
 - `yarn create PKG`, and `yarn dlx PKG` on yarn 2+
 
-In bash, zsh, fish and PowerShell (not yet tested on native Windows) the wrappers look up the version the command would fetch (`npm view`, which reads registry metadata and runs no package code), check that `name@version` against [OSV](https://osv.dev)'s malicious-package advisories, and refuse to run the command on a hit. A `create` command checks the `create-` package the manager would fetch. If OSV or the lookup fails the command warns and runs; `SAFE_PNPM_OSV_STRICT=1` blocks instead. Paths, URLs, git specs and packages in private scopes are not checked. `npx` is wrapped only when the npm wrapper is enabled. OSV only knows packages already reported as malicious, so treat anything new with care and check the name yourself.
+In bash, zsh, fish and PowerShell (not yet tested on native Windows) the wrappers look up the version the command would fetch (`npm view`, which reads registry metadata and runs no package code), check that `name@version` against [OSV](https://osv.dev)'s malicious-package advisories, and refuse to run the command on a hit. A `create` command checks the `create-` package the manager would fetch. If OSV or the lookup fails the command warns and runs; `SAFE_PNPM_OSV_STRICT=1` blocks instead. Paths, URLs, git specs and packages in private scopes are not checked. `npx` is wrapped only when the npm wrapper is enabled, and `pnpx` only with the pnpm wrapper. OSV only knows packages already reported as malicious, so treat anything new with care and check the name yourself.
 
 1. **Pre-install scan** — [Socket behavioral analysis](./docs/socket.md) if configured.
 2. **Copy only manifests** — `package.json`, the lockfile, workspace files, and `.npmrc` / `.yarnrc` go into a temp directory. Source files, `.env`, and secrets never leave the host.
@@ -260,7 +261,7 @@ scripts on the host):
 | zsh | `~/.zshrc` |
 | bash (macOS) | `~/.bash_profile` |
 | bash (Linux) | `~/.bashrc` |
-| fish | `~/.config/fish/functions/{pnpm,npm,yarn}.fish` (one per enabled manager), plus `npx.fish` with npm |
+| fish | `~/.config/fish/functions/{pnpm,npm,yarn}.fish` (one per enabled manager), plus `npx.fish` with npm and `pnpx.fish` with pnpm |
 | PowerShell | `~/Documents/PowerShell/Microsoft.PowerShell_profile.ps1` |
 
 ---

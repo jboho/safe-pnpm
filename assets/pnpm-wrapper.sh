@@ -19,3 +19,20 @@ pnpm() {
   _safe_pkg_dispatch "pnpm" "pnpm-lock.yaml" "pnpm-workspace.yaml" \
     "package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc" "$@"
 }
+
+# pnpx is pnpm dlx: same OSV check, then native.
+pnpx() {
+  _safe_pkg_runner_check pnpx "$@" || return 1
+  command pnpx "$@"
+}
+
+# On a disk that ignores case (macOS by default) the shell finds the real
+# program under any spelling of its name, so every other spelling runs the
+# wrapper too. The function keyword keeps zsh from alias-expanding the names.
+for _safe_pkg_n in PNPM PNPm PNpM PNpm PnPM PnPm PnpM Pnpm pNPM pNPm pNpM pNpm pnPM pnPm pnpM; do
+  eval "function $_safe_pkg_n { pnpm \"\$@\"; }"
+done
+for _safe_pkg_n in PNPX PNPx PNpX PNpx PnPX PnPx PnpX Pnpx pNPX pNPx pNpX pNpx pnPX pnPx pnpX; do
+  eval "function $_safe_pkg_n { pnpx \"\$@\"; }"
+done
+unset _safe_pkg_n
