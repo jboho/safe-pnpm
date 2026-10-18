@@ -110,7 +110,12 @@ test("a caller's Standard argument passing does not reach the .cmd call", {
   // Under Standard, PowerShell splits the --% text on spaces and re-quotes
   // it, so cmd.exe would get a broken line. Under Legacy the line is parsed
   // as one Windows command line, which keeps "/w/npm.cmd ..." in one piece.
+  // The same call made by a Legacy caller is the expectation: every
+  // argument cmd.exe gets must match, not only the first token.
   const out = pwsh(`${PRELUDE}
+$PSNativeCommandArgumentPassing = 'Legacy'
+$null = _Safe_Pkg_Run_Native '/w/npm.cmd' @('a b', 'q"q', 'a&b')
+Copy-Item /w/cmdargs /w/cmdargs.legacy
 $PSNativeCommandArgumentPassing = 'Standard'
 $v = _Safe_Pkg_Run_Native '/w/npm.cmd' @('a b', 'q"q', 'a&b')
 "captured=$($v -join '|') rc=$LASTEXITCODE"
@@ -118,9 +123,11 @@ $v = _Safe_Pkg_Run_Native '/w/npm.cmd' @('a b', 'q"q', 'a&b')
 `);
   assert.match(out, /^captured=OUT one\|OUT two rc=5$/m);
   assert.match(out, /^caller=Standard$/m);
-  const argv = fs.readFileSync(path.join(tmp, "cmdargs"), "utf8").split("\n");
-  assert.deepEqual(argv.slice(0, 3), ["/d", "/s", "/c"]);
-  assert.ok(argv[3].startsWith("/w/npm.cmd "), JSON.stringify(argv));
+  const read = (f) => fs.readFileSync(path.join(tmp, f), "utf8").split("\n");
+  const want = read("cmdargs.legacy");
+  assert.deepEqual(want.slice(0, 3), ["/d", "/s", "/c"]);
+  assert.ok(want[3].startsWith("/w/npm.cmd "), JSON.stringify(want));
+  assert.deepEqual(read("cmdargs"), want);
 });
 
 test("stdin passes through to a .cmd launcher", { skip }, () => {
