@@ -63,7 +63,7 @@ test("parseSpec keeps registry specs and drops paths, urls, git and aliases", ()
 });
 
 test("on Windows npm view runs npm-cli.js with node instead of npm.cmd", () => {
-  const args = ["view", "foo@1 & calc", "version", "--json"];
+  const args = ["view", "--json", "--", "foo@1 & calc", "version"];
   assert.deepEqual(npmViewCommand("foo@1 & calc", { platform: "linux" }), { file: "npm", args });
   const execPath = "C:\\Program Files\\nodejs\\node.exe";
   const cli = "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js";
@@ -81,6 +81,17 @@ test("on Windows npm view runs npm-cli.js with node instead of npm.cmd", () => {
     () => npmViewCommand("foo", { platform: "win32", execPath, exists: () => false }),
     /could not look up foo: npm not found at C:\\Program Files\\nodejs\\node_modules/,
   );
+});
+
+test("npm view gets a spec starting with - after --, never as an option", () => {
+  const execPath = "C:\\Program Files\\nodejs\\node.exe";
+  for (const opts of [{ platform: "linux" }, { platform: "win32", execPath, exists: () => true }]) {
+    const { args } = npmViewCommand("--registry=http://evil", opts);
+    const end = args.indexOf("--");
+    assert.ok(end > 0, opts.platform);
+    assert.ok(args.indexOf("--json") < end, opts.platform);
+    assert.deepEqual(args.slice(end + 1), ["--registry=http://evil", "version"], opts.platform);
+  }
 });
 
 // End to end: the wrappers sourced in a throwaway HOME, the real scanner, the
@@ -107,7 +118,7 @@ before(async () => {
     `#!/bin/sh
 echo "npm $*" >> "${log}"
 if [ "$1" = view ]; then
-  case "$2" in
+  case "$4" in
     unknown-*) echo "npm error code E404" >&2; exit 1 ;;
     broken-*) echo "npm error code ECONNRESET" >&2; exit 1 ;;
     *) echo '"1.2.3"'; exit 0 ;;
@@ -149,7 +160,7 @@ test("npx of a clean package checks it, then runs it", () => {
   const r = run("npm-wrapper.sh", "npx cowsay hi");
   assert.equal(r.status, 0, r.out);
   assert.match(r.out, /1 package checked against OSV; none known malicious/);
-  assert.match(r.calls, /npm view cowsay version --json/);
+  assert.match(r.calls, /npm view --json -- cowsay version/);
   assert.match(r.calls, /RAN npx cowsay hi/);
 });
 
@@ -160,7 +171,7 @@ test("pnpx is checked like pnpm dlx before it runs", () => {
   assert.doesNotMatch(bad.calls, /RAN/);
   const ok = run("pnpm-wrapper.sh", "pnpx cowsay hi");
   assert.equal(ok.status, 0, ok.out);
-  assert.match(ok.calls, /npm view cowsay version --json/);
+  assert.match(ok.calls, /npm view --json -- cowsay version/);
   assert.match(ok.calls, /RAN pnpx cowsay hi/);
 });
 
@@ -217,7 +228,7 @@ test("pnpm dlx and yarn dlx are checked before they run", () => {
 test("create commands check the create- package the manager would fetch", () => {
   const r = run("pnpm-wrapper.sh", "pnpm create vite app");
   assert.equal(r.status, 0, r.out);
-  assert.match(r.calls, /npm view create-vite version --json/);
+  assert.match(r.calls, /npm view --json -- create-vite version/);
   assert.match(r.calls, /RAN pnpm create vite app/);
   const n = run("npm-wrapper.sh", "npm exec mal-pkg");
   assert.equal(n.status, 1, n.out);
