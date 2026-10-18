@@ -7,7 +7,6 @@ const { test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
-const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 
@@ -25,34 +24,12 @@ let osv;
 let registry;
 let shims;
 
-// npm view (run by the scanner through npm-cli.js, not the shim) reads this
-// registry: every package has one version, 1.2.3.
-function startRegistry() {
-  const server = http.createServer((req, res) => {
-    const name = decodeURIComponent(req.url.slice(1));
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(
-      JSON.stringify({
-        name,
-        "dist-tags": { latest: "1.2.3" },
-        versions: { "1.2.3": { name, version: "1.2.3" } },
-      }),
-    );
-  });
-  return new Promise((resolve) => {
-    server.listen(0, "127.0.0.1", () =>
-      resolve({
-        url: `http://127.0.0.1:${server.address().port}/`,
-        stop: () => server.close(),
-      }),
-    );
-  });
-}
-
 before(async () => {
   if (skip) return;
   shims = require("../lib/util/shims");
   const { startOsvStub } = require("./helpers/osv-stub");
+  // npm view (run by the scanner through npm-cli.js, not the shim) reads this.
+  const { startRegistryStub } = require("./helpers/registry-stub");
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "safe-pnpm-cmdshim-"));
   const safe = path.dirname(shims.SHIM_DIR);
   fs.mkdirSync(safe, { recursive: true });
@@ -100,7 +77,7 @@ process.exit(Number(process.env.STUB_EXIT || 0));
     );
   }
   osv = await startOsvStub();
-  registry = await startRegistry();
+  registry = await startRegistryStub();
 });
 
 after(() => {
@@ -190,19 +167,40 @@ test("cmd shim: arguments and the exit code pass through", { skip }, () => {
   assert.equal(r.calls, `RAN pnpm\n${args.join("\n")}\n`);
   // The real launchers are .cmd files too, which PowerShell would call with
   // Legacy argument passing: '' dropped, q"q unescaped, a&b split by cmd.exe.
-  // A " and an & in one command line is a %* limit of the shim itself, so the
-  // quote case runs on its own.
-  for (const more of [
-    ["", "a&b", "x|y", "c^d", "(p)"],
-    ['q"q', "back\\"],
-  ]) {
-    const m = run(["pnpm", "run", ...more]);
-    assert.equal(m.status, 0, m.stderr);
-    assert.equal(m.calls, `RAN pnpm\nrun\n${more.join("\n")}\n`);
-  }
+  // Both hops escape twice for the launcher's %* reparse, so a " and an & in
+  // one command line arrive intact.
+  const more = ["", 'q"q', "a&b", "x|y", "c^d", "^", "(p)", "%PATH%", "back\\"];
+  const m = run(["pnpm", "run", ...more]);
+  assert.equal(m.status, 0, m.stderr);
+  assert.equal(m.calls, `RAN pnpm\nrun\n${more.join("\n")}\n`);
   const clean = run(["pnpm", "dlx", "cowsay"]);
   assert.equal(clean.status, 0, clean.stderr);
   assert.equal(clean.stdout, "STUB OUT\n");
+});
+
+test("cmd shim: the profile function's output from a .cmd launcher can be captured", {
+  skip,
+}, () => {
+  // pnpm here is the profile function, which runs the real pnpm.cmd through
+  // _Safe_Pkg_Run_Native; its output must reach $v, not the console.
+  const args = ["run", "a b", "", 'q"q', "a&b", "x|y", "%PATH%", "^"];
+  const ps = (a) => `'${a.replace(/'/g, "''")}'`;
+  const script = [
+    '. "$HOME\\.safe-pnpm\\pnpm-wrapper.ps1"',
+    `$v = pnpm ${args.map(ps).join(" ")}`,
+    '"captured=[$v] rc=$LASTEXITCODE"',
+    `pnpm run x | ForEach-Object { "piped:$_" }`,
+    "exit 0",
+  ].join("; ");
+  const r = run(["pwsh", "-NoProfile", "-Command", script], {
+    env: { STUB_EXIT: "4" },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, "captured=[STUB OUT] rc=4\npiped:STUB OUT\n");
+  assert.equal(
+    r.calls,
+    `RAN pnpm\n${args.join("\n")}\nRAN pnpm\nrun\nx\n`,
+  );
 });
 
 test("cmd shim: stdin and stdout pass through byte for byte", { skip }, () => {
