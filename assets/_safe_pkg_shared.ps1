@@ -3,6 +3,46 @@
 # again on every dot-source: a profile re-run after safe-pnpm update must not
 # pair the new wrappers with the old functions.
 
+# True when Path is a file in the PATH shim directory (~/.safe-pnpm/bin).
+function _Safe_Pkg_Is_Shim {
+    param([string]$Path)
+    $dir = Split-Path -Parent $Path
+    if (-not $dir -or -not [IO.Path]::IsPathRooted($dir)) { return $false }
+    $shim = [IO.Path]::GetFullPath((Join-Path $HOME '.safe-pnpm/bin')).TrimEnd('\', '/')
+    return [IO.Path]::GetFullPath($dir).TrimEnd('\', '/') -eq $shim
+}
+
+# The real package manager executable. With the PATH shims on PATH, the first
+# `Get-Command pnpm -CommandType Application` is the shim's pnpm.cmd, so this
+# skips the shim directory and returns the next match. PATH itself is left
+# alone, so a pnpm started by that process (a package script running
+# `pnpm install`) reaches the shim again. See _safe_pkg_native in
+# _safe_pkg_shared.sh. No real binary: refuses with 127 instead of running
+# nothing.
+function _Safe_Pkg_Native_Exe {
+    param([string]$Name)
+    foreach ($c in @(Get-Command $Name -CommandType Application -All -ErrorAction Ignore)) {
+        if (-not (_Safe_Pkg_Is_Shim $c.Source)) { return $c.Source }
+    }
+    Write-Host "✗ safe-pnpm: no $Name found on PATH apart from the safe-pnpm PATH shims. Install $Name, or take the shims off PATH." -ForegroundColor Red
+    $global:LASTEXITCODE = 127
+    throw 'safe-pnpm: command refused'
+}
+
+# The command that runs Name without the safety checks, for the refusal hints:
+# Name.cmd, or the real binary's path when Name.cmd would reach the PATH shims
+# and be refused again.
+function _Safe_Pkg_Bypass {
+    param([string]$Name)
+    $first = Get-Command "$Name.cmd" -CommandType Application -ErrorAction Ignore | Select-Object -First 1
+    if ($first -and (_Safe_Pkg_Is_Shim $first.Source)) {
+        foreach ($c in @(Get-Command $Name -CommandType Application -All -ErrorAction Ignore)) {
+            if (-not (_Safe_Pkg_Is_Shim $c.Source)) { return "& '$($c.Source -replace "'", "''")'" }
+        }
+    }
+    return "$Name.cmd"
+}
+
 # Runs the manager's CVE audit on the tree phase 1 resolved, so a package
 # passed to `add` is covered. Returns $false to block. See _safe_pkg_shared.sh
 # for the full rationale. It runs on the host, so it audits a throwaway copy of
@@ -13,7 +53,7 @@ function _Safe_Pkg_Audit {
     param([string]$Manager, [string]$Lockfile, [string]$SnapDir, [string]$TmpDir)
     if (-not (Test-Path -LiteralPath (Join-Path $SnapDir $Lockfile) -PathType Leaf)) { return $true }
 
-    $mgr = (Get-Command $Manager -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+    $mgr = (_Safe_Pkg_Native_Exe $Manager)
     $auditDir = New-Item -Type Directory (Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName()))
     $auditOut = [IO.Path]::GetTempFileName()
     try {
@@ -639,7 +679,7 @@ function _Safe_Pkg_User {
 # _safe_pkg_shared.sh.
 function _Safe_Pkg_Native_Fallback {
     param([string]$Manager, [object[]]$PassArgs)
-    $exe = (Get-Command $Manager -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+    $exe = (_Safe_Pkg_Native_Exe $Manager)
     if ([Console]::IsInputRedirected) {
         if ($env:SAFE_PNPM_ALLOW_NATIVE_FALLBACK -eq '1') {
             Write-Host "⚠️  safe-pnpm: Docker not running — SAFE_PNPM_ALLOW_NATIVE_FALLBACK=1 set, running native $Manager." -ForegroundColor Yellow

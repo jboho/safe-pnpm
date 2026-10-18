@@ -57,9 +57,24 @@ They are off PATH by default. Two ways to use them:
 - Corepack's own shims and `corepack pnpm`.
 - Apps launched from the Dock, Finder or launchd, which get launchd's PATH and never read your shell rc. A version manager (`nvm use`, fnm, volta) that prepends a directory after the rc ran also puts the real binary first; `doctor` reports it.
 - CI, unless a step puts the directory on PATH (for example `echo "$HOME/.safe-pnpm/bin" >> "$GITHUB_PATH"`).
-- Windows: there are no `.cmd`/`.ps1` shims yet.
+- On Windows, see [Windows](#windows) below.
 
 Tools that go through the shims also meet the wrapper's refusals (`-g`, the directory flags, `--`), and their install-class commands go to Docker, which fails closed when Docker is down and there is no TTY. Each call costs about 30 to 50 ms of bash startup, plus an `npm view` and OSV round trip for every dlx/npx launch.
+
+### Windows
+
+On Windows `~/.safe-pnpm/bin` holds `NAME.cmd` and `NAME.ps1` for each name instead. `NAME.cmd` is what cmd.exe, cross-spawn and Node's `spawn` with `shell: true` find; `NAME.ps1` is what PowerShell finds. Both start one script, `~/.safe-pnpm/path-shim.ps1`, in its own `pwsh -NoProfile -ExecutionPolicy Bypass` process. It dot-sources the same wrapper file as your PowerShell profile and calls the same function, so a shim and the profile function block and allow the same commands. The real binary is looked up with the shim directory skipped and PATH left as it is, so a nested call reaches the shim again; with no real binary after the shims it exits 127, wrappers from an older release are refused, a chain that re-enters the shim more than 32 times is stopped, and the real binary's exit code is passed back. The wrappers' messages go to stderr, so stdout carries only the tool's own output (an MCP server launched through `npx` keeps a clean JSON-RPC stream). Refusal messages print the real binary's path in place of `pnpm.cmd`, since `pnpm.cmd` is now the shim. The `bypass` policy flag applies to that one local file, which safe-pnpm wrote; without it a Restricted execution policy would stop every package manager call.
+
+- **PowerShell 7 (`pwsh`) is required.** `NAME.cmd` prints an error and exits 1 when `pwsh` is not on PATH; Windows PowerShell 5.1 is not used, because `setup` only wires the PowerShell 7 profile.
+- **Scoped:** `safe-pnpm exec -- CMD ARGS...` works as on macOS and Linux. A `.cmd` or `.bat` CMD runs through cmd.exe with each argument quoted.
+- **Global:** `safe-pnpm setup --path-shims` appends `$env:PATH = "$HOME\.safe-pnpm\bin;$env:PATH"` under `# PATH shims (safe-pnpm)` at the end of your PowerShell 7 profile (`Documents\PowerShell\Microsoft.PowerShell_profile.ps1`), with the same idempotence, move-to-end and `--remove-path-shims` behaviour as the rc line. It never writes the user or system PATH in the registry, so only programs started from a PowerShell session that loaded the profile see the shims. Programs started from Explorer, the Start menu, a service, a scheduled task, cmd.exe or an editor launched outside that session do not; `safe-pnpm exec` covers those one at a time.
+- `safe-pnpm update` writes the `.cmd`/`.ps1` shims, and `safe-pnpm doctor` reports them.
+
+Not covered on Windows, beyond the list above:
+
+- **cmd.exe argument limits.** `NAME.cmd` hands its arguments on with `%*`, and cmd.exe parses the line before the shim sees it: `%VAR%` in an argument is expanded, a `^` outside quotes is dropped, and an argument that mixes `"` with `&`, `|`, `<`, `>` or `^` can be split or cut short. Plain arguments, spaces inside quotes and `--` arrive unchanged. Programs started through `NAME.ps1` (PowerShell) or `safe-pnpm exec` with a non-`.cmd` command are not affected.
+- Ctrl-C in a console asks "Terminate batch job (Y/N)?", as for any `.cmd` file, including the npm and pnpm launchers the shims replace.
+- A program that runs `node path\to\npm-cli.js`, or a package manager's `.exe` or `.cmd` by absolute path.
 
 ### MCP servers
 

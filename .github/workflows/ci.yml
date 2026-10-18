@@ -25,3 +25,16 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run lint
+
+  # The .cmd/.ps1 PATH shims, through cmd.exe and pwsh 7 on a real Windows
+  # runner. The rest of the suite drives sh, zsh, fish and Docker, so it stays
+  # on Linux.
+  windows-shims:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: node --test test/windows-shims.test.js test/windows-cmd-shims.test.js

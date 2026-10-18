@@ -5,6 +5,8 @@
 # Intercepts install-class yarn commands and runs them in an isolated Docker
 # container that only sees package manifests (no source files, no .env).
 # Escape hatch: yarn.cmd install bypasses to native yarn.
+# With the PATH shims (~/.safe-pnpm/bin) on PATH, yarn.cmd is the shim, so the
+# refusal hints print the real binary's path instead.
 # Note: yarn v1 only. berry (v2+) requires separate handling.
 
 . "$HOME\.safe-pnpm\_safe_pkg_shared.ps1"
@@ -54,7 +56,7 @@ function global:yarn {
         if ($args | Where-Object { $_ -in '-v','--version','-h','--help' }) { $cmd = '' }
     }
     if (-not $cmd) {
-        $yarnExe = (Get-Command yarn -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+        $yarnExe = (_Safe_Pkg_Native_Exe yarn)
         & $yarnExe @args
         return
     }
@@ -77,14 +79,14 @@ function global:yarn {
     $dashes = @($passArgs | Where-Object { $_ -match '^-{2,}$' })
     if ($dashes.Count) {
         Write-Host "✗ safe-pnpm: $($dashes[0]) is not supported through the wrapper; the sandbox adds --ignore-scripts and its other flags after your arguments, and after $($dashes[0]) they would not be read as flags." -ForegroundColor Red
-        Write-Host "  To run it without the safety checks: yarn.cmd $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
+        Write-Host "  To run it without the safety checks: $(_Safe_Pkg_Bypass yarn) $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
         $global:LASTEXITCODE = 1
         throw 'safe-pnpm: command refused'
     }
 
     if (_Safe_Pkg_Is_Global $passArgs) {
         Write-Host "✗ safe-pnpm: global installs are not supported through the wrapper; the sandbox would install into a throwaway container and change nothing on this machine." -ForegroundColor Red
-        Write-Host "  To install globally without the safety checks, run: yarn.cmd $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
+        Write-Host "  To install globally without the safety checks, run: $(_Safe_Pkg_Bypass yarn) $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
         $global:LASTEXITCODE = 1
         throw 'safe-pnpm: command refused'
     }
@@ -92,7 +94,7 @@ function global:yarn {
     $dirFlag = _Safe_Pkg_Dir_Flag -Manager yarn -PassArgs $passArgs
     if ($dirFlag) {
         Write-Host "✗ safe-pnpm: $dirFlag is not supported through the wrapper; the scan checks this directory's lockfile, so an install in another directory would go unchecked." -ForegroundColor Red
-        Write-Host "  cd into that directory and run the command there. To run it without the safety checks: yarn.cmd $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
+        Write-Host "  cd into that directory and run the command there. To run it without the safety checks: $(_Safe_Pkg_Bypass yarn) $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
         $global:LASTEXITCODE = 1
         throw 'safe-pnpm: command refused'
     }
