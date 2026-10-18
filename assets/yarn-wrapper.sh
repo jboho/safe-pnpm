@@ -7,6 +7,8 @@
 # All other commands pass through to native yarn unchanged.
 # Escape hatch: `command yarn install` bypasses to native yarn (a backslash only
 # bypasses aliases, not shell functions like this wrapper).
+# With the PATH shims (~/.safe-pnpm/bin) on PATH, `command yarn` reaches the shim,
+# so run the real binary by its absolute path instead.
 # Note: yarn v1 only. berry (v2+) requires separate handling.
 
 [ -z "${_SAFE_PKG_SHARED_LOADED:-}" ] && \
@@ -15,7 +17,7 @@
 
 yarn() {
   _safe_pkg_runner_check yarn "$@" || return 1
-  _safe_pkg_is_install yarn "$@" || { command yarn "$@"; return; }
+  _safe_pkg_is_install yarn "$@" || { _safe_pkg_native yarn "$@"; return; }
 
   _safe_pkg_dispatch "yarn" "yarn.lock" "" \
     "package.json yarn.lock .yarnrc .npmrc" "$@"

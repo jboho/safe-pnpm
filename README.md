@@ -88,7 +88,21 @@ command npm update -g @jboho/safe-pnpm
 safe-pnpm update
 ```
 
+If you turned on global PATH shims (`safe-pnpm setup --path-shims`), `command npm` reaches the npm shim and is refused too; run npm by its absolute path instead (`safe-pnpm doctor` lists it, and the refusal message prints it). After upgrading, run `safe-pnpm update` before `safe-pnpm setup --path-shims`; setup refuses to install shims next to wrapper files from another release.
+
 Use `command npm` here. The wrappers refuse `-g` and `--global` installs, because the sandbox would install into a container that is thrown away and change nothing on your machine. Add `command` in front (`command npm install -g PKG`) to run a global install natively, without the safety checks.
+
+### `safe-pnpm exec -- CMD`
+
+Run a program with the safe-pnpm PATH shims first on PATH, for it and everything it starts:
+
+```sh
+safe-pnpm exec -- nx mcp
+```
+
+The wrappers are shell functions, so a program that starts `pnpm`, `npm`, `npx`, `pnpx` or `yarn` itself (an editor, an MCP server, `child_process.spawn("pnpm")`) skips them. The shims in `~/.safe-pnpm/bin` run the same checks for those programs. `exec` passes the arguments through unchanged and exits with the program's exit code.
+
+To put the shims first on PATH in every new shell instead (opt-in), run `safe-pnpm setup --path-shims`; `safe-pnpm setup --remove-path-shims` undoes it. What the shims cover and what they don't (absolute paths, `npm_execpath`, corepack, Dock-launched apps, CI, Windows), plus MCP server recipes: [docs/security.md](./docs/security.md#path-shims-for-programs-that-start-a-package-manager).
 
 ### `safe-pnpm doctor`
 
@@ -104,6 +118,13 @@ Check that everything is installed and configured correctly:
   ✓  npm              10.2.4
   ✓  Node.js          v22.0.0
   ✓  CA cert          not configured (no TLS proxy)
+  ✓  PATH shims       pnpm, pnpx, npm, npx in ~/.safe-pnpm/bin
+  ✓  Shims on PATH    not on PATH (scoped: use safe-pnpm exec -- CMD, or setup --path-shims)
+
+  Package managers on PATH, in lookup order
+  pnpm
+        ~/Library/pnpm/pnpm
+  ...
 ```
 
 ---
@@ -213,6 +234,9 @@ To bypass the wrapper and run the native binary directly:
 command pnpm install   # bash, zsh and fish
 command npm install
 command yarn install
+
+# With setup --path-shims, `command pnpm` reaches the shim; run the real
+# binary by absolute path instead (safe-pnpm doctor lists them).
 
 pnpm.cmd install      # PowerShell
 npm.cmd install

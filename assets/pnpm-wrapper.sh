@@ -7,6 +7,8 @@
 # All other commands pass through to native pnpm unchanged.
 # Escape hatch: `command pnpm install` bypasses to native pnpm (a backslash only
 # bypasses aliases, not shell functions like this wrapper).
+# With the PATH shims (~/.safe-pnpm/bin) on PATH, `command pnpm` reaches the shim,
+# so run the real binary by its absolute path instead.
 
 [ -z "${_SAFE_PKG_SHARED_LOADED:-}" ] && \
   # shellcheck disable=SC1091
@@ -14,7 +16,7 @@
 
 pnpm() {
   _safe_pkg_runner_check pnpm "$@" || return 1
-  _safe_pkg_is_install pnpm "$@" || { command pnpm "$@"; return; }
+  _safe_pkg_is_install pnpm "$@" || { _safe_pkg_native pnpm "$@"; return; }
 
   _safe_pkg_dispatch "pnpm" "pnpm-lock.yaml" "pnpm-workspace.yaml" \
     "package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc" "$@"
@@ -23,7 +25,7 @@ pnpm() {
 # pnpx is pnpm dlx: same OSV check, then native.
 pnpx() {
   _safe_pkg_runner_check pnpx "$@" || return 1
-  command pnpx "$@"
+  _safe_pkg_native pnpx "$@"
 }
 
 # On a disk that ignores case (macOS by default) the shell finds the real
