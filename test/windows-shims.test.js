@@ -303,7 +303,27 @@ test("cmdQuote survives the launcher's second cmd.exe parse", () => {
   }
   // Escaped once, the quote in q"q flips cmd.exe's quote state on the
   // second parse and leaves a&b's & bare.
-  const once = (a) =>
-    `"${a.replace(/"/g, '\\"')}"`.replace(/([()\][%!^"`<>&|;, *?])/g, "^$1");
-  assert.throws(() => cmdParse(cmdParse(['q"q', "a&b"].map(once).join(" "))));
+  const once = ['q"q', "a&b"].map((a) => shims.cmdQuoteOnce(a)).join(" ");
+  assert.throws(() => cmdParse(cmdParse(once)));
+});
+
+test("spawnCommand escapes once for a .cmd or .bat that reads %1 itself", () => {
+  const argv = ['q"q', "a&b", "a|b", "%PATH%", "^", "", "x y", "back\\"];
+  const line = (file) =>
+    shims.spawnCommand([file, ...argv], {}, "win32").args[3].slice(1, -1);
+  // tool.bat sees its arguments after the /c line's single parse.
+  const bat = line("C:\\x\\tool.bat");
+  assert.equal(
+    bat,
+    `C:\\x\\tool.bat ${argv.map((a) => shims.cmdQuoteOnce(a)).join(" ")}`,
+  );
+  assert.deepEqual(msvcrtSplit(cmdParse(bat)).slice(1), argv);
+  // The managers' launchers and the shims reparse %*, in any case.
+  for (const f of ["C:\\x\\pnpm.cmd", "C:\\x\\NPX.CMD", "C:\\x\\yarn.bat"]) {
+    assert.equal(
+      line(f),
+      `${f} ${argv.map((a) => shims.cmdQuote(a)).join(" ")}`,
+      f,
+    );
+  }
 });
