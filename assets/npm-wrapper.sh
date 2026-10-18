@@ -7,6 +7,8 @@
 # All other commands pass through to native npm unchanged.
 # Escape hatch: `command npm install` bypasses to native npm (a backslash only
 # bypasses aliases, not shell functions like this wrapper).
+# With the PATH shims (~/.safe-pnpm/bin) on PATH, `command npm` reaches the shim,
+# so run the real binary by its absolute path instead.
 
 [ -z "${_SAFE_PKG_SHARED_LOADED:-}" ] && \
   # shellcheck disable=SC1091
@@ -14,7 +16,7 @@
 
 npm() {
   _safe_pkg_runner_check npm "$@" || return 1
-  _safe_pkg_is_install npm "$@" || { command npm "$@"; return; }
+  _safe_pkg_is_install npm "$@" || { _safe_pkg_native npm "$@"; return; }
 
   _safe_pkg_dispatch "npm" "package-lock.json" "" \
     "package.json package-lock.json .npmrc" "$@"
@@ -23,7 +25,7 @@ npm() {
 # npx fetches a package and runs it. Same OSV check as `npm exec`, then native.
 npx() {
   _safe_pkg_runner_check npx "$@" || return 1
-  command npx "$@"
+  _safe_pkg_native npx "$@"
 }
 
 # On a disk that ignores case (macOS by default) the shell finds the real

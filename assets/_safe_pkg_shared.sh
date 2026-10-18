@@ -3,6 +3,39 @@
 
 _SAFE_PKG_SHARED_LOADED=1
 
+# _safe_pkg_native name [args...]
+#   Runs the real package manager. With the PATH shims (~/.safe-pnpm/bin)
+#   on PATH, `command pnpm` would find the shim again, so this walks PATH,
+#   skips the shim directory and runs the next match by absolute path. PATH
+#   itself is left alone, so a pnpm started by that process (a package script
+#   running `pnpm install`) reaches the shim again. Relative PATH entries are
+#   skipped so a repository cannot plant its own ./pnpm. No real binary: fails
+#   with 127 instead of running nothing silently.
+_safe_pkg_native() {
+  local name="$1" shim dir rest real
+  shift
+  shim="$(cd -P "${_SAFE_PKG_SHIM_DIR:-$HOME/.safe-pnpm/bin}" 2>/dev/null && pwd)"
+  if [ -z "$shim" ]; then
+    command "$name" "$@"
+    return
+  fi
+  rest="$PATH:"
+  while [ -n "$rest" ]; do
+    dir="${rest%%:*}"
+    rest="${rest#*:}"
+    case "$dir" in /*) ;; *) continue ;; esac
+    [ -f "$dir/$name" ] && [ -x "$dir/$name" ] || continue
+    [ "$(cd -P "$dir" 2>/dev/null && pwd)" = "$shim" ] && continue
+    real="$dir/$name"
+    break
+  done
+  if [ -z "$real" ]; then
+    echo "✗ safe-pnpm: no $name found on PATH apart from the shims in $shim. Install $name, or take $shim off PATH." >&2
+    return 127
+  fi
+  "$real" "$@"
+}
+
 # _safe_pkg_valueflags manager
 #   Prints the global flags that take a separate value, space-separated, so
 #   the finders below can skip the value instead of reading it as a command.
@@ -296,9 +329,9 @@ _safe_pkg_audit() {
 
   echo "→ $manager audit..." >&2
   case "$manager" in
-    pnpm) (cd "$auditdir" && command pnpm audit --audit-level moderate --config.ignore-pnpmfile=true) >"$audit_out" 2>&1 ;;
-    npm)  (cd "$auditdir" && command npm  audit --audit-level moderate) >"$audit_out" 2>&1 ;;
-    yarn) (cd "$auditdir" && command yarn audit) >"$audit_out" 2>&1 ;;
+    pnpm) (cd "$auditdir" && _safe_pkg_native pnpm audit --audit-level moderate --config.ignore-pnpmfile=true) >"$audit_out" 2>&1 ;;
+    npm)  (cd "$auditdir" && _safe_pkg_native npm  audit --audit-level moderate) >"$audit_out" 2>&1 ;;
+    yarn) (cd "$auditdir" && _safe_pkg_native yarn audit) >"$audit_out" 2>&1 ;;
   esac
   audit_rc=$?
   rm -rf "$auditdir"
@@ -795,7 +828,7 @@ _safe_pkg_run() {
       # the isolation guarantee. Require explicit opt-in to fall back.
       if [ "${SAFE_PNPM_ALLOW_NATIVE_FALLBACK:-}" = "1" ]; then
         echo "⚠️  safe-pnpm: Docker not running — SAFE_PNPM_ALLOW_NATIVE_FALLBACK=1 set, running native $manager." >&2
-        command "$manager" "$@"; return
+        _safe_pkg_native "$manager" "$@"; return
       fi
       echo "✗ safe-pnpm: Docker not running and no TTY — refusing native $manager (set SAFE_PNPM_ALLOW_NATIVE_FALLBACK=1 to override)." >&2
       return 1
@@ -803,7 +836,7 @@ _safe_pkg_run() {
     printf "⚠️  safe-pnpm: Docker not running. Use native %s? [y/N] " "$manager" >&2
     read -r _ans
     case "$_ans" in
-      [Yy]*) command "$manager" "$@" ;;
+      [Yy]*) _safe_pkg_native "$manager" "$@" ;;
       *)     return 1 ;;
     esac
     return
