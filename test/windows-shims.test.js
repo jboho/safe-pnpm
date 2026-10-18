@@ -191,22 +191,29 @@ test("safe-pnpm exec runs a NAME.cmd through cmd.exe with every argument quoted"
   const env = {
     PATH: dir,
     PATHEXT: ".exe;.cmd",
-    ComSpec: "C:\\Windows\\system32\\cmd.exe",
+    SystemRoot: "D:\\Win",
+    ComSpec: "C:\\evil\\cmd.exe",
   };
   const r = shims.spawnCommand(
     ["pnpm", "run", "a b", 'say "hi"', "x&y", "100%", "trail\\"],
     env,
     "win32",
   );
-  assert.equal(r.file, "C:\\Windows\\system32\\cmd.exe");
+  // The system cmd.exe, never ComSpec.
+  assert.equal(r.file, "D:\\Win\\System32\\cmd.exe");
+  assert.equal(
+    shims.spawnCommand(["pnpm"], { PATH: dir, PATHEXT: ".cmd" }, "win32").file,
+    "C:\\Windows\\System32\\cmd.exe",
+  );
   assert.deepEqual(r.options, { windowsVerbatimArguments: true });
   assert.deepEqual(r.args.slice(0, 3), ["/d", "/s", "/c"]);
   const file = path
     .join(dir, "pnpm.cmd")
     .replace(/([()\][%!^"`<>&|;, *?])/g, "^$1");
+  // Escaped twice: once for the /c line, once for the launcher's %* reparse.
   assert.equal(
     r.args[3],
-    `"${file} ^"run^" ^"a^ b^" ^"say^ \\^"hi\\^"^" ^"x^&y^" ^"100^%^" ^"trail\\\\^""`,
+    `"${file} ^^^"run^^^" ^^^"a^^^ b^^^" ^^^"say^^^ \\^^^"hi\\^^^"^^^" ^^^"x^^^&y^^^" ^^^"100^^^%^^^" ^^^"trail\\\\^^^""`,
   );
   // An .exe, or a path, runs as is; other platforms never change argv.
   assert.deepEqual(shims.spawnCommand(["node", "-v"], env, "win32"), {
@@ -219,5 +226,84 @@ test("safe-pnpm exec runs a NAME.cmd through cmd.exe with every argument quoted"
     args: ["a b"],
     options: {},
   });
-  assert.equal(shims.cmdQuote(""), '^"^"');
+  assert.equal(shims.cmdQuote(""), '^^^"^^^"');
+});
+
+// Simulates the two cmd.exe parses a .cmd launcher's arguments go through:
+// the /c line, then the launcher's %* line. Each strips one level of carets,
+// and an unescaped metacharacter outside quotes is a failure. Returns the
+// text the launcher hands its program, or throws.
+function cmdParse(line) {
+  let out = "";
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') quoted = !quoted;
+    if (!quoted && c === "^") {
+      out += line[++i];
+      continue;
+    }
+    if (!quoted && "&|<>".includes(c)) throw new Error(`cmd acts on ${c}`);
+    out += c;
+  }
+  return out;
+}
+
+// The program's own argv split (MSVCRT rules) of what the launcher hands it.
+function msvcrtSplit(s) {
+  const args = [];
+  let cur = "";
+  let inArg = false;
+  let quoted = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === "\\") {
+      let n = 0;
+      while (s[i] === "\\") {
+        n++;
+        i++;
+      }
+      if (s[i] === '"') {
+        cur += "\\".repeat(Math.floor(n / 2));
+        if (n % 2) cur += '"';
+        else quoted = !quoted;
+      } else {
+        cur += "\\".repeat(n);
+        i--;
+      }
+      inArg = true;
+    } else if (c === '"') {
+      quoted = !quoted;
+      inArg = true;
+    } else if (c === " " && !quoted) {
+      if (inArg) args.push(cur);
+      cur = "";
+      inArg = false;
+    } else {
+      cur += c;
+      inArg = true;
+    }
+  }
+  if (inArg) args.push(cur);
+  return args;
+}
+
+test("cmdQuote survives the launcher's second cmd.exe parse", () => {
+  for (const argv of [
+    ['q"q', "a&b"],
+    ["a|b"],
+    ["%PATH%"],
+    ["^"],
+    [""],
+    ['x"', "<y>", "c^d", "(p)", "back\\"],
+  ]) {
+    const line = argv.map(shims.cmdQuote).join(" ");
+    const handed = cmdParse(cmdParse(line));
+    assert.deepEqual(msvcrtSplit(handed), argv, JSON.stringify(argv));
+  }
+  // Escaped once, the quote in q"q flips cmd.exe's quote state on the
+  // second parse and leaves a&b's & bare.
+  const once = (a) =>
+    `"${a.replace(/"/g, '\\"')}"`.replace(/([()\][%!^"`<>&|;, *?])/g, "^$1");
+  assert.throws(() => cmdParse(cmdParse(['q"q', "a&b"].map(once).join(" "))));
 });

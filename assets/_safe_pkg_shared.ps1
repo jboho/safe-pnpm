@@ -29,32 +29,45 @@ function _Safe_Pkg_Native_Exe {
     throw 'safe-pnpm: command refused'
 }
 
+# The cmd.exe command line that runs a .cmd or .bat Exe with Arguments, built
+# like spawnCommand in lib/util/shims.js: each argument quoted for the
+# program's parser, then every cmd.exe metacharacter caret-escaped twice, once
+# for the /c line and once for the launcher's own %* reparse.
+function _Safe_Pkg_Cmd_Line {
+    param([string]$Exe, [object[]]$Arguments = @())
+    $meta = '([()\][%!^"`<>&|;, *?])'
+    $parts = @($Exe -replace $meta, '^$1')
+    foreach ($a in $Arguments) {
+        $q = '"' + (("$a" -replace '(\\*)"', '$1$1\"') -replace '(\\*)$', '$1$1') + '"'
+        $parts += (($q -replace $meta, '^$1') -replace $meta, '^$1')
+    }
+    return ($parts -join ' ')
+}
+
 # Runs the real binary Exe with Arguments and leaves its exit code in
-# $LASTEXITCODE. On Windows the real managers are .cmd launchers, and
-# PowerShell passes arguments to a .cmd or .bat file the Legacy way: empty
-# arguments dropped, embedded quotes unescaped, & and | left for cmd.exe to
-# act on. So a .cmd or .bat runs through cmd.exe /d /s /c with a command line
-# quoted and caret-escaped like cmdQuote in lib/util/shims.js, with stdio
-# inherited.
+# $LASTEXITCODE; output stays in the pipeline, so `$v = npm -v` and redirects
+# work. On Windows the real managers are .cmd launchers, and PowerShell passes
+# arguments to a .cmd or .bat file the Legacy way: empty arguments dropped,
+# embedded quotes unescaped, & and | left for cmd.exe to act on. So a .cmd or
+# .bat runs through the system cmd.exe /d /s /c with the line from
+# _Safe_Pkg_Cmd_Line, handed over verbatim by the stop-parsing token: --%
+# passes the rest of the line as written, expanding only %_SAFE_PKG_CMDLINE%,
+# once.
 function _Safe_Pkg_Run_Native {
     param([string]$Exe, [object[]]$Arguments = @())
     if ($Exe -notmatch '\.(cmd|bat)$') {
         & $Exe @Arguments
         return
     }
-    $meta = '([()\][%!^"`<>&|;, *?])'
-    $parts = @($Exe -replace $meta, '^$1')
-    foreach ($a in $Arguments) {
-        $q = '"' + (("$a" -replace '(\\*)"', '$1$1\"') -replace '(\\*)$', '$1$1') + '"'
-        $parts += ($q -replace $meta, '^$1')
+    $root = if ($env:SystemRoot) { $env:SystemRoot } else { 'C:\Windows' }
+    $cmd = [IO.Path]::Combine($root, 'System32', 'cmd.exe')
+    $saved = $env:_SAFE_PKG_CMDLINE
+    $env:_SAFE_PKG_CMDLINE = _Safe_Pkg_Cmd_Line $Exe $Arguments
+    try {
+        & $cmd /d /s /c --% "%_SAFE_PKG_CMDLINE%"
+    } finally {
+        $env:_SAFE_PKG_CMDLINE = $saved
     }
-    $comspec = if ($env:ComSpec) { $env:ComSpec } else { 'cmd.exe' }
-    $psi = [Diagnostics.ProcessStartInfo]::new($comspec)
-    $psi.Arguments = '/d /s /c "' + ($parts -join ' ') + '"'
-    $psi.UseShellExecute = $false
-    $p = [Diagnostics.Process]::Start($psi)
-    $p.WaitForExit()
-    $global:LASTEXITCODE = $p.ExitCode
 }
 
 # The command that runs Name without the safety checks, for the refusal hints:
