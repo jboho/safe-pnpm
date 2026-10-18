@@ -52,7 +52,9 @@ function _Safe_Pkg_Cmd_Line {
 # .bat runs through the system cmd.exe /d /s /c with the line from
 # _Safe_Pkg_Cmd_Line, handed over verbatim by the stop-parsing token: --%
 # passes the rest of the line as written, expanding only %_SAFE_PKG_CMDLINE%,
-# once.
+# once. That holds only under Legacy argument passing; with Standard (a
+# profile may set it) PowerShell splits and re-quotes the line, so the call
+# forces Legacy in this function's scope and the caller's setting is kept.
 function _Safe_Pkg_Run_Native {
     param([string]$Exe, [object[]]$Arguments = @())
     if ($Exe -notmatch '\.(cmd|bat)$') {
@@ -63,6 +65,7 @@ function _Safe_Pkg_Run_Native {
     $cmd = [IO.Path]::Combine($root, 'System32', 'cmd.exe')
     $saved = $env:_SAFE_PKG_CMDLINE
     $env:_SAFE_PKG_CMDLINE = _Safe_Pkg_Cmd_Line $Exe $Arguments
+    $PSNativeCommandArgumentPassing = 'Legacy'
     try {
         & $cmd /d /s /c --% "%_SAFE_PKG_CMDLINE%"
     } finally {

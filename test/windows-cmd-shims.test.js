@@ -167,8 +167,9 @@ test("cmd shim: arguments and the exit code pass through", { skip }, () => {
   assert.equal(r.calls, `RAN pnpm\n${args.join("\n")}\n`);
   // The real launchers are .cmd files too, which PowerShell would call with
   // Legacy argument passing: '' dropped, q"q unescaped, a&b split by cmd.exe.
-  // Both hops escape twice for the launcher's %* reparse, so a " and an & in
-  // one command line arrive intact.
+  // Both hops (this test's spawnCommand and the wrapper's cmd.exe call)
+  // escape twice for the launcher's %* reparse, so a " and an & in one
+  // command line arrive intact.
   const more = ["", 'q"q', "a&b", "x|y", "c^d", "^", "(p)", "%PATH%", "back\\"];
   const m = run(["pnpm", "run", ...more]);
   assert.equal(m.status, 0, m.stderr);
@@ -196,11 +197,37 @@ test("cmd shim: the profile function's output from a .cmd launcher can be captur
     env: { STUB_EXIT: "4" },
   });
   assert.equal(r.status, 0, r.stderr);
-  assert.equal(r.stdout, "captured=[STUB OUT] rc=4\npiped:STUB OUT\n");
   assert.equal(
-    r.calls,
-    `RAN pnpm\n${args.join("\n")}\nRAN pnpm\nrun\nx\n`,
+    r.stdout.replace(/\r\n/g, "\n"),
+    "captured=[STUB OUT] rc=4\npiped:STUB OUT\n",
   );
+  assert.equal(r.calls, `RAN pnpm\n${args.join("\n")}\nRAN pnpm\nrun\nx\n`);
+});
+
+test("cmd shim: a profile that sets Standard argument passing still works", {
+  skip,
+}, () => {
+  // Under Standard, PowerShell would split and re-quote the --% line that
+  // _Safe_Pkg_Run_Native hands to cmd.exe; the function forces Legacy for
+  // its own call and leaves the caller's setting alone.
+  const args = ["run", "a b", "", 'q"q', "a&b", "x|y", "%PATH%", "^"];
+  const ps = (a) => `'${a.replace(/'/g, "''")}'`;
+  const script = [
+    "$PSNativeCommandArgumentPassing = 'Standard'",
+    '. "$HOME\\.safe-pnpm\\pnpm-wrapper.ps1"',
+    `$v = pnpm ${args.map(ps).join(" ")}`,
+    '"captured=[$v] rc=$LASTEXITCODE caller=$PSNativeCommandArgumentPassing"',
+    "exit 0",
+  ].join("; ");
+  const r = run(["pwsh", "-NoProfile", "-Command", script], {
+    env: { STUB_EXIT: "4" },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(
+    r.stdout.replace(/\r\n/g, "\n"),
+    "captured=[STUB OUT] rc=4 caller=Standard\n",
+  );
+  assert.equal(r.calls, `RAN pnpm\n${args.join("\n")}\n`);
 });
 
 test("cmd shim: stdin and stdout pass through byte for byte", { skip }, () => {

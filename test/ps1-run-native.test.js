@@ -76,7 +76,9 @@ const PRELUDE = `. /w/_safe_pkg_shared.ps1
 $env:SystemRoot = '/w/root'
 `;
 
-test("a .cmd launcher's output can be captured, piped and redirected", { skip }, () => {
+test("a .cmd launcher's output can be captured, piped and redirected", {
+  skip,
+}, () => {
   const out = pwsh(`${PRELUDE}
 $env:_SAFE_PKG_CMDLINE = 'prev'
 $v = _Safe_Pkg_Run_Native '/w/npm.cmd' @('-v')
@@ -102,6 +104,25 @@ _Safe_Pkg_Run_Native '/w/npm.cmd' @('x') > /w/redir.txt
   assert.doesNotMatch(argv.join(" "), /_SAFE_PKG_CMDLINE/);
 });
 
+test("a caller's Standard argument passing does not reach the .cmd call", {
+  skip,
+}, () => {
+  // Under Standard, PowerShell splits the --% text on spaces and re-quotes
+  // it, so cmd.exe would get a broken line. Under Legacy the line is parsed
+  // as one Windows command line, which keeps "/w/npm.cmd ..." in one piece.
+  const out = pwsh(`${PRELUDE}
+$PSNativeCommandArgumentPassing = 'Standard'
+$v = _Safe_Pkg_Run_Native '/w/npm.cmd' @('a b', 'q"q', 'a&b')
+"captured=$($v -join '|') rc=$LASTEXITCODE"
+"caller=$PSNativeCommandArgumentPassing"
+`);
+  assert.match(out, /^captured=OUT one\|OUT two rc=5$/m);
+  assert.match(out, /^caller=Standard$/m);
+  const argv = fs.readFileSync(path.join(tmp, "cmdargs"), "utf8").split("\n");
+  assert.deepEqual(argv.slice(0, 3), ["/d", "/s", "/c"]);
+  assert.ok(argv[3].startsWith("/w/npm.cmd "), JSON.stringify(argv));
+});
+
 test("stdin passes through to a .cmd launcher", { skip }, () => {
   const out = pwsh(
     `${PRELUDE}
@@ -114,7 +135,9 @@ _Safe_Pkg_Run_Native '/w/npm.cmd' @()
   assert.match(out, /^OUT two\nfrom stdin\nrc=5$/m);
 });
 
-test("_Safe_Pkg_Cmd_Line builds the same line as spawnCommand", { skip }, () => {
+test("_Safe_Pkg_Cmd_Line builds the same line as spawnCommand", {
+  skip,
+}, () => {
   const out = pwsh(`${PRELUDE}
 $a = Get-Content -Raw /w/args.json | ConvertFrom-Json -NoEnumerate
 [Console]::Out.Write((_Safe_Pkg_Cmd_Line 'C:\\x\\pnpm.cmd' $a))
