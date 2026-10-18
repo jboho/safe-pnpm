@@ -68,6 +68,7 @@ exit "\${STUB_EXIT:-0}"
   delete env.SAFE_PNPM_OSV_STRICT;
   delete env.SAFE_PNPM_STRICT;
   delete env.STUB_EXIT;
+  delete env._SAFE_PKG_SHIM_DEPTH;
 });
 after(() => {
   osv.stop();
@@ -146,6 +147,43 @@ test("with no real binary after the shims, the shim fails closed instead of loop
   assert.equal(r.calls, "");
 });
 
+test("with wrappers older than the shims, the shim refuses instead of finding itself", () => {
+  // A pre-shim wrapper passes commands on with `command pnpm`, which would
+  // find the shim again.
+  const old = path.join(root, "old-home");
+  const oldShims = path.join(old, ".safe-pnpm", "bin");
+  fs.mkdirSync(oldShims, { recursive: true });
+  fs.writeFileSync(path.join(old, ".safe-pnpm", "_safe_pkg_shared.sh"), "");
+  fs.writeFileSync(path.join(old, ".safe-pnpm", "pnpm-wrapper.sh"), 'pnpm() { command pnpm "$@"; }\n');
+  fs.copyFileSync(path.join(ASSETS, "path-shim.sh"), path.join(oldShims, "pnpm"));
+  fs.chmodSync(path.join(oldShims, "pnpm"), 0o755);
+  const r = run("pnpm", ["run", "build"], {
+    HOME: old,
+    PATH: [oldShims, real, NODE_DIR, "/usr/bin", "/bin"].join(path.delimiter),
+  });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /older than the PATH shims/);
+  assert.equal(r.calls, "");
+});
+
+test("a chain that re-enters the shim too often is stopped", () => {
+  const r = run("pnpm", ["run", "build"], { _SAFE_PKG_SHIM_DEPTH: "32" });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /entered 33 times in a row/);
+  assert.equal(r.calls, "");
+});
+
+test("with the shims on PATH, a refusal names the real binary instead of `command npm`", () => {
+  const r = run("npm", ["update", "-g", "@jboho/safe-pnpm"]);
+  assert.equal(r.status, 1, r.stderr);
+  assert.ok(r.stderr.includes(`run: ${path.join(real, "npm")} update -g @jboho/safe-pnpm`), r.stderr);
+  const off = run("bash", ["-c", `source "${path.join(home, ".safe-pnpm", "_safe_pkg_shared.sh")}"; source "${path.join(home, ".safe-pnpm", "npm-wrapper.sh")}"; npm update -g x`], {
+    PATH: [real, NODE_DIR, "/usr/bin", "/bin"].join(path.delimiter),
+  });
+  assert.equal(off.status, 1, off.stderr);
+  assert.match(off.stderr, /run: command npm update -g x/);
+});
+
 test("child_process.spawn('pnpm') from a node program hits the shim", () => {
   const script = "const r = require('node:child_process').spawnSync('pnpm', ['dlx', 'mal-pkg'], { stdio: 'inherit' }); process.exit(r.status);";
   const r = run(process.execPath, ["-e", script]);
@@ -213,11 +251,37 @@ test("setup --path-shims adds the PATH line once, moves it behind later PATH cha
   assert.equal(content.split(line).length, 2, content);
   assert.ok(content.indexOf("PNPM_HOME") < content.indexOf(line), content);
 
+  fs.appendFileSync(rc, 'eval "$(/opt/homebrew/bin/brew shellenv)"\n');
+  const brew = run(process.execPath, [BIN, "setup", "--path-shims"], setupEnv);
+  assert.equal(brew.status, 0, brew.stderr);
+  content = fs.readFileSync(rc, "utf8");
+  assert.ok(content.indexOf("shellenv") < content.indexOf(line), content);
+
   const removed = run(process.execPath, [BIN, "setup", "--remove-path-shims"], setupEnv);
   assert.equal(removed.status, 0, removed.stderr);
   content = fs.readFileSync(rc, "utf8");
-  assert.ok(!content.includes(line), content);
-  assert.ok(content.includes('source "$HOME/.safe-pnpm/pnpm-wrapper.sh"'), content);
+  assert.equal(
+    content,
+    `${before}export PNPM_HOME="$HOME/Library/pnpm"\neval "$(/opt/homebrew/bin/brew shellenv)"\n`,
+  );
+  // Add and remove leave the file as it was, without a stray blank line.
+  run(process.execPath, [BIN, "setup", "--path-shims"], setupEnv);
+  run(process.execPath, [BIN, "setup", "--remove-path-shims"], setupEnv);
+  assert.equal(fs.readFileSync(rc, "utf8"), content);
+
+  // Wrapper files from an older release: refuse, so the shims never run
+  // next to wrappers that would hand the command back to them.
+  const shared = path.join(home, ".safe-pnpm", "_safe_pkg_shared.sh");
+  const saved = fs.readFileSync(shared);
+  fs.writeFileSync(shared, "# an older release\n");
+  try {
+    const stale = run(process.execPath, [BIN, "setup", "--path-shims"], setupEnv);
+    assert.equal(stale.status, 1, stale.stderr);
+    assert.match(stale.stderr, /differ from this package \(_safe_pkg_shared\.sh\).*Run safe-pnpm update first/s);
+    assert.equal(fs.readFileSync(rc, "utf8"), content);
+  } finally {
+    fs.writeFileSync(shared, saved);
+  }
 
   const bad = run(process.execPath, [BIN, "setup", "--bogus"], setupEnv);
   assert.equal(bad.status, 1);

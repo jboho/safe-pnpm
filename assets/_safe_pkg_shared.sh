@@ -36,6 +36,32 @@ _safe_pkg_native() {
   "$real" "$@"
 }
 
+# _safe_pkg_bypass manager
+#   Prints the command that runs manager without the safety checks, for the
+#   refusal hints: `command manager`, or the real binary's absolute path when
+#   `command manager` would reach the PATH shims and be refused again.
+_safe_pkg_bypass() {
+  local name="$1" shim dir rest canon first=1
+  shim="$(cd -P "${_SAFE_PKG_SHIM_DIR:-$HOME/.safe-pnpm/bin}" 2>/dev/null && pwd)"
+  rest="$PATH:"
+  while [ -n "$rest" ]; do
+    dir="${rest%%:*}"
+    rest="${rest#*:}"
+    case "$dir" in /*) ;; *) continue ;; esac
+    [ -f "$dir/$name" ] && [ -x "$dir/$name" ] || continue
+    canon="$(cd -P "$dir" 2>/dev/null && pwd)"
+    if [ -n "$shim" ] && [ "$canon" = "$shim" ]; then
+      first=
+      continue
+    fi
+    # The first match is not a shim: `command` reaches the real binary.
+    [ -n "$first" ] && break
+    printf '%q' "$dir/$name"
+    return
+  done
+  printf 'command %s' "$name"
+}
+
 # _safe_pkg_valueflags manager
 #   Prints the global flags that take a separate value, space-separated, so
 #   the finders below can skip the value instead of reading it as a command.
@@ -718,21 +744,21 @@ _safe_pkg_dispatch() {
       --*)
         [ -n "${arg//-/}" ] && continue
         echo "✗ safe-pnpm: $arg is not supported through the wrapper; the sandbox adds --ignore-scripts and its other flags after your arguments, and after $arg they would not be read as flags." >&2
-        echo "  To run it without the safety checks: command $manager$(printf ' %q' "$@")" >&2
+        echo "  To run it without the safety checks: $(_safe_pkg_bypass "$manager")$(printf ' %q' "$@")" >&2
         return 1 ;;
     esac
   done
 
   if _safe_pkg_is_global "$@"; then
     echo "✗ safe-pnpm: global installs are not supported through the wrapper; the sandbox would install into a throwaway container and change nothing on this machine." >&2
-    echo "  To install globally without the safety checks, run: command $manager$(printf ' %q' "$@")" >&2
+    echo "  To install globally without the safety checks, run: $(_safe_pkg_bypass "$manager")$(printf ' %q' "$@")" >&2
     return 1
   fi
 
   local dir_flag
   if dir_flag="$(_safe_pkg_dir_flag "$manager" "$@")"; then
     echo "✗ safe-pnpm: $dir_flag is not supported through the wrapper; the scan checks this directory's lockfile, so an install in another directory would go unchecked." >&2
-    echo "  cd into that directory and run the command there. To run it without the safety checks: command $manager$(printf ' %q' "$@")" >&2
+    echo "  cd into that directory and run the command there. To run it without the safety checks: $(_safe_pkg_bypass "$manager")$(printf ' %q' "$@")" >&2
     return 1
   fi
 
@@ -1017,7 +1043,7 @@ _safe_pkg_sandbox() {
   fi
   if [ "$manager" = "pnpm" ] && lockfile_setting="$(_safe_pkg_unshared_lockfile_setting "$tmpdir" "$workspace_root" "$@")"; then
     echo "✗ safe-pnpm: ${lockfile_setting}, so pnpm would keep a lockfile in each workspace member and there is no root lockfile to scan." >&2
-    echo "  Set shared-workspace-lockfile=true (the default) and run the command again. To run it without the safety checks: command $manager$(printf ' %q' "$@")" >&2
+    echo "  Set shared-workspace-lockfile=true (the default) and run the command again. To run it without the safety checks: $(_safe_pkg_bypass "$manager")$(printf ' %q' "$@")" >&2
     return 1
   fi
 

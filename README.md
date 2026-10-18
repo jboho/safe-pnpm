@@ -88,6 +88,8 @@ command npm update -g @jboho/safe-pnpm
 safe-pnpm update
 ```
 
+If you turned on global PATH shims (`safe-pnpm setup --path-shims`), `command npm` reaches the npm shim and is refused too; run npm by its absolute path instead (`safe-pnpm doctor` lists it, and the refusal message prints it). After upgrading, run `safe-pnpm update` before `safe-pnpm setup --path-shims`; setup refuses to install shims next to wrapper files from another release.
+
 Use `command npm` here. The wrappers refuse `-g` and `--global` installs, because the sandbox would install into a container that is thrown away and change nothing on your machine. Add `command` in front (`command npm install -g PKG`) to run a global install natively, without the safety checks.
 
 ### `safe-pnpm exec -- CMD`
