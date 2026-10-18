@@ -177,8 +177,11 @@ test("with the shims on PATH, a refusal names the real binary instead of `comman
   const r = run("npm", ["update", "-g", "@jboho/safe-pnpm"]);
   assert.equal(r.status, 1, r.stderr);
   assert.ok(r.stderr.includes(`run: ${path.join(real, "npm")} update -g @jboho/safe-pnpm`), r.stderr);
-  const off = run("bash", ["-c", `source "${path.join(home, ".safe-pnpm", "_safe_pkg_shared.sh")}"; source "${path.join(home, ".safe-pnpm", "npm-wrapper.sh")}"; npm update -g x`], {
+  // The install dir goes in through the environment: CodeQL counts every
+  // `bash -c` argv element as command text.
+  const off = run("bash", ["-c", 'source "$SAFE_TEST_DIR/_safe_pkg_shared.sh"; source "$SAFE_TEST_DIR/npm-wrapper.sh"; npm update -g x'], {
     PATH: [real, NODE_DIR, "/usr/bin", "/bin"].join(path.delimiter),
+    SAFE_TEST_DIR: path.join(home, ".safe-pnpm"),
   });
   assert.equal(off.status, 1, off.stderr);
   assert.match(off.stderr, /run: command npm update -g x/);
