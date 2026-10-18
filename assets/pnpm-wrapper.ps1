@@ -47,7 +47,7 @@ function global:pnpm {
     }
     if (-not $cmd) {
         $pnpmExe = (_Safe_Pkg_Native_Exe pnpm)
-        & $pnpmExe @args
+        _Safe_Pkg_Run_Native $pnpmExe $args
         return
     }
 
@@ -238,5 +238,5 @@ function global:pnpm {
 function global:pnpx {
     if (-not (_Safe_Pkg_Runner_Check -Manager pnpx -PassArgs $args)) { $global:LASTEXITCODE = 1; throw 'safe-pnpm: command refused' }
     $pnpxExe = (_Safe_Pkg_Native_Exe pnpx)
-    & $pnpxExe @args
+    _Safe_Pkg_Run_Native $pnpxExe $args
 }

@@ -29,6 +29,34 @@ function _Safe_Pkg_Native_Exe {
     throw 'safe-pnpm: command refused'
 }
 
+# Runs the real binary Exe with Arguments and leaves its exit code in
+# $LASTEXITCODE. On Windows the real managers are .cmd launchers, and
+# PowerShell passes arguments to a .cmd or .bat file the Legacy way: empty
+# arguments dropped, embedded quotes unescaped, & and | left for cmd.exe to
+# act on. So a .cmd or .bat runs through cmd.exe /d /s /c with a command line
+# quoted and caret-escaped like cmdQuote in lib/util/shims.js, with stdio
+# inherited.
+function _Safe_Pkg_Run_Native {
+    param([string]$Exe, [object[]]$Arguments = @())
+    if ($Exe -notmatch '\.(cmd|bat)$') {
+        & $Exe @Arguments
+        return
+    }
+    $meta = '([()\][%!^"`<>&|;, *?])'
+    $parts = @($Exe -replace $meta, '^$1')
+    foreach ($a in $Arguments) {
+        $q = '"' + (("$a" -replace '(\\*)"', '$1$1\"') -replace '(\\*)$', '$1$1') + '"'
+        $parts += ($q -replace $meta, '^$1')
+    }
+    $comspec = if ($env:ComSpec) { $env:ComSpec } else { 'cmd.exe' }
+    $psi = [Diagnostics.ProcessStartInfo]::new($comspec)
+    $psi.Arguments = '/d /s /c "' + ($parts -join ' ') + '"'
+    $psi.UseShellExecute = $false
+    $p = [Diagnostics.Process]::Start($psi)
+    $p.WaitForExit()
+    $global:LASTEXITCODE = $p.ExitCode
+}
+
 # The command that runs Name without the safety checks, for the refusal hints:
 # Name.cmd, or the real binary's path when Name.cmd would reach the PATH shims
 # and be refused again.
@@ -683,7 +711,7 @@ function _Safe_Pkg_Native_Fallback {
     if ([Console]::IsInputRedirected) {
         if ($env:SAFE_PNPM_ALLOW_NATIVE_FALLBACK -eq '1') {
             Write-Host "⚠️  safe-pnpm: Docker not running — SAFE_PNPM_ALLOW_NATIVE_FALLBACK=1 set, running native $Manager." -ForegroundColor Yellow
-            & $exe @PassArgs
+            _Safe_Pkg_Run_Native $exe $PassArgs
             return
         }
         Write-Host "✗ safe-pnpm: Docker not running and no TTY — refusing native $Manager (set SAFE_PNPM_ALLOW_NATIVE_FALLBACK=1 to override)." -ForegroundColor Red
@@ -692,7 +720,7 @@ function _Safe_Pkg_Native_Fallback {
     }
     $ans = Read-Host "⚠️  safe-pnpm: Docker not running. Use native $Manager? [y/N]"
     if ($ans -match '^[Yy]') {
-        & $exe @PassArgs
+        _Safe_Pkg_Run_Native $exe $PassArgs
     } else {
         $global:LASTEXITCODE = 1
         throw 'safe-pnpm: command refused'

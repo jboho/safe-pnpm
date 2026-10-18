@@ -47,7 +47,7 @@ function global:npm {
     }
     if (-not $cmd) {
         $npmExe = (_Safe_Pkg_Native_Exe npm)
-        & $npmExe @args
+        _Safe_Pkg_Run_Native $npmExe $args
         return
     }
 
@@ -177,5 +177,5 @@ function global:npm {
 function global:npx {
     if (-not (_Safe_Pkg_Runner_Check -Manager npx -PassArgs $args)) { $global:LASTEXITCODE = 1; throw 'safe-pnpm: command refused' }
     $npxExe = (_Safe_Pkg_Native_Exe npx)
-    & $npxExe @args
+    _Safe_Pkg_Run_Native $npxExe $args
 }

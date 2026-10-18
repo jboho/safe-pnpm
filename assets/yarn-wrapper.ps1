@@ -57,7 +57,7 @@ function global:yarn {
     }
     if (-not $cmd) {
         $yarnExe = (_Safe_Pkg_Native_Exe yarn)
-        & $yarnExe @args
+        _Safe_Pkg_Run_Native $yarnExe $args
         return
     }
 

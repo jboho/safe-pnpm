@@ -55,7 +55,10 @@ test("installShims writes NAME.cmd and NAME.ps1 on Windows and the sh shim elsew
     ),
     cmd,
   );
-  assert.match(cmd, /exit \/b %ERRORLEVEL%\r\n$/);
+  assert.match(cmd, /\r\nexit \/b %ERRORLEVEL%\r\n:nopwsh\r\n/);
+  assert.match(cmd, /\r\nexit \/b 1\r\n$/);
+  // No ( ) block, which a ) in the home path behind %~dp0 would end early.
+  assert.doesNotMatch(cmd, /[()]/);
   assert.doesNotMatch(cmd.replace(/\r\n/g, ""), /\n/);
   const ps1 = fs.readFileSync(path.join(bin, "npx.ps1"), "utf8");
   assert.match(ps1, /'path-shim\.ps1'\) npx @args\nexit \$LASTEXITCODE\n$/);
@@ -65,7 +68,10 @@ test("installShims writes NAME.cmd and NAME.ps1 on Windows and the sh shim elsew
   assert.deepEqual(listBin(), ["pnpm.cmd", "pnpm.ps1", "pnpx.cmd", "pnpx.ps1"]);
   shims.installShims(["pnpm", "yarn"], "linux");
   assert.deepEqual(listBin(), ["pnpm", "pnpx", "yarn"]);
-  assert.equal(fs.statSync(path.join(bin, "yarn")).mode & 0o111, 0o111);
+  // Windows has no execute bits; missingShims below checks the file exists.
+  if (process.platform !== "win32") {
+    assert.equal(fs.statSync(path.join(bin, "yarn")).mode & 0o111, 0o111);
+  }
   assert.deepEqual(shims.missingShims(["pnpm", "yarn"], "linux"), []);
   // Windows reports every shim missing until path-shim.ps1 is there too.
   shims.installShims(["pnpm"], "win32");

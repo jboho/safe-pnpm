@@ -72,7 +72,8 @@ before(async () => {
   shims.installShims(["pnpm", "npm", "yarn"], "win32");
 
   // The real binaries: NAME.cmd stubs that log argv one per line, print
-  // STUB OUT and exit with STUB_EXIT; `pnpm run nested` runs pnpm again by name.
+  // STUB OUT and exit with STUB_EXIT; `pnpm run nested` runs pnpm again by name,
+  // and `pnpm run echo` copies stdin to stdout.
   real = path.join(tmp, "real");
   fs.mkdirSync(real);
   fs.writeFileSync(
@@ -83,6 +84,10 @@ fs.appendFileSync(process.env.STUB_LOG, ["RAN " + name, ...args].join("\\n") + "
 if (name === "pnpm" && args[0] === "run" && args[1] === "nested") {
   const r = require("node:child_process").spawnSync("pnpm dlx mal-pkg", { shell: true, stdio: "inherit" });
   process.exit(r.status);
+}
+if (name === "pnpm" && args[0] === "run" && args[1] === "echo") {
+  process.stdout.write(fs.readFileSync(0));
+  process.exit(0);
 }
 process.stdout.write("STUB OUT\\n");
 process.exit(Number(process.env.STUB_EXIT || 0));
@@ -106,7 +111,7 @@ after(() => {
 });
 
 let runs = 0;
-function run(argv, { env = {}, shell = false } = {}) {
+function run(argv, { env = {}, shell = false, input } = {}) {
   const log = path.join(tmp, `calls-${runs++}`);
   fs.writeFileSync(log, "");
   const key =
@@ -124,6 +129,7 @@ function run(argv, { env = {}, shell = false } = {}) {
     r = spawnSync(argv.join(" "), {
       shell: true,
       encoding: "utf8",
+      input,
       env: childEnv,
       cwd: tmp,
       timeout: 120000,
@@ -137,6 +143,7 @@ function run(argv, { env = {}, shell = false } = {}) {
     r = spawnSync(c.file, c.args, {
       ...c.options,
       encoding: "utf8",
+      input,
       env: childEnv,
       cwd: tmp,
       timeout: 120000,
@@ -181,9 +188,28 @@ test("cmd shim: arguments and the exit code pass through", { skip }, () => {
   assert.equal(r.status, 7, r.stderr);
   assert.equal(r.stdout, "STUB OUT\n");
   assert.equal(r.calls, `RAN pnpm\n${args.join("\n")}\n`);
+  // The real launchers are .cmd files too, which PowerShell would call with
+  // Legacy argument passing: '' dropped, q"q unescaped, a&b split by cmd.exe.
+  // A " and an & in one command line is a %* limit of the shim itself, so the
+  // quote case runs on its own.
+  for (const more of [
+    ["", "a&b", "x|y", "c^d", "(p)"],
+    ['q"q', "back\\"],
+  ]) {
+    const m = run(["pnpm", "run", ...more]);
+    assert.equal(m.status, 0, m.stderr);
+    assert.equal(m.calls, `RAN pnpm\nrun\n${more.join("\n")}\n`);
+  }
   const clean = run(["pnpm", "dlx", "cowsay"]);
   assert.equal(clean.status, 0, clean.stderr);
   assert.equal(clean.stdout, "STUB OUT\n");
+});
+
+test("cmd shim: stdin and stdout pass through byte for byte", { skip }, () => {
+  const input = '{"jsonrpc":"2.0","id":1,"method":"ping"}\n\u00e9 \r\n';
+  const r = run(["pnpm", "run", "echo"], { input });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, input);
 });
 
 test("cmd shim: a package manager started by the real one is intercepted again", {

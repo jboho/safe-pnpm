@@ -53,6 +53,7 @@ const PS_WRAPPERS = [
   "pnpm-wrapper.ps1",
   "npm-wrapper.ps1",
   "yarn-wrapper.ps1",
+  "path-shim.ps1",
 ];
 
 const pwshAvailable =
