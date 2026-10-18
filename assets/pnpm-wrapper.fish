@@ -188,16 +188,30 @@ function pnpm
         return 1
     end
 
+    set -l unshared (_safe_pkg_unshared_lockfile_setting $tmpdir $workspace_root $pass_args)
+    set -l unshared_status $status
+    if test $unshared_status -ne 1
+        if test $unshared_status -eq 0
+            echo "✗ safe-pnpm: $unshared, so pnpm would keep a lockfile in each workspace member and there is no root lockfile to scan." >&2
+            echo "  Set shared-workspace-lockfile=true (the default) and run the command again. To run it without the safety checks: command pnpm "(string join ' ' -- (string escape -- $pass_args)) >&2
+        else
+            echo "✗ safe-pnpm: the shared-workspace-lockfile check failed; run safe-pnpm update." >&2
+        end
+        _safe_pkg_untrack $tmpdir $snapdir
+        return 1
+    end
+
     set -l workdir /app
     if test -n "$rel_path"
         set workdir /app/$rel_path
     end
 
     # Per-manager store kept under /app so phase 2 resolves fully offline, and
-    # the lockfile directory pinned to the sandbox root, which overrides any
-    # project config that would move it. See _safe_pkg_run in
+    # the lockfile directory pinned to the sandbox root and the shared
+    # workspace lockfile pinned on, which override any project config that
+    # would move or split it. See _safe_pkg_run in
     # _safe_pkg_shared.sh.
-    set -l store_flag --config.store-dir=/app/.safe-store --config.lockfile-dir=/app
+    set -l store_flag --config.store-dir=/app/.safe-store --config.lockfile-dir=/app --config.shared-workspace-lockfile=true
 
     # Tokens are forwarded only into the fetch phase, where --ignore-scripts
     # guarantees no package code runs. They are never present during phase 2.

@@ -587,6 +587,69 @@ _safe_pkg_lockfile_dir_setting() {
   return 1
 }
 
+# _safe_pkg_unshared_lockfile_setting dir root [args...]
+#   Prints what turns off pnpm's shared workspace lockfile and succeeds; fails
+#   when nothing does. With shared-workspace-lockfile=false each workspace
+#   member keeps its own lockfile and there is no root lockfile for the
+#   malware scan and audit to read, so the install is refused rather than
+#   scanned partly. Checks dir's .npmrc (shared-workspace-lockfile and its
+#   older name shared-workspace-shrinkwrap), its pnpm-workspace.yaml
+#   (sharedWorkspaceLockfile) and the pnpm args: --no-shared-workspace-lockfile,
+#   --shared-workspace-lockfile=false or followed by false, and the
+#   --config. form in any key spelling. Long names count from any prefix
+#   starting with shared, as pnpm expands them. root is the directory named in
+#   the output. Words after -- are arguments, not flags.
+_safe_pkg_unshared_lockfile_setting() {
+  local dir="$1" root="$2" key a name val neg prev=""
+  shift 2
+  if [ -f "$dir/.npmrc" ]; then
+    key="$(grep -iE '^[[:space:]]*["'\'']?shared-?workspace-?(lockfile|shrinkwrap)["'\'']?[[:space:]]*=[[:space:]]*["'\'']?false([^[:alnum:]]|$)' "$dir/.npmrc" | head -n 1 | grep -ioE 'shared-?workspace-?(lockfile|shrinkwrap)' | head -n 1)"
+    [ -n "$key" ] && { printf '%s/.npmrc sets %s to false\n' "$root" "$key"; return 0; }
+  fi
+  if [ -f "$dir/pnpm-workspace.yaml" ]; then
+    key="$(grep -iE '^[^#]*shared-?workspace-?(lockfile|shrinkwrap)["'\'']?[[:space:]]*:[[:space:]]*["'\'']?false([^[:alnum:]]|$)' "$dir/pnpm-workspace.yaml" | head -n 1 | grep -ioE 'shared-?workspace-?(lockfile|shrinkwrap)' | head -n 1)"
+    [ -n "$key" ] && { printf '%s/pnpm-workspace.yaml sets %s to false\n' "$root" "$key"; return 0; }
+  fi
+  for a in "$@"; do
+    if [ -n "$prev" ]; then
+      case "$a" in
+        [Ff][Aa][Ll][Ss][Ee]) printf '%s %s sets shared-workspace-lockfile to false\n' "$prev" "$a"; return 0 ;;
+      esac
+      prev=""
+    fi
+    case "$a" in
+      --) return 1 ;;
+      -*) ;;
+      *) continue ;;
+    esac
+    name="${a%%=*}"
+    name="$(printf '%s' "${name#"${name%%[!-]*}"}" | tr '[:upper:]' '[:lower:]')"
+    name="${name#config.}"
+    key="$(printf '%s' "$name" | tr -d '_-')"
+    neg=0
+    case "$key" in no*) neg=1; key="${key#no}" ;; esac
+    case "$key" in
+      shared*) ;;
+      *) continue ;;
+    esac
+    case "$key" in *[!a-z]*) continue ;; esac
+    case "sharedworkspacelockfile" in "$key"*) ;; *)
+      case "sharedworkspaceshrinkwrap" in "$key"*) ;; *) continue ;; esac ;;
+    esac
+    case "$a" in
+      *=*) val="$(printf '%s' "${a#*=}" | tr '[:upper:]' '[:lower:]')"
+           [ "$neg" = 1 ] && [ "$val" = false ] && continue
+           [ "$neg" = 0 ] && [ "$val" != false ] && continue
+           printf '%s sets shared-workspace-lockfile to false\n' "$a"; return 0 ;;
+      *) if [ "$neg" = 1 ]; then
+           printf '%s sets shared-workspace-lockfile to false\n' "$a"; return 0
+         fi
+         prev="$a" ;;
+    esac
+  done
+  return 1
+}
+
 # _safe_pkg_dispatch manager lockfile workspace_file manifest_files [pkg-manager-args...]
 #   Shared entry point for the install-class path of every manager wrapper.
 #   Strips the safe-pnpm-only `--socket` flag from the pass-through args (so it
@@ -919,6 +982,11 @@ _safe_pkg_sandbox() {
     echo "✗ safe-pnpm: ${workspace_root}/${lockfile_setting%% *} sets ${lockfile_setting#* }, so pnpm would write the lockfile somewhere other than the one the scan checks. Remove the setting and run the command again." >&2
     return 1
   fi
+  if [ "$manager" = "pnpm" ] && lockfile_setting="$(_safe_pkg_unshared_lockfile_setting "$tmpdir" "$workspace_root" "$@")"; then
+    echo "✗ safe-pnpm: ${lockfile_setting}, so pnpm would keep a lockfile in each workspace member and there is no root lockfile to scan." >&2
+    echo "  Set shared-workspace-lockfile=true (the default) and run the command again. To run it without the safety checks: command $manager$(printf ' %q' "$@")" >&2
+    return 1
+  fi
 
   local workdir="/app${rel_path:+/$rel_path}"
 
@@ -928,11 +996,12 @@ _safe_pkg_sandbox() {
   # to a packageManager pin, and pnpm before 11.3 rejects --trust-lockfile.
   # The lockfile directory (pnpm) and working directory (yarn) are pinned to
   # the sandbox root on the command line, which overrides any project config
-  # that would move them away from the lockfile the scan reads; the
-  # lockfile-dir check above only catches the plain spellings.
+  # that would move them away from the lockfile the scan reads, and pnpm's
+  # shared workspace lockfile is pinned on so the scan has a root lockfile;
+  # the checks above only catch the plain spellings.
   local store_flag phase2_cmd
   case "$manager" in
-    pnpm) store_flag="--config.store-dir=/app/.safe-store --config.lockfile-dir=/app"
+    pnpm) store_flag="--config.store-dir=/app/.safe-store --config.lockfile-dir=/app --config.shared-workspace-lockfile=true"
           phase2_cmd="install --offline --config.trust-lockfile=true $store_flag" ;;
     npm)  store_flag="--cache /app/.safe-store"
           phase2_cmd="rebuild $store_flag" ;;

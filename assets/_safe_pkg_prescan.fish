@@ -649,3 +649,61 @@ function _safe_pkg_lockfile_dir_setting --argument dir
     end
     return 1
 end
+
+# _safe_pkg_unshared_lockfile_setting dir root args...
+#   Prints what turns off pnpm's shared workspace lockfile and succeeds; fails
+#   when nothing does. See _safe_pkg_unshared_lockfile_setting in
+#   _safe_pkg_shared.sh.
+function _safe_pkg_unshared_lockfile_setting --argument dir root
+    set -l key_re 'shared-?workspace-?(lockfile|shrinkwrap)'
+    if test -f "$dir/.npmrc"
+        set -l m (string match -ri -- '^\s*["\']?('$key_re')["\']?\s*=\s*["\']?false(?:[^[:alnum:]]|$)' <"$dir/.npmrc")
+        if set -q m[2]
+            echo "$root/.npmrc sets $m[2] to false"
+            return 0
+        end
+    end
+    if test -f "$dir/pnpm-workspace.yaml"
+        set -l m (string match -ri -- '^[^#]*?('$key_re')["\']?\s*:\s*["\']?false(?:[^[:alnum:]]|$)' <"$dir/pnpm-workspace.yaml")
+        if set -q m[2]
+            echo "$root/pnpm-workspace.yaml sets $m[2] to false"
+            return 0
+        end
+    end
+    set -l prev
+    for a in $argv[3..-1]
+        if test -n "$prev"
+            if string match -qi -- false $a
+                echo "$prev $a sets shared-workspace-lockfile to false"
+                return 0
+            end
+            set prev
+        end
+        test "$a" = --; and return 1
+        string match -q -- '-*' $a; or continue
+        set -l name (string lower -- (string replace -r -- '^-+' '' (string split -m1 -- = $a)[1]))
+        set -l key (string replace -a -r -- '[-_]' '' (string replace -r -- '^config\.' '' $name))
+        set -l neg 0
+        if string match -q -- 'no*' $key
+            set neg 1
+            set key (string sub -s 3 -- $key)
+        end
+        string match -qr -- '^shared[a-z]*$' $key; or continue
+        if not string match -q -- "$key*" sharedworkspacelockfile; and not string match -q -- "$key*" sharedworkspaceshrinkwrap
+            continue
+        end
+        if string match -q -- '*=*' $a
+            set -l val (string lower -- (string split -m1 -- = $a)[2])
+            test $neg = 1 -a "$val" = false; and continue
+            test $neg = 0 -a "$val" != false; and continue
+            echo "$a sets shared-workspace-lockfile to false"
+            return 0
+        end
+        if test $neg = 1
+            echo "$a sets shared-workspace-lockfile to false"
+            return 0
+        end
+        set prev $a
+    end
+    return 1
+end

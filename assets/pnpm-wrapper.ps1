@@ -55,7 +55,7 @@ function global:pnpm {
 
     # A missing function is a non-terminating error in PowerShell, so a check
     # that calls one would print it and let the install through.
-    if (@(Get-Command _Safe_Pkg_Is_Global, _Safe_Pkg_Dir_Flag, _Safe_Pkg_Quote_Args, _Safe_Pkg_Lockfile_Dir_Setting -ErrorAction SilentlyContinue).Count -ne 4) {
+    if (@(Get-Command _Safe_Pkg_Is_Global, _Safe_Pkg_Dir_Flag, _Safe_Pkg_Quote_Args, _Safe_Pkg_Lockfile_Dir_Setting, _Safe_Pkg_Unshared_Lockfile_Setting -ErrorAction SilentlyContinue).Count -ne 5) {
         Write-Host "✗ safe-pnpm: _safe_pkg_shared.ps1 is missing or out of date; run safe-pnpm update." -ForegroundColor Red
         $global:LASTEXITCODE = 1
         throw 'safe-pnpm: command refused'
@@ -150,13 +150,21 @@ function global:pnpm {
             $global:LASTEXITCODE = 1
             throw 'safe-pnpm: command refused'
         }
+        $unshared = _Safe_Pkg_Unshared_Lockfile_Setting -Dir $tmpDir.FullName -Root $workspaceRoot -PassArgs $passArgs
+        if ($unshared) {
+            Write-Host "✗ safe-pnpm: $unshared, so pnpm would keep a lockfile in each workspace member and there is no root lockfile to scan." -ForegroundColor Red
+            Write-Host "  Set shared-workspace-lockfile=true (the default) and run the command again. To run it without the safety checks: pnpm.cmd $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
+            $global:LASTEXITCODE = 1
+            throw 'safe-pnpm: command refused'
+        }
 
         $workdir = if ($relPath) { "/app/$($relPath -replace '\\','/')" } else { "/app" }
         # Per-manager store kept under /app so phase 2 resolves fully offline,
-        # and the lockfile directory pinned to the sandbox root, which overrides
-        # any project config that would move it. See _safe_pkg_run in
+        # the lockfile directory pinned to the sandbox root and the shared
+        # workspace lockfile pinned on, which override any project config that
+        # would move or split it. See _safe_pkg_run in
         # _safe_pkg_shared.sh.
-        $storeFlag = @('--config.store-dir=/app/.safe-store','--config.lockfile-dir=/app')
+        $storeFlag = @('--config.store-dir=/app/.safe-store','--config.lockfile-dir=/app','--config.shared-workspace-lockfile=true')
 
         # Tokens are forwarded only into the fetch phase, where --ignore-scripts
         # guarantees no package code runs. They are never present during phase 2.
