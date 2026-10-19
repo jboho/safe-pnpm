@@ -307,31 +307,37 @@ test("cmdQuote survives the launcher's second cmd.exe parse", () => {
   assert.throws(() => cmdParse(cmdParse(once)));
 });
 
-test("spawnCommand escapes by whether the batch file reparses %*", () => {
-  const argv = ['q"q', "a&b", "a|b", "%PATH%", "^", "", "x y", "back\\"];
+test("spawnCommand escapes every batch file twice", () => {
   const dir = path.join(root, "batch");
   fs.mkdirSync(path.join(dir, "node_modules", ".bin"), { recursive: true });
+  const parsed = (file, argv) =>
+    cmdParse(
+      shims.spawnCommand([file, ...argv], {}, "win32").args[3].slice(1, -1),
+    );
+  // A batch file that reads %1 itself: cmd.exe substitutes %1 into its line
+  // before parsing & | < >, so the argument is parsed a second time.
+  for (const body of ["node tool.js %1", 'node tool.js "%~1"']) {
+    const tool = path.join(dir, "tool.bat");
+    fs.writeFileSync(tool, `@echo off\r\n${body}\r\n`);
+    let one = parsed(tool, ['q"q&calc']).slice(tool.length + 1);
+    if (body.includes("%~1")) one = one.replace(/^"(.*)"$/, "$1");
+    assert.doesNotThrow(() => cmdParse(body.replace(/%~?1/, one)), body);
+  }
+  // A cmd-shim launcher hands %* on: q"q next to a&calc survives both parses.
   const launcher = path.join(dir, "node_modules", ".bin", "x.cmd");
   fs.writeFileSync(launcher, '@ECHO off\r\nnode "%~dp0\\x.js" %*\r\n');
-  const tool = path.join(dir, "tool.bat");
-  fs.writeFileSync(tool, "@echo off\r\necho %1\r\n");
-  const line = (file) =>
-    shims.spawnCommand([file, ...argv], {}, "win32").args[3].slice(1, -1);
-  const args = (quote) => argv.map((a) => quote(a)).join(" ");
-  const esc = (f) => f.replace(/([()\][%!^"`<>&|;, *?])/g, "^$1");
-  // A cmd-shim launcher hands %* to a second parse: escaped twice, and
-  // q"q next to a&calc survives both.
-  assert.equal(line(launcher), `${esc(launcher)} ${args(shims.cmdQuote)}`);
   const evil = ['q"q', "a&calc"];
-  const twice = shims.spawnCommand([launcher, ...evil], {}, "win32").args[3];
-  const handed = cmdParse(cmdParse(twice.slice(1, -1)));
-  assert.deepEqual(msvcrtSplit(handed).slice(1), evil);
-  // tool.bat reads %1 itself and sees its arguments after one parse.
-  const bat = line(tool);
-  assert.equal(bat, `${esc(tool)} ${args(shims.cmdQuoteOnce)}`);
-  assert.deepEqual(msvcrtSplit(cmdParse(bat)).slice(1), argv);
-  // A file that can't be read is escaped twice.
-  for (const f of [path.join(dir, "missing.cmd"), "C:\\x\\NPX.CMD"]) {
-    assert.equal(line(f), `${esc(f)} ${args(shims.cmdQuote)}`, f);
-  }
+  assert.deepEqual(
+    msvcrtSplit(cmdParse(parsed(launcher, evil))).slice(1),
+    evil,
+  );
+  // Anything else runs as is.
+  assert.deepEqual(
+    shims.spawnCommand(["C:\\t\\tool.exe", ...evil], {}, "win32"),
+    {
+      file: "C:\\t\\tool.exe",
+      args: evil,
+      options: {},
+    },
+  );
 });
