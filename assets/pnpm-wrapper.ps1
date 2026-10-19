@@ -5,6 +5,8 @@
 # Intercepts install-class pnpm commands and runs them in an isolated Docker
 # container that only sees package manifests (no source files, no .env).
 # Escape hatch: pnpm.cmd install bypasses to native pnpm.
+# With the PATH shims (~/.safe-pnpm/bin) on PATH, pnpm.cmd is the shim, so the
+# refusal hints print the real binary's path instead.
 
 . "$HOME\.safe-pnpm\_safe_pkg_shared.ps1"
 
@@ -44,8 +46,8 @@ function global:pnpm {
         if ($inst) { $cmd = $n; break }
     }
     if (-not $cmd) {
-        $pnpmExe = (Get-Command pnpm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
-        & $pnpmExe @args
+        $pnpmExe = (_Safe_Pkg_Native_Exe pnpm)
+        _Safe_Pkg_Run_Native $pnpmExe $args
         return
     }
 
@@ -67,14 +69,14 @@ function global:pnpm {
     $dashes = @($passArgs | Where-Object { $_ -match '^-{2,}$' })
     if ($dashes.Count) {
         Write-Host "✗ safe-pnpm: $($dashes[0]) is not supported through the wrapper; the sandbox adds --ignore-scripts and its other flags after your arguments, and after $($dashes[0]) they would not be read as flags." -ForegroundColor Red
-        Write-Host "  To run it without the safety checks: pnpm.cmd $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
+        Write-Host "  To run it without the safety checks: $(_Safe_Pkg_Bypass pnpm) $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
         $global:LASTEXITCODE = 1
         throw 'safe-pnpm: command refused'
     }
 
     if (_Safe_Pkg_Is_Global $passArgs) {
         Write-Host "✗ safe-pnpm: global installs are not supported through the wrapper; the sandbox would install into a throwaway container and change nothing on this machine." -ForegroundColor Red
-        Write-Host "  To install globally without the safety checks, run: pnpm.cmd $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
+        Write-Host "  To install globally without the safety checks, run: $(_Safe_Pkg_Bypass pnpm) $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
         $global:LASTEXITCODE = 1
         throw 'safe-pnpm: command refused'
     }
@@ -82,7 +84,7 @@ function global:pnpm {
     $dirFlag = _Safe_Pkg_Dir_Flag -Manager pnpm -PassArgs $passArgs
     if ($dirFlag) {
         Write-Host "✗ safe-pnpm: $dirFlag is not supported through the wrapper; the scan checks this directory's lockfile, so an install in another directory would go unchecked." -ForegroundColor Red
-        Write-Host "  cd into that directory and run the command there. To run it without the safety checks: pnpm.cmd $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
+        Write-Host "  cd into that directory and run the command there. To run it without the safety checks: $(_Safe_Pkg_Bypass pnpm) $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
         $global:LASTEXITCODE = 1
         throw 'safe-pnpm: command refused'
     }
@@ -153,7 +155,7 @@ function global:pnpm {
         $unshared = _Safe_Pkg_Unshared_Lockfile_Setting -Dir $tmpDir.FullName -Root $workspaceRoot -PassArgs $passArgs
         if ($unshared) {
             Write-Host "✗ safe-pnpm: $unshared, so pnpm would keep a lockfile in each workspace member and there is no root lockfile to scan." -ForegroundColor Red
-            Write-Host "  Set shared-workspace-lockfile=true (the default) and run the command again. To run it without the safety checks: pnpm.cmd $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
+            Write-Host "  Set shared-workspace-lockfile=true (the default) and run the command again. To run it without the safety checks: $(_Safe_Pkg_Bypass pnpm) $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
             $global:LASTEXITCODE = 1
             throw 'safe-pnpm: command refused'
         }
@@ -235,6 +237,6 @@ function global:pnpm {
 # Escape hatch: pnpx.cmd.
 function global:pnpx {
     if (-not (_Safe_Pkg_Runner_Check -Manager pnpx -PassArgs $args)) { $global:LASTEXITCODE = 1; throw 'safe-pnpm: command refused' }
-    $pnpxExe = (Get-Command pnpx -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
-    & $pnpxExe @args
+    $pnpxExe = (_Safe_Pkg_Native_Exe pnpx)
+    _Safe_Pkg_Run_Native $pnpxExe $args
 }

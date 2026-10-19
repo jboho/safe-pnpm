@@ -5,6 +5,8 @@
 # Intercepts install-class npm commands and runs them in an isolated Docker
 # container that only sees package manifests (no source files, no .env).
 # Escape hatch: npm.cmd install bypasses to native npm.
+# With the PATH shims (~/.safe-pnpm/bin) on PATH, npm.cmd is the shim, so the
+# refusal hints print the real binary's path instead.
 
 . "$HOME\.safe-pnpm\_safe_pkg_shared.ps1"
 
@@ -44,8 +46,8 @@ function global:npm {
         if ($inst) { $cmd = $n; break }
     }
     if (-not $cmd) {
-        $npmExe = (Get-Command npm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
-        & $npmExe @args
+        $npmExe = (_Safe_Pkg_Native_Exe npm)
+        _Safe_Pkg_Run_Native $npmExe $args
         return
     }
 
@@ -67,14 +69,14 @@ function global:npm {
     $dashes = @($passArgs | Where-Object { $_ -match '^-{2,}$' })
     if ($dashes.Count) {
         Write-Host "✗ safe-pnpm: $($dashes[0]) is not supported through the wrapper; the sandbox adds --ignore-scripts and its other flags after your arguments, and after $($dashes[0]) they would not be read as flags." -ForegroundColor Red
-        Write-Host "  To run it without the safety checks: npm.cmd $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
+        Write-Host "  To run it without the safety checks: $(_Safe_Pkg_Bypass npm) $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
         $global:LASTEXITCODE = 1
         throw 'safe-pnpm: command refused'
     }
 
     if (_Safe_Pkg_Is_Global $passArgs) {
         Write-Host "✗ safe-pnpm: global installs are not supported through the wrapper; the sandbox would install into a throwaway container and change nothing on this machine." -ForegroundColor Red
-        Write-Host "  To install globally without the safety checks, run: npm.cmd $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
+        Write-Host "  To install globally without the safety checks, run: $(_Safe_Pkg_Bypass npm) $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
         $global:LASTEXITCODE = 1
         throw 'safe-pnpm: command refused'
     }
@@ -82,7 +84,7 @@ function global:npm {
     $dirFlag = _Safe_Pkg_Dir_Flag -Manager npm -PassArgs $passArgs
     if ($dirFlag) {
         Write-Host "✗ safe-pnpm: $dirFlag is not supported through the wrapper; the scan checks this directory's lockfile, so an install in another directory would go unchecked." -ForegroundColor Red
-        Write-Host "  cd into that directory and run the command there. To run it without the safety checks: npm.cmd $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
+        Write-Host "  cd into that directory and run the command there. To run it without the safety checks: $(_Safe_Pkg_Bypass npm) $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
         $global:LASTEXITCODE = 1
         throw 'safe-pnpm: command refused'
     }
@@ -174,6 +176,6 @@ function global:npm {
 # Escape hatch: npx.cmd.
 function global:npx {
     if (-not (_Safe_Pkg_Runner_Check -Manager npx -PassArgs $args)) { $global:LASTEXITCODE = 1; throw 'safe-pnpm: command refused' }
-    $npxExe = (Get-Command npx -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
-    & $npxExe @args
+    $npxExe = (_Safe_Pkg_Native_Exe npx)
+    _Safe_Pkg_Run_Native $npxExe $args
 }

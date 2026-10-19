@@ -14,7 +14,7 @@ if (!commands[cmd]) {
   console.log("");
   console.log("  setup    Install safe-pnpm on this machine");
   console.log(
-    "           --path-shims         also put the shims first on PATH in your shell rc",
+    "           --path-shims         also put the shims first on PATH in your shell rc\n                                (the PowerShell profile on Windows)",
   );
   console.log("           --remove-path-shims  take that PATH line back out");
   console.log("  update   Refresh wrapper files and rebuild the Docker image");

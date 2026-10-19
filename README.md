@@ -48,7 +48,7 @@ Published to npm as `@jboho/safe-pnpm` (first public release 2026.10.2, with pro
 - PowerShell is the least-tested shell: the wrappers and copy-back are tested on Linux pwsh only.
 - PowerShell removes an unquoted `--` before the wrapper function sees it, so `npm run build -- --watch` reaches npm as `npm run build --watch`. Quote it to keep it: `npm run build '--' --watch`.
 - In PowerShell a refusal is a terminating error (`safe-pnpm: command refused`), so `&&` chains and scripts stop there; catch it with `try`/`catch` if a script should go on. A command the wrapper passes to the real manager sets `$LASTEXITCODE` but leaves `$?` true even when it fails, as with any PowerShell function, so check `$LASTEXITCODE` rather than `&&` after a wrapped command.
-- Requires Docker; developed and tested on macOS and Linux CI. Windows is not tested.
+- Requires Docker; developed and tested on macOS and Linux CI. On Windows only the PATH shims run in CI (`windows-latest`); the rest is not tested there.
 
 ## Install
 
@@ -102,7 +102,7 @@ safe-pnpm exec -- nx mcp
 
 The wrappers are shell functions, so a program that starts `pnpm`, `npm`, `npx`, `pnpx` or `yarn` itself (an editor, an MCP server, `child_process.spawn("pnpm")`) skips them. The shims in `~/.safe-pnpm/bin` run the same checks for those programs. `exec` passes the arguments through unchanged and exits with the program's exit code.
 
-To put the shims first on PATH in every new shell instead (opt-in), run `safe-pnpm setup --path-shims`; `safe-pnpm setup --remove-path-shims` undoes it. What the shims cover and what they don't (absolute paths, `npm_execpath`, corepack, Dock-launched apps, CI, Windows), plus MCP server recipes: [docs/security.md](./docs/security.md#path-shims-for-programs-that-start-a-package-manager).
+To put the shims first on PATH in every new shell instead (opt-in), run `safe-pnpm setup --path-shims`; `safe-pnpm setup --remove-path-shims` undoes it. What the shims cover and what they don't (absolute paths, `npm_execpath`, corepack, Dock-launched apps, CI; on Windows the `.cmd`/`.ps1` shims need PowerShell 7, `--path-shims` edits only the PowerShell profile, and cmd.exe rewrites some arguments), plus MCP server recipes: [docs/security.md](./docs/security.md#path-shims-for-programs-that-start-a-package-manager).
 
 ### `safe-pnpm doctor`
 
@@ -238,7 +238,9 @@ command yarn install
 # With setup --path-shims, `command pnpm` reaches the shim; run the real
 # binary by absolute path instead (safe-pnpm doctor lists them).
 
-pnpm.cmd install      # PowerShell
+# PowerShell. With setup --path-shims, pnpm.cmd is the shim; run the
+# real binary by absolute path instead.
+pnpm.cmd install
 npm.cmd install
 yarn.cmd install
 ```

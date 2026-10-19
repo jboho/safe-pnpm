@@ -6,6 +6,12 @@ const path = require("node:path");
 const { SCANNED, NATIVE } = require("./helpers/wrapper-cases");
 
 const ASSETS = path.join(__dirname, "..", "assets");
+// _safe_pkg_native bypasses the stubbed `command` when the shim directory
+// exists, as it does where safe-pnpm's PATH shims are installed.
+const PROBE_ENV = {
+  ...process.env,
+  _SAFE_PKG_SHIM_DIR: path.join(__dirname, "no-such-shim-dir"),
+};
 
 // Stub the two exits so nothing installs: the scan path prints "scanned" and
 // the pass-through path prints "NATIVE".
@@ -22,7 +28,7 @@ ${cmd}`,
       "bash",
       ASSETS,
     ],
-    { encoding: "utf8" },
+    { encoding: "utf8", env: PROBE_ENV },
   );
 
 for (const cmd of SCANNED) {
@@ -82,6 +88,7 @@ _safe_pkg_dispatch() { echo scanned; }
 ${cmd}`;
     const z = spawnSync("zsh", ["-c", script, "zsh", ASSETS], {
       encoding: "utf8",
+      env: PROBE_ENV,
     });
     assert.equal(z.stdout.trim(), bashProbe(cmd).stdout.trim(), cmd);
   }
