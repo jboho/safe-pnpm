@@ -32,6 +32,14 @@
   - Fetch the host's native optional dependencies: macOS pnpm and yarn (PR #54), PowerShell (PR #55), npm (PR #58)
   - Check `npx`, `dlx` and `create` packages against OSV in bash and zsh (PR #59)
   - Pass `trust-lockfile` as a config setting so pnpm before 11.3 accepts it (PR #69), and put `supportedArchitectures` where pnpm 8 to 10.4 reads it (PR #71)
+- [x] 2026.10.6 released (2026-10-18, PR #83, tag `v2026.10.6`):
+  - Pass the `npm view` spec after an end-of-options `--` (PR #79)
+  - Refuse pnpm installs with `shared-workspace-lockfile=false` (PR #80)
+  - Opt-in PATH shims so programs that start pnpm themselves go through the wrappers (PR #81, test fix PR #82)
+- [x] 2026.10.7 released (2026-10-19, PR #89, tag `v2026.10.7`):
+  - PATH shims on Windows, `.cmd` and `.ps1` (PR #84)
+  - Docs on the Windows batch-file limits of `exec`'s double escaping (PR #85)
+- [x] 2026.10.8 released (2026-10-19, PR #90, tag `v2026.10.8`): the scan image moves to Node 24.22.0 (PR #87) and `@socketsecurity/cli` to 1.8.4 (PR #86)
 
 ## Notes
 - docs/socket.md (Socket.dev integration design)
