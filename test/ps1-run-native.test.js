@@ -110,8 +110,19 @@ test("a caller's Standard argument passing does not reach the .cmd call", {
   // Under Standard, PowerShell splits the --% text on spaces and re-quotes
   // it, so cmd.exe would get a broken line. Under Legacy the line is parsed
   // as one Windows command line, which keeps "/w/npm.cmd ..." in one piece.
-  // The same call made by a Legacy caller is the expectation: every
-  // argument cmd.exe gets must match, not only the first token.
+  // On Linux pwsh then splits that line by the Windows argument rules, where
+  // each ^" in it flips quoting; on Windows cmd.exe gets it whole. Both
+  // callers must hand cmd.exe exactly these pieces of the line
+  // /w/npm.cmd ^^^"a^^^ b^^^" ^^^"q\^^^"q^^^" ^^^"a^^^&b^^^"
+  const want = [
+    "/d",
+    "/s",
+    "/c",
+    "/w/npm.cmd ^^^a^^^",
+    "b^^^ ^^^q\\^^^q^^^",
+    '^^^a^^^&b^^^"',
+    "",
+  ];
   const out = pwsh(`${PRELUDE}
 $PSNativeCommandArgumentPassing = 'Legacy'
 $null = _Safe_Pkg_Run_Native '/w/npm.cmd' @('a b', 'q"q', 'a&b')
@@ -124,9 +135,7 @@ $v = _Safe_Pkg_Run_Native '/w/npm.cmd' @('a b', 'q"q', 'a&b')
   assert.match(out, /^captured=OUT one\|OUT two rc=5$/m);
   assert.match(out, /^caller=Standard$/m);
   const read = (f) => fs.readFileSync(path.join(tmp, f), "utf8").split("\n");
-  const want = read("cmdargs.legacy");
-  assert.deepEqual(want.slice(0, 3), ["/d", "/s", "/c"]);
-  assert.ok(want[3].startsWith("/w/npm.cmd "), JSON.stringify(want));
+  assert.deepEqual(read("cmdargs.legacy"), want);
   assert.deepEqual(read("cmdargs"), want);
 });
 
