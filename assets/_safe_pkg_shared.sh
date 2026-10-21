@@ -1256,8 +1256,11 @@ _safe_pkg_copy_modules() {
     return 1
   fi
   _safe_pkg_links_ok "$base" "$rel" || return 1
+  echo "→ Copying $rel back to the project (can take a minute)..." >&2
+  local t0=$SECONDS
   rm -rf "${dest_root:?}/$rel"
-  cp -R "$src" "${dest_root}/$rel"
+  cp -R "$src" "${dest_root}/$rel" || return 1
+  echo "→ Copied $rel back in $((SECONDS - t0))s." >&2
 }
 
 # _safe_pkg_links_ok base rel

@@ -614,6 +614,21 @@ ln -s ../../outside "$src/node_modules/real/up"
     });
   }
 
+  test(`pnpm (${shell}): copy-back says what it is doing and how long it took`, {
+    skip: !available || ext !== "sh",
+  }, () => {
+    const { read, status } = runWrapper("pnpm", `pnpm-wrapper.${ext}`, {
+      shell,
+      phase2: PNPM_LAYOUT,
+    });
+    assert.equal(status, 0, read("stderr"));
+    const err = read("stderr");
+    const start = err.indexOf("Copying node_modules back to the project");
+    const done = err.search(/Copied node_modules back in \d+s\./);
+    assert.ok(start >= 0, err);
+    assert.ok(done > start, "the done line must follow the start line");
+  });
+
   test(`pnpm workspace (${shell}): workspace and member links are copied back as links`, {
     skip: !available,
   }, () => {
