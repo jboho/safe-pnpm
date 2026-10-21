@@ -781,6 +781,32 @@ _safe_pkg_strip_npmrc_auth() {
   mv "$f.clean" "$f"
 }
 
+# _safe_pkg_user_auth tmpdir
+#   Copies the auth lines of the user's own .npmrc whose value is exactly
+#   ${NODE_AUTH_TOKEN} or ${NPM_TOKEN} (for a token that is set) into
+#   <tmpdir>/.safe-home/.npmrc, and prints the docker flag that makes that file
+#   the user config in the container; prints nothing when no line qualifies.
+#   The container never sees the host's ~/.npmrc, and pnpm 11 refuses to
+#   expand env vars in the project .npmrc's credentials ("repository-
+#   controlled"), so without this a token in the environment reaches no
+#   registry. Literal tokens are never copied. Only the fetch-phase containers
+#   get the flag, and the file is removed before phase 2.
+_safe_pkg_user_auth() {
+  local tmpdir="$1"
+  local src="${NPM_CONFIG_USERCONFIG:-${npm_config_userconfig:-$HOME/.npmrc}}"
+  local vars=""
+  [ -n "${NODE_AUTH_TOKEN:-}" ] && vars="NODE_AUTH_TOKEN"
+  [ -n "${NPM_TOKEN:-}" ] && vars="${vars:+$vars|}NPM_TOKEN"
+  { [ -n "$vars" ] && [ -f "$src" ]; } || return 0
+  mkdir -p "$tmpdir/.safe-home"
+  grep -E '^[[:space:]]*//[^[:space:]=]+:_auth(Token)?[[:space:]]*=[[:space:]]*\$\{('"$vars"')\}[[:space:]]*$' "$src" > "$tmpdir/.safe-home/.npmrc" 2>/dev/null || :
+  if [ -s "$tmpdir/.safe-home/.npmrc" ]; then
+    echo "-e NPM_CONFIG_USERCONFIG=/app/.safe-home/.npmrc"
+  else
+    rm -f "$tmpdir/.safe-home/.npmrc"
+  fi
+}
+
 # Under rootless Docker or Podman, container uid 0 maps to the invoking user
 # but any other uid maps to a subordinate uid, so files the container writes
 # into the bind-mounted sandbox could not be deleted by that user. There the
@@ -1089,6 +1115,7 @@ _safe_pkg_sandbox() {
   local token_env=""
   [ -n "${NODE_AUTH_TOKEN:-}" ] && token_env="$token_env -e NODE_AUTH_TOKEN"
   [ -n "${NPM_TOKEN:-}" ]       && token_env="$token_env -e NPM_TOKEN"
+  token_env="$token_env $(_safe_pkg_user_auth "$tmpdir")"
 
   # Host platform's native optional dependencies (see _safe_pkg_host_platform).
   # Yarn needs its flag in phase 2 too, or --force would prune what phase 1 added.
@@ -1167,6 +1194,7 @@ _safe_pkg_sandbox() {
     # Strip registry credentials before any build script can run.
     _safe_pkg_strip_npmrc_auth "$tmpdir/.npmrc"
     _safe_pkg_strip_npmrc_auth "$tmpdir/.yarnrc"
+    rm -f "$tmpdir/.safe-home/.npmrc"
 
     local net_flag="--network none"
     [ "${SAFE_PNPM_BUILD_NETWORK:-}" = "1" ] && net_flag=""

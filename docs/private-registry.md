@@ -7,26 +7,37 @@ scripts disabled), then withheld while any build scripts run.
 
 ## Setup
 
-Configure your registry exactly as you normally would — nothing safe-pnpm-specific
-is required.
-
-**Via `.npmrc`** (committed or in the project):
+Map the scope to your registry in the project's `.npmrc`, put the auth line in
+your own `~/.npmrc` with the token as an environment variable, and export the
+token:
 
 ```ini
+# project .npmrc
 @acme:registry=https://npm.acme.example/
-//npm.acme.example/:_authToken=${NPM_TOKEN}
 ```
 
-**Via environment variable:**
+```ini
+# ~/.npmrc
+//npm.acme.example/:_authToken=${NPM_TOKEN}
+```
 
 ```sh
 export NPM_TOKEN=your-read-only-token   # or NODE_AUTH_TOKEN
 pnpm install
 ```
 
-`NODE_AUTH_TOKEN` and `NPM_TOKEN` are forwarded automatically into the fetch
-phase, so `${NPM_TOKEN}`-style interpolation in `.npmrc` works. You no longer
-need `SAFE_PNPM_FORWARD_TOKENS=1` (it is obsolete).
+`NODE_AUTH_TOKEN` and `NPM_TOKEN` are forwarded into the fetch phase. The
+container never sees your `~/.npmrc` itself: the wrapper copies only its auth
+lines whose value is exactly `${NODE_AUTH_TOKEN}` or `${NPM_TOKEN}`, for a
+token that is set, and removes that copy before the build phase. Lines holding
+a literal token are never copied. If `NPM_CONFIG_USERCONFIG` points somewhere
+else, that file is read instead of `~/.npmrc`.
+
+The auth line can also sit in the project `.npmrc`, but pnpm 11 ignores it
+there ("environment variables are not expanded in repository-controlled
+registry credentials"), so the fetch reaches the registry with no token. npm
+and yarn still read it. You no longer need `SAFE_PNPM_FORWARD_TOKENS=1` (it is
+obsolete).
 
 ## What the token can and cannot reach
 

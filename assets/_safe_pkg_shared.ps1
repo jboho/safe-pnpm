@@ -572,6 +572,28 @@ function _Safe_Pkg_Strip_NpmrcAuth {
     [IO.File]::WriteAllLines((Resolve-Path -LiteralPath $Path).Path, [string[]]$kept)
 }
 
+# Copies the user's own .npmrc auth lines whose value is exactly
+# ${NODE_AUTH_TOKEN} or ${NPM_TOKEN} into the sandbox and returns the docker
+# flags that make that copy the container's user config. See
+# _safe_pkg_user_auth in _safe_pkg_shared.sh.
+function _Safe_Pkg_User_Auth {
+    param([string]$TmpDir)
+    $src = if ($env:NPM_CONFIG_USERCONFIG) { $env:NPM_CONFIG_USERCONFIG }
+        elseif ($env:npm_config_userconfig) { $env:npm_config_userconfig }
+        else { Join-Path $HOME '.npmrc' }
+    $vars = @()
+    if ($env:NODE_AUTH_TOKEN) { $vars += 'NODE_AUTH_TOKEN' }
+    if ($env:NPM_TOKEN)       { $vars += 'NPM_TOKEN' }
+    if ($vars.Count -eq 0 -or -not (Test-Path -LiteralPath $src -PathType Leaf)) { return }
+    $pattern = '^\s*//[^\s=]+:_auth(Token)?\s*=\s*\$\{(' + ($vars -join '|') + ')\}\s*$'
+    $lines = @(Get-Content -LiteralPath $src | Where-Object { $_ -cmatch $pattern })
+    if ($lines.Count -eq 0) { return }
+    $dir = Join-Path $TmpDir '.safe-home'
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    [IO.File]::WriteAllLines((Join-Path $dir '.npmrc'), [string[]]$lines)
+    return @('-e', 'NPM_CONFIG_USERCONFIG=/app/.safe-home/.npmrc')
+}
+
 # See _safe_pkg_host_platform in _safe_pkg_shared.sh. Native optional
 # dependencies (rollup, esbuild, ...) come as one package per platform and the
 # container picks the Linux one, so tools run on a Windows or macOS host fail.

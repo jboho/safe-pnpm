@@ -124,6 +124,7 @@ function global:npm {
         $tokenEnv = @()
         if ($env:NODE_AUTH_TOKEN) { $tokenEnv += @('-e','NODE_AUTH_TOKEN') }
         if ($env:NPM_TOKEN)       { $tokenEnv += @('-e','NPM_TOKEN') }
+        $tokenEnv += @(_Safe_Pkg_User_Auth -TmpDir $tmpDir.FullName)
 
         # Phase 1: fetch (network on, token available, scripts disabled).
         $p1 = @('run','--rm','--cap-drop','ALL') + (_Safe_Pkg_Hardening) + $userFlags + @('-v',"$($tmpDir.FullName):/app",'-w','/app') +
@@ -152,6 +153,7 @@ function global:npm {
             # Strip registry credentials before any build script can run.
             _Safe_Pkg_Strip_NpmrcAuth (Join-Path $tmpDir.FullName '.npmrc')
             _Safe_Pkg_Strip_NpmrcAuth (Join-Path $tmpDir.FullName '.yarnrc')
+            Remove-Item -LiteralPath (Join-Path $tmpDir.FullName '.safe-home/.npmrc') -Force -ErrorAction SilentlyContinue
 
             $netFlag = @('--network','none')
             if ($env:SAFE_PNPM_BUILD_NETWORK -eq '1') { $netFlag = @() }

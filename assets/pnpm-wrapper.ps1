@@ -173,6 +173,7 @@ function global:pnpm {
         $tokenEnv = @()
         if ($env:NODE_AUTH_TOKEN) { $tokenEnv += @('-e','NODE_AUTH_TOKEN') }
         if ($env:NPM_TOKEN)       { $tokenEnv += @('-e','NPM_TOKEN') }
+        $tokenEnv += @(_Safe_Pkg_User_Auth -TmpDir $tmpDir.FullName)
 
         # pnpm-arch.js deletes it when it restores the snapshot, before the
         # audit copies snapDir.
@@ -207,6 +208,7 @@ function global:pnpm {
                 # Strip registry credentials before any build script can run.
                 _Safe_Pkg_Strip_NpmrcAuth (Join-Path $tmpDir.FullName '.npmrc')
                 _Safe_Pkg_Strip_NpmrcAuth (Join-Path $tmpDir.FullName '.yarnrc')
+                Remove-Item -LiteralPath (Join-Path $tmpDir.FullName '.safe-home/.npmrc') -Force -ErrorAction SilentlyContinue
 
                 $netFlag = @('--network','none')
                 if ($env:SAFE_PNPM_BUILD_NETWORK -eq '1') { $netFlag = @() }
