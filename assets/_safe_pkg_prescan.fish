@@ -472,6 +472,27 @@ function _safe_pkg_strip_npmrc_auth --argument f
     mv $f.clean $f
 end
 
+# Copies the user's own .npmrc auth lines whose value is exactly
+# ${NODE_AUTH_TOKEN} or ${NPM_TOKEN} into the sandbox and prints the docker
+# flags that make that copy the container's user config. See
+# _safe_pkg_user_auth in _safe_pkg_shared.sh.
+function _safe_pkg_user_auth --argument tmpdir
+    set -l src "$HOME/.npmrc"
+    test -n "$npm_config_userconfig"; and set src "$npm_config_userconfig"
+    test -n "$NPM_CONFIG_USERCONFIG"; and set src "$NPM_CONFIG_USERCONFIG"
+    set -l vars
+    test -n "$NODE_AUTH_TOKEN"; and set vars $vars NODE_AUTH_TOKEN
+    test -n "$NPM_TOKEN"; and set vars $vars NPM_TOKEN
+    test (count $vars) -gt 0; and test -f "$src"; or return 0
+    mkdir -p $tmpdir/.safe-home
+    grep -E '^[[:space:]]*//[^[:space:]=]+:_auth(Token)?[[:space:]]*=[[:space:]]*\$\{('(string join '|' $vars)')\}[[:space:]]*$' "$src" >$tmpdir/.safe-home/.npmrc 2>/dev/null
+    if test -s $tmpdir/.safe-home/.npmrc
+        printf '%s\n' -e NPM_CONFIG_USERCONFIG=/app/.safe-home/.npmrc
+    else
+        rm -f $tmpdir/.safe-home/.npmrc
+    end
+end
+
 # The sandbox dirs hold a copy of .npmrc (registry token), so they must go away
 # on Ctrl-C or a kill as well as on a normal finish. Wrappers register their
 # dirs here; the handler below removes whatever is still registered. fish keeps

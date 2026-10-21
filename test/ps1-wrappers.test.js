@@ -40,8 +40,9 @@ after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 // queries (see helpers/docker-info-stub.js).
 // pkg is the project's package.json text. win installs pnpm-arch.js and makes
 // _Safe_Pkg_Host_Platform act as on a Windows x64 host. phase1 is sh the stub
-// runs in phase 1, with $src = the /app mount.
-function runPs1(manager, { env = {}, emptyId = false, noId = false, dockerInfo, auditRc = 0, pkg, win = false, phase1 = "" } = {}) {
+// runs in phase 1, with $src = the /app mount. homeNpmrc is the user's
+// ~/.npmrc.
+function runPs1(manager, { env = {}, emptyId = false, noId = false, dockerInfo, auditRc = 0, pkg, win = false, phase1 = "", homeNpmrc } = {}) {
   const root = fs.mkdtempSync(path.join(tmp, `${manager}-`));
   const bin = path.join(root, "bin");
   const proj = path.join(root, "proj");
@@ -65,6 +66,7 @@ function runPs1(manager, { env = {}, emptyId = false, noId = false, dockerInfo, 
       'src=""; prev=""; for a in "$@"; do [ "$prev" = "-v" ] && src="${a%%:/app}"; prev="$a"; done',
       "n=$(grep -c '' /w/docker.log)",
       'cp "$src/package.json" "/w/run$n.pkg"; [ -f "$src/pnpm-workspace.yaml" ] && cp "$src/pnpm-workspace.yaml" "/w/run$n.ws"',
+      '[ -f "$src/.safe-home/.npmrc" ] && cp "$src/.safe-home/.npmrc" "/w/run$n.home"',
       `if [ "$n" = 1 ]; then mkdir -p "$src/node_modules/dep"; echo x > "$src/node_modules/dep/index.js"; echo resolved-by-phase-1 > "$src/${LOCKFILES[manager]}"; ${phase1} fi`,
       "exit 0",
       "",
@@ -96,6 +98,9 @@ function runPs1(manager, { env = {}, emptyId = false, noId = false, dockerInfo, 
     path.join(proj, ".npmrc"),
     "registry=https://registry.npmjs.org/\n",
   );
+  if (homeNpmrc !== undefined) {
+    fs.writeFileSync(path.join(root, "home", ".npmrc"), homeNpmrc);
+  }
   const envArgs = Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
   const pathSetup = noId
     ? "$env:PATH = '/w/bin';"
@@ -290,4 +295,36 @@ test("ps1 pnpm: a failed supportedArchitectures restore blocks copy-back", { ski
   assert.match(out, /nothing copied back/);
   assert.equal(fs.readFileSync(path.join(proj, "package.json"), "utf8"), pkg);
   assert.ok(!fs.existsSync(path.join(proj, "node_modules")));
+});
+
+// See the ~/.npmrc tests in two-phase.test.js.
+for (const manager of ["npm", "pnpm", "yarn"]) {
+  test(`ps1 ${manager}: ~/.npmrc auth lines for a forwarded token reach phase 1 only`, { skip }, () => {
+    const { out, runs, read } = runPs1(manager, {
+      env: { NODE_AUTH_TOKEN: "SECRET-TOKEN-VALUE" },
+      homeNpmrc: [
+        "@acme:registry=https://registry.acme.example/",
+        `//registry.acme.example/:_authToken=\${NODE_AUTH_TOKEN}`,
+        `//npm.other.example/:_authToken=\${NPM_TOKEN}`,
+        "//registry.npmjs.org/:_authToken=npm_LITERAL-HOME-TOKEN",
+        "",
+      ].join("\n"),
+    });
+    assert.match(out, /RC=0/);
+    assert.equal(runs.length, 2, out);
+    assert.equal(read("run1.home"), `//registry.acme.example/:_authToken=\${NODE_AUTH_TOKEN}\n`);
+    assert.ok(runs[0].includes(" -e NPM_CONFIG_USERCONFIG=/app/.safe-home/.npmrc "), runs[0]);
+    assert.equal(read("run2.home"), "", "the copy is gone before the build phase");
+    assert.ok(!runs[1].includes("NPM_CONFIG_USERCONFIG"), runs[1]);
+  });
+}
+
+test("ps1 npm: no qualifying ~/.npmrc line leaves the fetch phase unchanged", { skip }, () => {
+  const { out, runs, read } = runPs1("npm", {
+    env: { NODE_AUTH_TOKEN: "SECRET-TOKEN-VALUE" },
+    homeNpmrc: "//registry.npmjs.org/:_authToken=npm_LITERAL-HOME-TOKEN\n",
+  });
+  assert.match(out, /RC=0/);
+  assert.equal(read("run1.home"), "");
+  assert.ok(!runs[0].includes("NPM_CONFIG_USERCONFIG"), runs[0]);
 });

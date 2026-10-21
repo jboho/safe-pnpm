@@ -136,6 +136,7 @@ function global:yarn {
         $tokenEnv = @()
         if ($env:NODE_AUTH_TOKEN) { $tokenEnv += @('-e','NODE_AUTH_TOKEN') }
         if ($env:NPM_TOKEN)       { $tokenEnv += @('-e','NPM_TOKEN') }
+        $tokenEnv += @(_Safe_Pkg_User_Auth -TmpDir $tmpDir.FullName)
 
         # Phase 2 needs the flag too, or --force would prune what phase 1 added.
         $hostFlags = @(_Safe_Pkg_Host_Platform -Manager yarn -TmpDir $tmpDir.FullName)
@@ -163,6 +164,7 @@ function global:yarn {
             # Strip registry credentials before any build script can run.
             _Safe_Pkg_Strip_NpmrcAuth (Join-Path $tmpDir.FullName '.npmrc')
             _Safe_Pkg_Strip_NpmrcAuth (Join-Path $tmpDir.FullName '.yarnrc')
+            Remove-Item -LiteralPath (Join-Path $tmpDir.FullName '.safe-home/.npmrc') -Force -ErrorAction SilentlyContinue
 
             $netFlag = @('--network','none')
             if ($env:SAFE_PNPM_BUILD_NETWORK -eq '1') { $netFlag = @() }

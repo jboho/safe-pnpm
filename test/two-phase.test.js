@@ -81,6 +81,8 @@ const SHELLS = [
 // opts.pkg       — the project's package.json text (default a minimal one)
 // opts.phase1Pkg — bash run by the stub in phase 1 instead of its default
 //                  package.json rewrite, with $src = the /app mount
+// opts.homeNpmrc — contents of the user's ~/.npmrc (default none)
+// opts.env       — extra environment for the wrapper (e.g. NPM_TOKEN: "")
 function runWrapper(manager, wrapperFile, opts = {}) {
   const shell = opts.shell ?? "bash";
   const lockfile = LOCKFILES[manager];
@@ -143,6 +145,9 @@ function runWrapper(manager, wrapperFile, opts = {}) {
       "",
     ].join("\n"),
   );
+  if (opts.homeNpmrc !== undefined) {
+    fs.writeFileSync(path.join(root, ".npmrc"), opts.homeNpmrc);
+  }
   if (opts.emptyId) {
     fs.writeFileSync(path.join(bin, "id"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   }
@@ -178,6 +183,7 @@ echo "$n" > "${log}/count"
 # Record the full invocation and the .npmrc visible to this run.
 echo "$@" > "${log}/run$n.args"
 [ -f "$src/.npmrc" ] && cp "$src/.npmrc" "${log}/run$n.npmrc" || : > "${log}/run$n.npmrc"
+[ -f "$src/.safe-home/.npmrc" ] && cp "$src/.safe-home/.npmrc" "${log}/run$n.home"
 cp "$src/package.json" "${log}/run$n.pkg"
 [ -f "$src/pnpm-workspace.yaml" ] && cp "$src/pnpm-workspace.yaml" "${log}/run$n.ws"
 
@@ -231,6 +237,10 @@ ${manager} install </dev/null >/dev/null 2>"${log}/stderr"
       NODE_AUTH_TOKEN: "SECRET-TOKEN-VALUE",
       SAFE_PNPM_OSV_API: opts.osvApi ?? "",
       SAFE_PNPM_OSV_STRICT: opts.osvStrict ? "1" : "",
+      // npm sets this for `npm test`, pointing at the real ~/.npmrc.
+      npm_config_userconfig: "",
+      NPM_CONFIG_USERCONFIG: "",
+      ...opts.env,
     },
     stdio: "pipe",
   });
@@ -324,6 +334,81 @@ for (const [manager, wrapperFile] of [
       /added-by-sandbox/,
       "add/remove manifest changes must land in the project",
     );
+  });
+}
+
+// The container never sees the host's ~/.npmrc, and pnpm 11 ignores env vars
+// in the project .npmrc's credentials, so the user-level auth lines for a
+// forwarded token are copied into the fetch phase.
+const HOME_NPMRC = [
+  "@acme:registry=https://registry.acme.example/",
+  `//registry.acme.example/:_authToken=\${NODE_AUTH_TOKEN}`,
+  `//npm.other.example/:_authToken = \${NPM_TOKEN}`,
+  "//registry.npmjs.org/:_authToken=npm_LITERAL-HOME-TOKEN",
+  `//unset.example/:_authToken=\${SOME_OTHER_TOKEN}`,
+  "",
+].join("\n");
+const USERCONFIG_FLAG = "-e NPM_CONFIG_USERCONFIG=/app/.safe-home/.npmrc";
+
+for (const { shell, ext, available } of SHELLS) {
+  for (const manager of ["npm", "pnpm", "yarn"]) {
+    const wrapperFile = `${manager}-wrapper.${ext}`;
+    test(`${manager} (${shell}): ~/.npmrc auth lines for a forwarded token reach phase 1 only`, {
+      skip: !available,
+    }, () => {
+      const { read, log, runCount } = runWrapper(manager, wrapperFile, {
+        shell,
+        homeNpmrc: HOME_NPMRC,
+      });
+      assert.equal(runCount, 2);
+      assert.equal(
+        read("run1.home"),
+        `//registry.acme.example/:_authToken=\${NODE_AUTH_TOKEN}\n//npm.other.example/:_authToken = \${NPM_TOKEN}\n`,
+        "only lines whose value is a forwarded token variable are copied",
+      );
+      assert.ok(read("run1.args").includes(USERCONFIG_FLAG), "fetch reads the copy as its user config");
+      assert.ok(!fs.existsSync(path.join(log, "run2.home")), "the copy is gone before the build phase");
+      assert.ok(!read("run2.args").includes("NPM_CONFIG_USERCONFIG"), "the build phase gets no user config");
+    });
+  }
+
+  test(`npm (${shell}): a line for an unset token is not copied`, { skip: !available }, () => {
+    const { read } = runWrapper("npm", `npm-wrapper.${ext}`, {
+      shell,
+      homeNpmrc: HOME_NPMRC,
+      env: { NPM_TOKEN: "" },
+    });
+    assert.equal(read("run1.home"), `//registry.acme.example/:_authToken=\${NODE_AUTH_TOKEN}\n`);
+  });
+
+  test(`npm (${shell}): no qualifying ~/.npmrc line leaves the fetch phase unchanged`, { skip: !available }, () => {
+    const { read, log } = runWrapper("npm", `npm-wrapper.${ext}`, {
+      shell,
+      homeNpmrc: "//registry.npmjs.org/:_authToken=npm_LITERAL-HOME-TOKEN\n",
+    });
+    assert.ok(!fs.existsSync(path.join(log, "run1.home")));
+    assert.ok(!read("run1.args").includes("NPM_CONFIG_USERCONFIG"));
+  });
+
+  test(`npm (${shell}): no token in the environment copies nothing`, { skip: !available }, () => {
+    const { read, log } = runWrapper("npm", `npm-wrapper.${ext}`, {
+      shell,
+      homeNpmrc: HOME_NPMRC,
+      env: { NPM_TOKEN: "", NODE_AUTH_TOKEN: "" },
+    });
+    assert.ok(!fs.existsSync(path.join(log, "run1.home")));
+    assert.ok(!read("run1.args").includes("NPM_CONFIG_USERCONFIG"));
+  });
+
+  test(`npm (${shell}): NPM_CONFIG_USERCONFIG names the user config to read`, { skip: !available }, () => {
+    const alt = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "safe-userconfig-")), "npmrc");
+    fs.writeFileSync(alt, `//alt.example/:_authToken=\${NPM_TOKEN}\n`);
+    const { read } = runWrapper("npm", `npm-wrapper.${ext}`, {
+      shell,
+      homeNpmrc: HOME_NPMRC,
+      env: { NPM_CONFIG_USERCONFIG: alt },
+    });
+    assert.equal(read("run1.home"), `//alt.example/:_authToken=\${NPM_TOKEN}\n`);
   });
 }
 

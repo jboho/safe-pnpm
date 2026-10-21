@@ -249,14 +249,18 @@ yarn.cmd install
 
 ## Private Registries
 
-Private and scoped registries work out of the box. Configure your registry the
-usual way — `.npmrc` (including `${NPM_TOKEN}` interpolation) or a `NODE_AUTH_TOKEN`
-/ `NPM_TOKEN` environment variable — and install normally:
+Private and scoped registries work out of the box. Map the scope in the
+project's `.npmrc`, put the auth line in your `~/.npmrc` with the token as a
+variable (`//npm.acme.example/:_authToken=${NPM_TOKEN}`), and install normally:
 
 ```sh
-export NPM_TOKEN=your-read-only-token
+export NPM_TOKEN=your-read-only-token   # or NODE_AUTH_TOKEN
 pnpm install
 ```
+
+The wrapper copies only the `~/.npmrc` auth lines whose value is exactly
+`${NODE_AUTH_TOKEN}` or `${NPM_TOKEN}` into the fetch phase; literal tokens stay
+on the host. pnpm 11 ignores a `${NPM_TOKEN}` auth line in the project `.npmrc`.
 
 The token is available only during the script-free **fetch** phase and is
 withheld (along with any `.npmrc` credential lines) during the **build** phase,

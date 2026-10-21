@@ -170,6 +170,7 @@ function npm
     if test -n "$NPM_TOKEN"
         set token_env $token_env -e NPM_TOKEN
     end
+    set token_env $token_env (_safe_pkg_user_auth $tmpdir)
 
     # Limits for both containers: no setuid escalation and a bounded process
     # count (a fork bomb in a build script would otherwise take down the Docker
@@ -236,6 +237,7 @@ function npm
         # Strip registry credentials before any build script can run.
         _safe_pkg_strip_npmrc_auth "$tmpdir/.npmrc"
         _safe_pkg_strip_npmrc_auth "$tmpdir/.yarnrc"
+        rm -f $tmpdir/.safe-home/.npmrc
 
         set -l net_flag --network none
         if test "$SAFE_PNPM_BUILD_NETWORK" = 1
