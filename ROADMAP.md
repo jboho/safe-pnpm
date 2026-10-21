@@ -40,6 +40,7 @@
   - PATH shims on Windows, `.cmd` and `.ps1` (PR #84)
   - Docs on the Windows batch-file limits of `exec`'s double escaping (PR #85)
 - [x] 2026.10.8 released (2026-10-19, PR #90, tag `v2026.10.8`): the scan image moves to Node 24.22.0 (PR #87) and `@socketsecurity/cli` to 1.8.4 (PR #86)
+- [x] 2026.10.9 released (2026-10-20, PR #93, tag `v2026.10.9`): `~/.npmrc` auth lines whose value is `${NODE_AUTH_TOKEN}` or `${NPM_TOKEN}` reach the fetch phase, for pnpm 11, which ignores those lines in a project `.npmrc` (PR #92)
 
 ## Notes
 - docs/socket.md (Socket.dev integration design)

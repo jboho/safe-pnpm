@@ -114,7 +114,7 @@ The malware check (`assets/malware-scan.js`), the link check (`assets/link-check
 
 ## Publishing a New Version
 
-1. Bump the version in `package.json`
+1. Bump the version in `package.json` and `package-lock.json`, and add the release entry to `ROADMAP.md`, in the same PR
 2. Merge to `main`
 3. Create a GitHub Release tagged `vX.Y.Z` (the tag must match `package.json`'s version, or the workflow fails)
 4. The `.github/workflows/publish.yml` workflow publishes `@jboho/safe-pnpm` to the public npm registry
