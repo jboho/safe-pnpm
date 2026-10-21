@@ -14,6 +14,8 @@ Measured on Apple Silicon with a warm Docker daemon:
 
 Most of the overhead on large projects is **copy-back** — moving `node_modules` out of the container and onto your local filesystem after the install completes. The install itself is fast; the `cp -R` is the bottleneck.
 
+The bash and zsh wrappers print `→ Copying node_modules back to the project (can take a minute; don't interrupt)...` once before the copy (the root and every workspace member together) and `→ Copied node_modules back in Ns.` once after it, so the quiet stretch after the package manager's own "Done" is not mistaken for a hang. If a copy fails, the wrapper says which `node_modules` failed and that the previous one is already gone. Interrupting the copy leaves `node_modules` half-copied; wait for it. The fish and PowerShell wrappers print nothing during copy-back.
+
 The malware check adds one request to OSV per 1,000 resolved packages, about a second each on a typical connection, plus one lookup per advisory it finds.
 
 ## When the overhead matters

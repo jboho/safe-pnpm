@@ -614,6 +614,64 @@ ln -s ../../outside "$src/node_modules/real/up"
     });
   }
 
+  test(`pnpm (${shell}): copy-back says what it is doing and how long it took`, {
+    skip: !available || ext !== "sh",
+  }, () => {
+    const { read, status } = runWrapper("pnpm", `pnpm-wrapper.${ext}`, {
+      shell,
+      phase2: PNPM_LAYOUT,
+    });
+    assert.equal(status, 0, read("stderr"));
+    const err = read("stderr");
+    const start = err.indexOf("Copying node_modules back to the project");
+    const done = err.search(/Copied node_modules back in \d+s\./);
+    assert.ok(start >= 0, err);
+    assert.ok(done > start, "the done line must follow the start line");
+  });
+
+  test(`pnpm workspace (${shell}): copy-back prints one progress pair, not one per member`, {
+    skip: !available || ext !== "sh",
+  }, () => {
+    const { proj, read, status } = runWrapper("pnpm", `pnpm-wrapper.${ext}`, {
+      shell,
+      workspace: true,
+      phase2: PNPM_LAYOUT,
+    });
+    assert.equal(status, 0, read("stderr"));
+    assert.ok(
+      fs.existsSync(path.join(proj, "packages", "a", "node_modules")),
+      "the member's node_modules must be copied back",
+    );
+    const err = read("stderr");
+    assert.equal(err.match(/Copying \S*node_modules back/g)?.length, 1, err);
+    assert.equal(err.match(/Copied \S*node_modules back/g)?.length, 1, err);
+  });
+
+  test(`pnpm (${shell}): copy-back prints nothing when the sandbox has no node_modules`, {
+    skip: !available || ext !== "sh",
+  }, () => {
+    const { read, status } = runWrapper("pnpm", `pnpm-wrapper.${ext}`, {
+      shell,
+      phase1Pkg: `rm -rf "$src/node_modules"`,
+    });
+    assert.equal(status, 0, read("stderr"));
+    assert.doesNotMatch(read("stderr"), /node_modules back/);
+  });
+
+  test(`pnpm (${shell}): a failed copy-back names the folder and prints no done line`, {
+    skip: !available || ext !== "sh" || process.getuid?.() === 0,
+  }, () => {
+    const { proj, read, status } = runWrapper("pnpm", `pnpm-wrapper.${ext}`, {
+      shell,
+      phase2: 'chmod 555 "$PWD"',
+    });
+    fs.chmodSync(proj, 0o755);
+    assert.notEqual(status, 0, "a failed copy-back must fail the install");
+    const err = read("stderr");
+    assert.match(err, /copying node_modules back failed/);
+    assert.doesNotMatch(err, /Copied node_modules back/);
+  });
+
   test(`pnpm workspace (${shell}): workspace and member links are copied back as links`, {
     skip: !available,
   }, () => {

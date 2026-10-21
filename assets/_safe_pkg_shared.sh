@@ -1215,10 +1215,19 @@ _safe_pkg_sandbox() {
   # Only node_modules at the root and in pre-existing workspace members come
   # back, so phase 2 cannot plant node_modules elsewhere in the project.
   if [ "$fetched" -eq 1 ]; then
-    _safe_pkg_copy_modules "$tmpdir" "" "$workspace_root" || rc=1
+    # One progress pair for the whole copy-back, not one per workspace member.
+    local has_modules=0 copy_rc=0 copy_t0=$SECONDS
+    [ -e "$tmpdir/node_modules" ] && has_modules=1
     while IFS= read -r m; do
-      _safe_pkg_copy_modules "$tmpdir" "$m" "$workspace_root" || rc=1
+      [ -e "$tmpdir/$m/node_modules" ] && has_modules=1
     done < "$snapdir/members"
+    [ "$has_modules" -eq 1 ] && echo "→ Copying node_modules back to the project (can take a minute; don't interrupt)..." >&2
+    _safe_pkg_copy_modules "$tmpdir" "" "$workspace_root" || copy_rc=1
+    while IFS= read -r m; do
+      _safe_pkg_copy_modules "$tmpdir" "$m" "$workspace_root" || copy_rc=1
+    done < "$snapdir/members"
+    [ "$copy_rc" -eq 0 ] && [ "$has_modules" -eq 1 ] && echo "→ Copied node_modules back in $((SECONDS - copy_t0))s." >&2
+    [ "$copy_rc" -eq 0 ] || rc=1
     for f in package.json "$lockfile"; do
       [ -f "$snapdir/tree/$f" ] && cp "$snapdir/tree/$f" "${workspace_root}/$f"
     done
@@ -1257,7 +1266,10 @@ _safe_pkg_copy_modules() {
   fi
   _safe_pkg_links_ok "$base" "$rel" || return 1
   rm -rf "${dest_root:?}/$rel"
-  cp -R "$src" "${dest_root}/$rel"
+  if ! cp -R "$src" "${dest_root}/$rel"; then
+    echo "✗ safe-pnpm: copying $rel back failed; the previous $rel was already removed." >&2
+    return 1
+  fi
 }
 
 # _safe_pkg_links_ok base rel
