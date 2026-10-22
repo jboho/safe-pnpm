@@ -3,7 +3,7 @@
 > Goal: A Docker-based package-manager wrapper (pnpm/npm/yarn) that sandboxes install scripts and pre-scans for malicious packages and CVEs.
 
 ## Current next action
-- [ ] M5 known gaps from M4 (below): audit copies `.yarnrc.yml`; PowerShell on Windows runs as root; rootless Docker untested on a real daemon
+- [ ] Close the remaining M5 gaps, tracked as issues #97-#100
 
 ## Milestones
 - [x] M0 — Socket CLI wrap: accept a `--socket` flag, call `@socketsecurity/cli` for manifest analysis, gated on `SAFE_PNPM_ENABLE_SOCKET`
@@ -19,13 +19,9 @@
   - [x] PowerShell wrappers: add the copy-back link check that sh and fish have (`_safe_pkg_shared.ps1`), and commit behavioral tests for the ps1 paths
   - [x] Tests for the fish Socket-strict and malware-strict paths
   - [x] Run the CVE audit after phase 1 so a package passed to `add` is audited too (OSV already covers malware for it)
-- [ ] M5 — Known gaps from M4
-  - [ ] Copy `.yarnrc.yml` into the audit directory so private registry config applies
-  - [ ] Run the PowerShell containers as a non-root user on Windows (done elsewhere: `_Safe_Pkg_User` passes the host uid/gid, PR #72)
-  - [ ] Test rootless Docker and Podman against a real daemon
+- [ ] M5 — Known gaps from M4 (open gaps: issues #97-#100)
   - [x] Check npx, dlx and create packages against OSV in the fish wrappers (issue #60)
   - [x] Check npx, dlx and create packages against OSV in the PowerShell wrappers (issue #61, after #57)
-  - [ ] Refuse `npx` for a command the project doesn't have installed unless a version is named; OSV has no entry for placeholders such as `tsc@2.0.4`
 - [x] 2026.10.4 released (2026-10-15, PR #74, tag `v2026.10.4`), closing the bypass reports in issues #43-#46:
   - Refuse global installs (PR #52), and refuse directory flags and `--` on scanned commands (PR #73)
   - Scan installs under every alias and after global flags (PR #53)
