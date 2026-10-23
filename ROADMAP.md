@@ -3,7 +3,7 @@
 > Goal: A Docker-based package-manager wrapper (pnpm/npm/yarn) that sandboxes install scripts and pre-scans for malicious packages and CVEs.
 
 ## Current next action
-- [ ] Close the remaining M5 gaps, tracked as issues #97-#100
+Open work is tracked as GitHub issues; the gaps left from M4 are in issue #103.
 
 ## Milestones
 - [x] M0 — Socket CLI wrap: accept a `--socket` flag, call `@socketsecurity/cli` for manifest analysis, gated on `SAFE_PNPM_ENABLE_SOCKET`
@@ -19,9 +19,6 @@
   - [x] PowerShell wrappers: add the copy-back link check that sh and fish have (`_safe_pkg_shared.ps1`), and commit behavioral tests for the ps1 paths
   - [x] Tests for the fish Socket-strict and malware-strict paths
   - [x] Run the CVE audit after phase 1 so a package passed to `add` is audited too (OSV already covers malware for it)
-- [ ] M5 — Known gaps from M4 (open gaps: issues #97-#100)
-  - [x] Check npx, dlx and create packages against OSV in the fish wrappers (issue #60)
-  - [x] Check npx, dlx and create packages against OSV in the PowerShell wrappers (issue #61, after #57)
 - [x] 2026.10.4 released (2026-10-15, PR #74, tag `v2026.10.4`), closing the bypass reports in issues #43-#46:
   - Refuse global installs (PR #52), and refuse directory flags and `--` on scanned commands (PR #73)
   - Scan installs under every alias and after global flags (PR #53)
