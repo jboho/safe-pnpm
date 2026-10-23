@@ -1,48 +1,48 @@
 # M5 — Known gaps from M4
 
-Date: 2026-10-22. Roadmap item: `M5 — Known gaps from M4 (open gaps: issues #97-#100)`.
+Date: 2026-10-22. Tracked as issue #103; the roadmap no longer lists M5 (PR #104).
 
-M5's two listed sub-items (OSV checks for npx/dlx/create in fish, #60, and PowerShell, #61) are done. What is left is the four gaps moved to issues on 2026-10-21. Each one lands as its own PR off `main`; M5 closes when all four are closed, and a release PR ships them.
+M5's two original sub-items (OSV checks for npx/dlx/create in fish, #60, and PowerShell, #61) are done. What is left is the four gaps moved to issues on 2026-10-21. Each one lands as its own PR off `main`, tests first, in all three shell families (sh/zsh/bash in `_safe_pkg_shared.sh`, fish in `_safe_pkg_prescan.fish`, PowerShell in `_safe_pkg_shared.ps1`). A gap may also be closed as a documented limitation, with the reason recorded in its issue.
 
-## 1. Copy `.yarnrc.yml` into the audit directory (#97)
+## 1. Refuse unpinned npx of a command the project doesn't install (#100)
 
-Today: `_safe_pkg_audit` (`assets/_safe_pkg_shared.sh:342`), its PowerShell twin (`assets/_safe_pkg_shared.ps1:101`) and the fish prescan (`assets/_safe_pkg_prescan.fish:26`) copy `.npmrc` and `.yarnrc` (minus `yarn-path`) but not `.yarnrc.yml`, so Yarn Berry registry settings are missing during the audit.
-
-Steps:
-- Check first whether Berry works in the sandbox at all: `assets/yarn-wrapper.sh:23` and `assets/yarn-wrapper.fish:166` copy only `package.json yarn.lock .yarnrc .npmrc`. If `.yarnrc.yml` never reaches the sandbox, add it there too.
-- Copy `.yarnrc.yml` into the audit dir with the keys that run code on the host removed: `yarnPath` and `plugins` (same reason `yarn-path` is stripped from `.yarnrc`). Keep `npmScopes`, `npmRegistryServer`, auth keys (already handled by the token-strip helpers at `_safe_pkg_shared.sh:778`).
-- Check that the audit command fits Berry: the code runs `yarn audit`, which Berry replaced with `yarn npm audit`. If Berry audit is broken today, fix it in the same PR or file it separately.
-- Tests: extend `test/hardening.test.js` and `test/hardening-fish.test.js` (which already cover `.yarnrc`) plus the ps1 equivalent.
-
-## 2. Refuse unpinned npx of a command the project doesn't install (#100)
-
-Today: `_safe_pkg_runner_specs` (`assets/_safe_pkg_shared.sh:183`, fish `_safe_pkg_prescan.fish:161`, ps1 equivalent) collects specs and `malware-scan.js --specs` resolves and checks them. For `npx tsc`, npm resolves the placeholder package `tsc`, which OSV knows nothing useful about, so the scan passes without telling the user anything.
+Today: `_safe_pkg_runner_tail` (`assets/_safe_pkg_shared.sh:234`) returns the bare command word as the spec, and `malware-scan.js --specs` resolves it with `npm view` to the current version. For `npx tsc` with no local `tsc`, npx downloads the placeholder package `tsc@2.0.4`, which OSV knows nothing useful about, so the scan passes without saying anything.
 
 Steps:
 - Decide what "installed" means: the command is in `node_modules/.bin` of the working directory or a parent (how npx itself looks it up). Confirm against npm 10 and 11 before writing the check.
-- When a spec has no version and the command is not installed, refuse with a message that says to name a version (`npx tsc@5.6.3`) or to install it. A spec with a version, tag or range still goes to OSV as now.
-- Put the rule in one place if possible (`malware-scan.js --specs` gets the cwd) so sh, fish and ps1 don't each grow their own copy.
-- Tests: `test/helpers/runner-cases.js` feeds `runner-check*.test.js` for all shells; add cases for installed, not installed, and pinned.
+- When the spec has no version and the command is not installed, refuse with a message that says to name a version (`npx tsc@5.6.3`) or to install it. A spec with a version, tag or range still goes to OSV as now.
+- Scope: exec mode only (`npx`, `npm exec`, `pnpm dlx`, `yarn dlx`). `create` always fetches a named package, so it is out of scope.
+- `--package NAME` without a version counts as unpinned too (same scan-the-latest case); confirm in the PR.
+- Put the rule in one place if possible (`malware-scan.js --specs` gets the cwd) so the three shells don't each grow a copy.
+- Tests: `test/helpers/runner-cases.js` feeds `runner-check.test.js`, `runner-check-fish.test.js` and `ps1-runner-check.test.js`. Cases: not installed (refused), installed, pinned, `--package typescript@5.6.3 tsc`.
+- Document in the README npx section and `docs/security.md:33`.
+
+## 2. Copy `.yarnrc.yml` into the audit directory (#97)
+
+Finding: this gap only exists once Yarn Berry (v2+) is supported. The yarn wrappers are Yarn 1 only (`assets/yarn-wrapper.sh:12`), they never copy `.yarnrc.yml` into the sandbox (`assets/yarn-wrapper.sh:23`, `yarn-wrapper.fish:166`, `yarn-wrapper.ps1`), and `malware-scan.js:143` refuses a Berry lockfile (`__metadata:`). npm and pnpm don't read `.yarnrc.yml`.
+
+Steps:
+- Confirm with a test in each shell that a Berry project is refused before the audit step. If so, close #97 as blocked on Berry support, and open Berry support as its own roadmap feature.
+- If some path does reach the audit with a `.yarnrc.yml`: copy it next to `.yarnrc` in `_safe_pkg_audit` (`_safe_pkg_shared.sh:353`, `_safe_pkg_shared.ps1:107`, `_safe_pkg_prescan.fish:35`), dropping `yarnPath` and `plugins` (both run project code on the host) and stripping auth lines with the existing helper (`_safe_pkg_shared.sh:778`). Berry's audit command is `yarn npm audit`, not `yarn audit`.
 
 ## 3. Run the PowerShell containers as non-root on Windows (#98)
 
-Today: `_Safe_Pkg_User` (`assets/_safe_pkg_shared.ps1:731`) returns no `--user` flag on Windows, so the containers run as root there.
+Today: `_Safe_Pkg_User` (`assets/_safe_pkg_shared.ps1:731`) returns no `--user` flag on Windows, so the containers run as root there. Windows has no uid to pass.
 
 Steps:
-- Windows has no uid to pass. Use a fixed non-root uid:gid (the image's `node` user, 1000:1000, or a dedicated one) with `HOME=/app/.safe-home`, as on macOS and Linux.
-- Check that Docker Desktop's bind mounts on Windows let that uid write `/app` and the copy-back. If they don't, this needs a different approach; stop and decide before coding.
-- Tests: behavioral tests in the existing ps1 suites, which run on the `windows-latest` CI job (`.github/workflows/ci.yml:33`). That runner cannot run Linux containers, so the real-daemon check is a manual run on a Windows machine, recorded in the PR.
-- Update the README line that says Windows still runs as root.
+- Probe by hand on Docker Desktop for Windows (WSL2 backend): can `--user 1000:1000` (the image's `node` user) write a bind-mounted `C:\...` temp dir, and does the copied-back `node_modules` stay usable by the Windows user? Record the output in the issue.
+- If yes: return `@('--user', '1000:1000', '-e', 'HOME=/app/.safe-home')` on Windows, test-first in the ps1 suites with a stubbed `$IsWindows`. The `windows-latest` CI job (`.github/workflows/ci.yml:33`) can't run Linux containers, so the PR records the manual run. If no: close #98 as a documented limitation.
+- Update the Windows sentence in `docs/security.md:38` and the README.
 
 ## 4. Test rootless Docker and Podman against a real daemon (#99)
 
-Today: `_safe_pkg_docker_rootless` (`assets/_safe_pkg_shared.sh:818`) and its ps1 twin are tested only with a stubbed `docker info`. The README says this is untested on a real daemon.
+Today: `_safe_pkg_docker_rootless` (`assets/_safe_pkg_shared.sh:818`) and its ps1 twin are tested only with a stubbed `docker info`; README:45 says so.
 
 Steps:
-- Add a CI job on `ubuntu-latest` that runs one install through the wrapper under Podman rootless (Podman ships on the runner image; alias or shim `docker` to it). Check: the detection fires, no `--user` is passed, and the copied-back files are owned by the runner user.
-- Add the same for rootless Docker if it can be set up on the runner in reasonable time (`dockerd-rootless-setuptool.sh`); otherwise do it by hand once and record it in the PR.
-- Remove "not tested against a real rootless daemon" from the README once the job is green.
+- Add a separate CI job on `ubuntu-latest`, so a daemon setup failure doesn't hide unit-test results. Podman (preinstalled, rootless) through a `docker` shim, and rootless Docker via `dockerd-rootless-setuptool.sh`. Each runs one real `pnpm install` and one `npm ci` through the wrappers on a small fixture and checks that detection fires, no `--user` is passed, and the copied-back `node_modules` is owned by the runner user.
+- Make the job required once it has passed on `main` twice.
+- Remove "not tested against a real rootless daemon" from README:45 once green.
 
 ## Order and done
 
-Order: #97, #100, #98, #99 (smallest and most self-contained first; #98 and #99 may need manual daemon runs). Done when all four issues are closed, `npm test` and `npm run lint` pass, and a release PR carries the M5 roadmap tick.
+Order: #100 (security, smallest), #97 (likely closes as blocked), #98, #99. Done when all four issues are closed, fixed or with the reason recorded, `npm test` and `npm run lint` pass, and a release PR ships the fixes. Then close #103.
