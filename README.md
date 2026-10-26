@@ -143,6 +143,8 @@ When you run an install-class command:
 
 **`--` is refused on intercepted commands.** The sandbox adds `--ignore-scripts` and its other flags after your arguments. After `--` (or `---`, which npm and pnpm read the same way) the managers would take those flags as package names, and install scripts would run in the fetch phase, which has your registry token and the network. Drop the `--`, or put `command` in front to run it natively without the safety checks. Commands that aren't intercepted, such as `npm run test -- --watch`, get the `--` unchanged.
 
+**Yarn 2+ (Berry) projects are refused.** The sandbox runs Yarn 1, which cannot read a Berry lockfile: it would resolve every version again and replace your `yarn.lock` with a Yarn 1 lockfile, losing its pins. yarn installs are refused when the current directory's `yarn.lock` starts with a `__metadata:` block, a `.yarnrc.yml` file is present, or `package.json` sets `packageManager` to `yarn@2` or later. Put `command` in front (`command yarn install`) to run it natively without the safety checks. The check reads the current directory only, so it misses a member folder of a Berry workspace. Full Berry support is tracked in [issue 106](https://github.com/jboho/safe-pnpm/issues/106).
+
 **Download-and-run commands get a malware check only.** These fetch a package and run it straight away, so they skip the Docker sandbox, the CVE audit and Socket, and the package's code runs on your machine with your permissions:
 
 - `npx PKG`, `npm exec PKG`, `npm init PKG`, `npm create PKG`

@@ -709,6 +709,28 @@ _safe_pkg_unshared_lockfile_setting() {
   return 1
 }
 
+# _safe_pkg_yarn_berry dir
+#   Prints what marks dir as a Yarn 2+ (Berry) project and succeeds; fails
+#   when nothing does. The sandbox runs Yarn 1, which ignores a Berry lockfile,
+#   resolves every version again and writes a Yarn 1 lockfile that the
+#   copy-back puts over the project's own, so the install is refused instead.
+_safe_pkg_yarn_berry() {
+  local dir="$1" pm
+  if [ -f "$dir/yarn.lock" ] && grep -q '^__metadata:' "$dir/yarn.lock"; then
+    printf '%s/yarn.lock is a Yarn 2+ lockfile\n' "$dir"; return 0
+  fi
+  if [ -f "$dir/.yarnrc.yml" ]; then
+    printf '%s/.yarnrc.yml is a Yarn 2+ settings file\n' "$dir"; return 0
+  fi
+  if [ -f "$dir/package.json" ]; then
+    pm="$(grep -oE '"packageManager"[[:space:]]*:[[:space:]]*"yarn@[0-9][0-9.]*' "$dir/package.json" | head -n 1 | grep -oE 'yarn@[0-9.]*')"
+    case "$pm" in
+      yarn@[2-9]*|yarn@[1-9][0-9]*) printf '%s/package.json sets packageManager to %s\n' "$dir" "${pm%.}"; return 0 ;;
+    esac
+  fi
+  return 1
+}
+
 # _safe_pkg_dispatch manager lockfile workspace_file manifest_files [pkg-manager-args...]
 #   Shared entry point for the install-class path of every manager wrapper.
 #   Strips the safe-pnpm-only `--socket` flag from the pass-through args (so it
@@ -759,6 +781,13 @@ _safe_pkg_dispatch() {
   if dir_flag="$(_safe_pkg_dir_flag "$manager" "$@")"; then
     echo "✗ safe-pnpm: $dir_flag is not supported through the wrapper; the scan checks this directory's lockfile, so an install in another directory would go unchecked." >&2
     echo "  cd into that directory and run the command there. To run it without the safety checks: $(_safe_pkg_bypass "$manager")$(printf ' %q' "$@")" >&2
+    return 1
+  fi
+
+  local berry
+  if [ "$manager" = "yarn" ] && berry="$(_safe_pkg_yarn_berry "$(pwd)")"; then
+    echo "✗ safe-pnpm: ${berry}, and the wrapper supports Yarn 1 projects only: its sandbox runs Yarn 1, which would resolve every version again and replace yarn.lock with a Yarn 1 lockfile." >&2
+    echo "  To run it without the safety checks: $(_safe_pkg_bypass "$manager")$(printf ' %q' "$@")" >&2
     return 1
   fi
 
