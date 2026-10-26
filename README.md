@@ -42,7 +42,7 @@ When you run `pnpm install`, `npm install`, or `yarn install`, the wrapper pre-s
 Published to npm as `@jboho/safe-pnpm` (first public release 2026.10.2, with provenance). Known gaps, tracked in [ROADMAP.md](ROADMAP.md) under M4:
 
 - On Windows the PowerShell wrappers still run the containers as root inside Docker (`--cap-drop ALL` and `no-new-privileges` apply). macOS and Linux run them as your user.
-- Rootless Docker and Podman are detected from `docker info`, and there the containers keep their default user, which is your own user on the host. This is not tested against a real rootless daemon.
+- Rootless Docker and Podman are detected from `docker info`, and there the containers keep their default user, which is your own user on the host. CI runs a real pnpm and npm install under rootless Podman and rootless Docker on Linux.
 - Unless your uid is 1000 (the image's `node` user), it has no user name inside the image, so a build script that looks up the current user (`whoami`, `os.userInfo()`) gets an error.
 - The CVE audit runs on the host after the fetch, on a throwaway copy of the resolved manifests and lockfile plus your registry config. It does not run in your project directory, and pnpm skips `.pnpmfile.cjs` for it. A `yarn-path` line in `.yarnrc` is dropped for the audit.
 - PowerShell is the least-tested shell: the wrappers and copy-back are tested on Linux pwsh only.
