@@ -26,32 +26,43 @@ for (const [manager, args] of [...RUNNERS, ...OTHERS]) {
   );
 }
 const DEAD = { SAFE_PNPM_OSV_API: "http://127.0.0.1:1" };
-add("npx cowsay hi", "npx cowsay hi");
+add("npx cowsay@latest hi", "npx cowsay@latest hi");
 add("npx mal-pkg", "npx mal-pkg");
 add("npx -p mal-pkg cowsay", "npx -p mal-pkg cowsay");
 add("pnpx mal-pkg", "pnpx mal-pkg");
 add("chain refused", "npx mal-pkg && Add-Content /w/log 'NEXT'");
 add("chain install refused", "npm install -g left-pad && Add-Content /w/log 'NEXT'");
-add("chain ok", "npx cowsay && Add-Content /w/log 'NEXT'");
-add("pnpx cowsay hi", "pnpx cowsay hi");
+add("chain ok", "npx cowsay@latest && Add-Content /w/log 'NEXT'");
+add("pnpx cowsay@^1 hi", "pnpx cowsay@^1 hi");
 add("pnpm dlx mal-pkg", "pnpm dlx mal-pkg");
 add("yarn dlx mal-pkg", "yarn dlx mal-pkg");
-add("pnpm dlx cowsay", "pnpm dlx cowsay");
+add("pnpm dlx cowsay@latest", "pnpm dlx cowsay@latest");
 add("pnpm create vite app", "pnpm create vite app");
 add("npm exec mal-pkg", "npm exec mal-pkg");
-add("npm exec cowsay", "npm exec cowsay");
+add("npm exec cowsay@latest", "npm exec cowsay@latest");
 add("yarn create react-app app", "yarn create react-app app");
-add("npx unknown-pkg", "npx unknown-pkg");
+add("npx unknown-pkg@latest", "npx unknown-pkg@latest");
 add("npx ./local-tool", "npx ./local-tool");
-add("unreachable", "npx cowsay", DEAD);
-add("unreachable strict", "npx cowsay", { ...DEAD, SAFE_PNPM_OSV_STRICT: "1" });
-add("malformed", "pnpm dlx cowsay", { SAFE_PNPM_OSV_API: "$osv/badjson" });
-add("malformed strict", "pnpm dlx cowsay", {
+add("unreachable", "npx cowsay@latest", DEAD);
+add("unreachable strict", "npx cowsay@latest", { ...DEAD, SAFE_PNPM_OSV_STRICT: "1" });
+add("malformed", "pnpm dlx cowsay@latest", { SAFE_PNPM_OSV_API: "$osv/badjson" });
+add("malformed strict", "pnpm dlx cowsay@latest", {
   SAFE_PNPM_OSV_API: "$osv/badjson",
   SAFE_PNPM_STRICT: "1",
 });
-add("broken-pkg", "npx broken-pkg");
-add("broken-pkg strict", "npx broken-pkg", { SAFE_PNPM_OSV_STRICT: "1" });
+add("broken-pkg", "npx broken-pkg@latest");
+add("broken-pkg strict", "npx broken-pkg@latest", { SAFE_PNPM_OSV_STRICT: "1" });
+// Issue 100: no version and not installed means npx would download whatever
+// the registry has under that name.
+add("unpinned npx", "npx cowsay hi");
+add("unpinned npm exec", "npm exec cowsay");
+add("unpinned pnpm dlx", "pnpm dlx cowsay");
+add("unpinned yarn dlx", "yarn dlx cowsay");
+add("unpinned unreachable", "npx cowsay", DEAD);
+const withBin = (line) =>
+  `New-Item -ItemType Directory -Force node_modules/.bin | Out-Null; Set-Content node_modules/.bin/cowsay ''; try { ${line} } finally { Remove-Item -Recurse -Force node_modules }`;
+add("unpinned npx installed", withBin("npx cowsay hi"));
+add("unpinned pnpm dlx installed", withBin("pnpm dlx cowsay"));
 add("npm run build", "npm run build");
 // Windows PowerShell, and pwsh for .cmd targets, drop "" before the native
 // command sees it; Legacy does the same here.
@@ -225,11 +236,11 @@ test("ps1: _Safe_Pkg_Runner_Specs finds nothing for commands that fetch nothing 
 });
 
 test("ps1: npx of a clean package checks it, then runs it", { skip }, () => {
-  const r = result("npx cowsay hi");
+  const r = result("npx cowsay@latest hi");
   assert.equal(r.status, "RC=0 ERRORS=0", r.out);
   assert.match(r.out, /1 package checked against OSV; none known malicious/);
-  assert.match(r.calls, /npm view --json -- cowsay version/);
-  assert.match(r.calls, /RAN npx cowsay hi/);
+  assert.match(r.calls, /npm view --json -- cowsay@latest version/);
+  assert.match(r.calls, /RAN npx cowsay@latest hi/);
 });
 
 test("ps1: npx of a known-malicious package is blocked and never runs", {
@@ -264,7 +275,7 @@ test("ps1: a refused command fails the pipeline chain, so && does not run the ne
   }
   const ok = result("chain ok");
   assert.equal(ok.status, "RC=0 ERRORS=0", ok.out);
-  assert.match(ok.calls, /RAN npx cowsay\nNEXT/);
+  assert.match(ok.calls, /RAN npx cowsay@latest\nNEXT/);
 });
 
 test("ps1: pnpx is checked like pnpm dlx before it runs", { skip }, () => {
@@ -272,10 +283,10 @@ test("ps1: pnpx is checked like pnpm dlx before it runs", { skip }, () => {
   assert.equal(bad.status, "RC=1 ERRORS=0", bad.out);
   assert.match(bad.out, /mal-pkg@1\.2\.3\s+MAL-2099-1/);
   assert.doesNotMatch(bad.calls, /RAN/);
-  const ok = result("pnpx cowsay hi");
+  const ok = result("pnpx cowsay@^1 hi");
   assert.equal(ok.status, "RC=0 ERRORS=0", ok.out);
-  assert.match(ok.calls, /npm view --json -- cowsay version/);
-  assert.match(ok.calls, /RAN pnpx cowsay hi/);
+  assert.match(ok.calls, /npm view --json -- cowsay@\^1 version/);
+  assert.match(ok.calls, /RAN pnpx cowsay@\^1 hi/);
 });
 
 test("ps1: pnpm dlx, yarn dlx and npm exec are checked before they run", {
@@ -290,12 +301,12 @@ test("ps1: pnpm dlx, yarn dlx and npm exec are checked before they run", {
     assert.equal(r.status, "RC=1 ERRORS=0", `${label}\n${r.out}`);
     assert.doesNotMatch(r.calls, /RAN|npm exec/, label);
   }
-  const ok = result("pnpm dlx cowsay");
+  const ok = result("pnpm dlx cowsay@latest");
   assert.equal(ok.status, "RC=0 ERRORS=0", ok.out);
-  assert.match(ok.calls, /RAN pnpm dlx cowsay/);
-  const exec = result("npm exec cowsay");
+  assert.match(ok.calls, /RAN pnpm dlx cowsay@latest/);
+  const exec = result("npm exec cowsay@latest");
   assert.equal(exec.status, "RC=0 ERRORS=0", exec.out);
-  assert.match(exec.calls, /^npm exec cowsay$/m);
+  assert.match(exec.calls, /^npm exec cowsay@latest$/m);
 });
 
 test("ps1: create commands check the create- package the manager would fetch", {
@@ -314,10 +325,10 @@ test("ps1: create commands check the create- package the manager would fetch", {
 test("ps1: a package the registry does not have is noted and the command still runs", {
   skip,
 }, () => {
-  const r = result("npx unknown-pkg");
+  const r = result("npx unknown-pkg@latest");
   assert.equal(r.status, "RC=0 ERRORS=0", r.out);
   assert.match(r.out, /0 packages checked.*1 not checked/);
-  assert.match(r.calls, /RAN npx unknown-pkg/);
+  assert.match(r.calls, /RAN npx unknown-pkg@latest/);
 });
 
 test("ps1: a local path is not sent to npm view or OSV", { skip }, () => {
@@ -333,7 +344,7 @@ test("ps1: an unreachable OSV warns and runs; SAFE_PNPM_OSV_STRICT=1 blocks", {
   const warn = result("unreachable");
   assert.equal(warn.status, "RC=0 ERRORS=0", warn.out);
   assert.match(warn.out, /could not reach OSV.*Continuing without it/s);
-  assert.match(warn.calls, /RAN npx cowsay/);
+  assert.match(warn.calls, /RAN npx cowsay@latest/);
   const strict = result("unreachable strict");
   assert.equal(strict.status, "RC=1 ERRORS=0", strict.out);
   assert.match(
@@ -349,7 +360,7 @@ test("ps1: a malformed OSV answer warns and runs; SAFE_PNPM_STRICT=1 blocks", {
   const warn = result("malformed");
   assert.equal(warn.status, "RC=0 ERRORS=0", warn.out);
   assert.match(warn.out, /Malware scan could not run.*Continuing without it/s);
-  assert.match(warn.calls, /RAN pnpm dlx cowsay/);
+  assert.match(warn.calls, /RAN pnpm dlx cowsay@latest/);
   const strict = result("malformed strict");
   assert.equal(strict.status, "RC=1 ERRORS=0", strict.out);
   assert.match(strict.out, /Blocking \(SAFE_PNPM_STRICT=1\)/);
@@ -365,6 +376,28 @@ test("ps1: a failed version lookup counts as a scan failure, not a pass", {
   const strict = result("broken-pkg strict");
   assert.equal(strict.status, "RC=1 ERRORS=0", strict.out);
   assert.doesNotMatch(strict.calls, /RAN/);
+});
+
+test("ps1: npx, npm exec, pnpm dlx and yarn dlx with no version are refused when not installed", {
+  skip,
+}, () => {
+  for (const label of [
+    "unpinned npx",
+    "unpinned npm exec",
+    "unpinned pnpm dlx",
+    "unpinned yarn dlx",
+    "unpinned unreachable",
+    "unpinned pnpm dlx installed",
+  ]) {
+    const r = result(label);
+    assert.equal(r.status, "RC=1 ERRORS=0", `${label}\n${r.out}`);
+    assert.match(r.out, /cowsay names no version and would be downloaded/, label);
+    assert.match(r.out, /no package code was executed/, label);
+    assert.doesNotMatch(r.calls, /RAN|npm exec/, label);
+  }
+  const ok = result("unpinned npx installed");
+  assert.equal(ok.status, "RC=0 ERRORS=0", ok.out);
+  assert.match(ok.calls, /RAN npx cowsay hi/);
 });
 
 test("ps1: commands that run no downloaded package skip the check", {

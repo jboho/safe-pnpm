@@ -339,10 +339,12 @@ function _safe_pkg_runner_tail
         end
         return 0
     end
-    if set -q pkgs[1]
-        printf '%s\n' $pkgs
-    else if set -q pos[1]
-        printf '%s\n' $pos
+    # The tag tells malware-scan.js to refuse a spec that names no version.
+    set -l tag exec-dlx:
+    test "$manager" = npm; and set tag exec-npm:
+    set -q pkgs[1]; or set pkgs $pos
+    for line in $pkgs
+        test -n "$line"; and printf '%s%s\n' $tag $line
     end
     return 0
 end

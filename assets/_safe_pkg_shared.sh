@@ -283,7 +283,15 @@ $pos
 SPECS_END
     return 0
   fi
-  if [ -n "$pkgs" ]; then printf '%s' "$pkgs"; else printf '%s' "$pos"; fi
+  # The tag tells malware-scan.js to refuse a spec that names no version.
+  local tag=exec-dlx: line
+  [ "$manager" = npm ] && tag=exec-npm:
+  [ -n "$pkgs" ] || pkgs="$pos"
+  while IFS= read -r line; do
+    [ -n "$line" ] && printf '%s%s\n' "$tag" "$line"
+  done <<SPECS_END
+$pkgs
+SPECS_END
   return 0
 }
 

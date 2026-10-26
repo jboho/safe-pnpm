@@ -174,7 +174,7 @@ test("cmd shim: arguments and the exit code pass through", { skip }, () => {
   const m = run(["pnpm", "run", ...more]);
   assert.equal(m.status, 0, m.stderr);
   assert.equal(m.calls, `RAN pnpm\nrun\n${more.join("\n")}\n`);
-  const clean = run(["pnpm", "dlx", "cowsay"]);
+  const clean = run(["pnpm", "dlx", "cowsay@latest"]);
   assert.equal(clean.status, 0, clean.stderr);
   assert.equal(clean.stdout, "STUB OUT\n");
 });
