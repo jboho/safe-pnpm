@@ -35,6 +35,11 @@ Open work is tracked as GitHub issues; the gaps left from M4 are in issue #103.
 - [x] 2026.10.8 released (2026-10-19, PR #90, tag `v2026.10.8`): the scan image moves to Node 24.22.0 (PR #87) and `@socketsecurity/cli` to 1.8.4 (PR #86)
 - [x] 2026.10.9 released (2026-10-20, PR #93, tag `v2026.10.9`): `~/.npmrc` auth lines whose value is `${NODE_AUTH_TOKEN}` or `${NPM_TOKEN}` reach the fetch phase, for pnpm 11, which ignores those lines in a project `.npmrc` (PR #92)
 - [x] 2026.10.10 released (2026-10-21, PR #96, tag `v2026.10.10`): the bash and zsh wrappers print one `Copying node_modules back` line before the copy-back and one `Copied` line after it, and name the folder when a copy fails (PR #95)
+- [x] 2026.10.11 released (2026-10-26, PR #115, tag `v2026.10.11`):
+  - Refuse Yarn 2+ (Berry) projects until the wrappers support them (PR #111)
+  - Refuse unpinned `npx`, `npm exec` and `dlx` of a package the project doesn't have installed (PR #113)
+  - The scan image moves to Node 24.22.1 (PR #107) and `@socketsecurity/cli` to 1.10.0 (PR #110)
+  - CI runs real installs under rootless Podman and rootless Docker (PR #112)
 
 ## Notes
 - docs/socket.md (Socket.dev integration design)
