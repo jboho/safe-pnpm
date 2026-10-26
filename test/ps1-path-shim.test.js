@@ -28,8 +28,11 @@ const { installShims } = require("../lib/util/shims");
 // Each case runs one command in the container, from a node driver, with
 // PATH = shims, the real stubs, then the system. The real stubs log their
 // argv one per line to /w/calls/<case>, print STUB OUT and exit with
-// $STUB_EXIT; npm also answers `npm view`, `pnpm run nested` runs
-// `pnpm dlx mal-pkg` again by name, and `pnpm run echo` copies stdin to stdout.
+// $STUB_EXIT; `pnpm run nested` runs `pnpm dlx mal-pkg@1.2.3` again by name,
+// and `pnpm run echo` copies stdin to stdout. Every spec names an exact
+// version, so the scanner never runs `npm view`: here that would go through
+// the npm shim and start another emulated pwsh, which once took the lookup
+// past its 30 s timeout. On Windows the scanner runs npm-cli.js directly.
 const SYS = "/usr/local/bin:/usr/bin:/bin";
 const PATH_ON = `/w/home/.safe-pnpm/bin:/w/real:${SYS}`;
 const CASES = {};
@@ -48,12 +51,12 @@ const ARGS = [
   "-Command",
   "%PATH%",
 ];
-add("dlx mal", ["pnpm", "dlx", "mal-pkg@1"]);
-add("pnpx mal", ["pnpx", "mal-pkg"]);
-add("npx mal", ["npx", "mal-pkg"]);
-add("npm exec mal", ["npm", "exec", "mal-pkg"]);
-add("yarn dlx mal", ["yarn", "dlx", "mal-pkg"]);
-add("dlx clean", ["pnpm", "dlx", "cowsay@latest"]);
+add("dlx mal", ["pnpm", "dlx", "mal-pkg@1.2.3"]);
+add("pnpx mal", ["pnpx", "mal-pkg@1.2.3"]);
+add("npx mal", ["npx", "mal-pkg@1.2.3"]);
+add("npm exec mal", ["npm", "exec", "mal-pkg@1.2.3"]);
+add("yarn dlx mal", ["yarn", "dlx", "mal-pkg@1.2.3"]);
+add("dlx clean", ["pnpm", "dlx", "cowsay@1.6.0"]);
 add("argv 0", ["pnpm", ...ARGS]);
 add("argv 7", ["pnpm", ...ARGS], { STUB_EXIT: "7" });
 add("yarn exit 3", ["yarn", "run", "x y"], { STUB_EXIT: "3" });
@@ -67,7 +70,7 @@ add("bypass hint", ["npm", "update", "-g", "@jboho/safe-pnpm"]);
 add("node spawn", [
   "node",
   "-e",
-  "const r = require('node:child_process').spawnSync('pnpm', ['dlx', 'mal-pkg'], { stdio: 'inherit' }); process.exit(r.status);",
+  "const r = require('node:child_process').spawnSync('pnpm', ['dlx', 'mal-pkg@1.2.3'], { stdio: 'inherit' }); process.exit(r.status);",
 ]);
 add(
   "stdin",
@@ -87,7 +90,7 @@ add(
   ps1("& /w/home/.safe-pnpm/bin/pnpm.ps1 run build 'a b' '' 'q\"q'"),
   { STUB_EXIT: "4" },
 );
-add("ps1 mal", ps1("& /w/home/.safe-pnpm/bin/npx.ps1 mal-pkg"));
+add("ps1 mal", ps1("& /w/home/.safe-pnpm/bin/npx.ps1 mal-pkg@1.2.3"));
 
 const DRIVER = `
 const { spawnSync } = require("node:child_process");
@@ -121,11 +124,9 @@ const cases = require("/w/cases.json");
 `;
 
 const STUB = (name) => `#!/bin/sh
-if [ "${name}" = npm ] && [ "$1" = view ]; then echo '"1.2.3"'; exit 0; fi
-if [ "${name}" = npm ] && [ "$1" = prefix ]; then exit 0; fi
 { echo "RAN ${name}"; for a in "$@"; do printf '%s\\n' "$a"; done; } >> "$STUB_LOG"
 if [ "${name}" = pnpm ] && [ "$1" = run ] && [ "$2" = nested ]; then
-  pnpm dlx mal-pkg
+  pnpm dlx mal-pkg@1.2.3
   exit $?
 fi
 if [ "${name}" = pnpm ] && [ "$1" = run ] && [ "$2" = echo ]; then
@@ -252,7 +253,7 @@ test("ps1 shim: a clean dlx reaches the real binary and only its output is on st
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, "STUB OUT\n");
   assert.match(r.stderr, /none known malicious/);
-  assert.equal(r.calls, "RAN pnpm\ndlx\ncowsay@latest\n");
+  assert.equal(r.calls, "RAN pnpm\ndlx\ncowsay@1.6.0\n");
 });
 
 test("ps1 shim: argv reaches the real binary unchanged and the exit code passes through", {
