@@ -67,7 +67,7 @@ function global:yarn {
 
     # A missing function is a non-terminating error in PowerShell, so a check
     # that calls one would print it and let the install through.
-    if (@(Get-Command _Safe_Pkg_Is_Global, _Safe_Pkg_Dir_Flag, _Safe_Pkg_Quote_Args -ErrorAction SilentlyContinue).Count -ne 3) {
+    if (@(Get-Command _Safe_Pkg_Is_Global, _Safe_Pkg_Dir_Flag, _Safe_Pkg_Quote_Args, _Safe_Pkg_Yarn_Berry -ErrorAction SilentlyContinue).Count -ne 4) {
         Write-Host "✗ safe-pnpm: _safe_pkg_shared.ps1 is missing or out of date; run safe-pnpm update." -ForegroundColor Red
         $global:LASTEXITCODE = 1
         throw 'safe-pnpm: command refused'
@@ -95,6 +95,14 @@ function global:yarn {
     if ($dirFlag) {
         Write-Host "✗ safe-pnpm: $dirFlag is not supported through the wrapper; the scan checks this directory's lockfile, so an install in another directory would go unchecked." -ForegroundColor Red
         Write-Host "  cd into that directory and run the command there. To run it without the safety checks: $(_Safe_Pkg_Bypass yarn) $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
+        $global:LASTEXITCODE = 1
+        throw 'safe-pnpm: command refused'
+    }
+
+    $berry = _Safe_Pkg_Yarn_Berry -Dir (Get-Location).Path
+    if ($berry) {
+        Write-Host "✗ safe-pnpm: $berry, and the wrapper supports Yarn 1 projects only: its sandbox runs Yarn 1, which would resolve every version again and replace yarn.lock with a Yarn 1 lockfile." -ForegroundColor Red
+        Write-Host "  To run it without the safety checks: $(_Safe_Pkg_Bypass yarn) $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
         $global:LASTEXITCODE = 1
         throw 'safe-pnpm: command refused'
     }

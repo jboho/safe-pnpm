@@ -96,7 +96,7 @@ function yarn
 
     # An older _safe_pkg_prescan.fish lacks some of the checks below, and each
     # would then be an unknown command that lets the install through.
-    if not functions -q _safe_pkg_prescan _safe_pkg_is_global _safe_pkg_dir_flag
+    if not functions -q _safe_pkg_prescan _safe_pkg_is_global _safe_pkg_dir_flag _safe_pkg_yarn_berry
         echo "✗ safe-pnpm: _safe_pkg_prescan.fish is missing or out of date; run safe-pnpm update." >&2
         return 1
     end
@@ -124,6 +124,13 @@ function yarn
     else if test $dir_status -eq 0
         echo "✗ safe-pnpm: $dir_flag is not supported through the wrapper; the scan checks this directory's lockfile, so an install in another directory would go unchecked." >&2
         echo "  cd into that directory and run the command there. To run it without the safety checks: command yarn "(string join ' ' -- (string escape -- $pass_args)) >&2
+        return 1
+    end
+
+    set -l berry (_safe_pkg_yarn_berry $PWD)
+    if test $status -eq 0
+        echo "✗ safe-pnpm: $berry, and the wrapper supports Yarn 1 projects only: its sandbox runs Yarn 1, which would resolve every version again and replace yarn.lock with a Yarn 1 lockfile." >&2
+        echo "  To run it without the safety checks: command yarn "(string join ' ' -- (string escape -- $pass_args)) >&2
         return 1
     end
 

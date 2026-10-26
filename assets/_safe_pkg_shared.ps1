@@ -212,6 +212,28 @@ function _Safe_Pkg_Quote_Args {
     }) -join ' '
 }
 
+# Returns what marks Dir as a Yarn 2+ (Berry) project, or $null. See
+# _safe_pkg_yarn_berry in _safe_pkg_shared.sh.
+function _Safe_Pkg_Yarn_Berry {
+    param([string]$Dir)
+    $lock = Join-Path $Dir 'yarn.lock'
+    if ((Test-Path -LiteralPath $lock) -and (@(Get-Content -LiteralPath $lock) -cmatch '^__metadata:').Count) {
+        return "$lock is a Yarn 2+ lockfile"
+    }
+    $rc = Join-Path $Dir '.yarnrc.yml'
+    if (Test-Path -LiteralPath $rc) { return "$rc is a Yarn 2+ settings file" }
+    $pkg = Join-Path $Dir 'package.json'
+    if (Test-Path -LiteralPath $pkg) {
+        foreach ($line in Get-Content -LiteralPath $pkg) {
+            if ($line -cmatch '"packageManager"\s*:\s*"(yarn@(\d+)[\d.]*)') {
+                if ([int]$Matches[2] -ge 2) { return "$pkg sets packageManager to $($Matches[1].TrimEnd('.'))" }
+                break
+            }
+        }
+    }
+    return $null
+}
+
 # Returns the file and key of the first setting in Dir's .npmrc or
 # pnpm-workspace.yaml that moves pnpm's lockfile, or $null. See
 # _safe_pkg_lockfile_dir_setting in _safe_pkg_shared.sh.

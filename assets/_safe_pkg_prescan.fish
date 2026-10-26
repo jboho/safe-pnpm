@@ -728,3 +728,25 @@ function _safe_pkg_unshared_lockfile_setting --argument dir root
     end
     return 1
 end
+
+# _safe_pkg_yarn_berry dir
+#   Prints what marks dir as a Yarn 2+ (Berry) project and succeeds; fails
+#   when nothing does. See _safe_pkg_yarn_berry in _safe_pkg_shared.sh.
+function _safe_pkg_yarn_berry --argument dir
+    if test -f "$dir/yarn.lock"; and string match -qr -- '^__metadata:' <"$dir/yarn.lock"
+        echo "$dir/yarn.lock is a Yarn 2+ lockfile"
+        return 0
+    end
+    if test -f "$dir/.yarnrc.yml"
+        echo "$dir/.yarnrc.yml is a Yarn 2+ settings file"
+        return 0
+    end
+    if test -f "$dir/package.json"
+        set -l m (string match -r -- '"packageManager"\s*:\s*"(yarn@([0-9]+)[0-9.]*)' <"$dir/package.json")
+        if set -q m[3]; and test $m[3] -ge 2
+            echo "$dir/package.json sets packageManager to "(string trim -r -c . -- $m[2])
+            return 0
+        end
+    end
+    return 1
+end
