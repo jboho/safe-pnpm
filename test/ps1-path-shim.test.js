@@ -53,7 +53,7 @@ add("pnpx mal", ["pnpx", "mal-pkg"]);
 add("npx mal", ["npx", "mal-pkg"]);
 add("npm exec mal", ["npm", "exec", "mal-pkg"]);
 add("yarn dlx mal", ["yarn", "dlx", "mal-pkg"]);
-add("dlx clean", ["pnpm", "dlx", "cowsay"]);
+add("dlx clean", ["pnpm", "dlx", "cowsay@latest"]);
 add("argv 0", ["pnpm", ...ARGS]);
 add("argv 7", ["pnpm", ...ARGS], { STUB_EXIT: "7" });
 add("yarn exit 3", ["yarn", "run", "x y"], { STUB_EXIT: "3" });
@@ -122,6 +122,7 @@ const cases = require("/w/cases.json");
 
 const STUB = (name) => `#!/bin/sh
 if [ "${name}" = npm ] && [ "$1" = view ]; then echo '"1.2.3"'; exit 0; fi
+if [ "${name}" = npm ] && [ "$1" = prefix ]; then exit 0; fi
 { echo "RAN ${name}"; for a in "$@"; do printf '%s\\n' "$a"; done; } >> "$STUB_LOG"
 if [ "${name}" = pnpm ] && [ "$1" = run ] && [ "$2" = nested ]; then
   pnpm dlx mal-pkg
@@ -251,7 +252,7 @@ test("ps1 shim: a clean dlx reaches the real binary and only its output is on st
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, "STUB OUT\n");
   assert.match(r.stderr, /none known malicious/);
-  assert.equal(r.calls, "RAN pnpm\ndlx\ncowsay\n");
+  assert.equal(r.calls, "RAN pnpm\ndlx\ncowsay@latest\n");
 });
 
 test("ps1 shim: argv reaches the real binary unchanged and the exit code passes through", {

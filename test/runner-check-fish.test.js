@@ -145,6 +145,7 @@ before(async () => {
     path.join(bin, "npm"),
     `#!/bin/sh
 echo "npm $*" >> "${log}"
+if [ "$1" = prefix ]; then echo "$NPM_PREFIX"; exit 0; fi
 if [ "$1" = view ]; then
   case "$4" in
     unknown-*) echo "npm error code E404" >&2; exit 1 ;;
@@ -204,12 +205,12 @@ ${line}`;
 }
 
 test("fish: npx of a clean package checks it, then runs it", opts, () => {
-  const r = run("npm-wrapper.fish", "npx cowsay hi");
+  const r = run("npm-wrapper.fish", "npx cowsay@latest hi");
   assert.equal(r.status, 0, r.out);
   assert.match(r.out, /→ Malware scan \(OSV\)/);
   assert.match(r.out, /✓ 1 package checked against OSV; none known malicious/);
-  assert.match(r.calls, /npm view --json -- cowsay version/);
-  assert.match(r.calls, /RAN npx cowsay hi/);
+  assert.match(r.calls, /npm view --json -- cowsay@latest version/);
+  assert.match(r.calls, /RAN npx cowsay@latest hi/);
 });
 
 test("fish: pnpx is checked like pnpm dlx before it runs", opts, () => {
@@ -217,10 +218,10 @@ test("fish: pnpx is checked like pnpm dlx before it runs", opts, () => {
   assert.equal(bad.status, 1, bad.out);
   assert.match(bad.out, /mal-pkg@1\.2\.3\s+MAL-2099-1/);
   assert.doesNotMatch(bad.calls, /RAN/);
-  const ok = run("pnpm-wrapper.fish", "pnpx cowsay hi");
+  const ok = run("pnpm-wrapper.fish", "pnpx cowsay@^1 hi");
   assert.equal(ok.status, 0, ok.out);
-  assert.match(ok.calls, /npm view --json -- cowsay version/);
-  assert.match(ok.calls, /RAN pnpx cowsay hi/);
+  assert.match(ok.calls, /npm view --json -- cowsay@\^1 version/);
+  assert.match(ok.calls, /RAN pnpx cowsay@\^1 hi/);
 });
 
 // On a disk that ignores case (macOS by default) fish finds the real program
@@ -282,12 +283,12 @@ test(
     const y = run("yarn-wrapper.fish", "yarn dlx mal-pkg");
     assert.equal(y.status, 1, y.out);
     assert.doesNotMatch(y.calls, /RAN|DOCKER/);
-    const ok = run("pnpm-wrapper.fish", "pnpm dlx cowsay");
+    const ok = run("pnpm-wrapper.fish", "pnpm dlx cowsay@latest");
     assert.equal(ok.status, 0, ok.out);
-    assert.match(ok.calls, /RAN pnpm dlx cowsay/);
-    const yok = run("yarn-wrapper.fish", "yarn dlx cowsay");
+    assert.match(ok.calls, /RAN pnpm dlx cowsay@latest/);
+    const yok = run("yarn-wrapper.fish", "yarn dlx cowsay@latest");
     assert.equal(yok.status, 0, yok.out);
-    assert.match(yok.calls, /RAN yarn dlx cowsay/);
+    assert.match(yok.calls, /RAN yarn dlx cowsay@latest/);
   },
 );
 
@@ -338,10 +339,40 @@ test(
   "fish: a package the registry does not have is noted and the command still runs",
   opts,
   () => {
-    const r = run("npm-wrapper.fish", "npx unknown-pkg");
+    const r = run("npm-wrapper.fish", "npx unknown-pkg@latest");
     assert.equal(r.status, 0, r.out);
     assert.match(r.out, /0 packages checked.*1 not checked/);
-    assert.match(r.calls, /RAN npx unknown-pkg/);
+    assert.match(r.calls, /RAN npx unknown-pkg@latest/);
+  },
+);
+
+test(
+  "fish: npx, pnpm dlx and yarn dlx with no version are refused unless npx finds it installed",
+  opts,
+  () => {
+    for (const [wrapper, line] of [
+      ["npm-wrapper.fish", "npx cowsay hi"],
+      ["npm-wrapper.fish", "npm exec cowsay"],
+      ["pnpm-wrapper.fish", "pnpm dlx cowsay"],
+      ["yarn-wrapper.fish", "yarn dlx cowsay"],
+    ]) {
+      const r = run(wrapper, line);
+      assert.equal(r.status, 1, `${line}\n${r.out}`);
+      assert.match(r.out, /cowsay names no version and would be downloaded/, line);
+      assert.doesNotMatch(r.calls, /RAN/, line);
+    }
+    const bin = path.join(root, "node_modules", ".bin");
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, "cowsay"), "");
+    try {
+      const ok = run("npm-wrapper.fish", "npx cowsay hi");
+      assert.equal(ok.status, 0, ok.out);
+      assert.match(ok.calls, /RAN npx cowsay hi/);
+      const dlx = run("pnpm-wrapper.fish", "pnpm dlx cowsay");
+      assert.equal(dlx.status, 1, dlx.out);
+    } finally {
+      fs.rmSync(path.join(root, "node_modules"), { recursive: true, force: true });
+    }
   },
 );
 
@@ -357,15 +388,15 @@ test(
   opts,
   () => {
     const dead = { SAFE_PNPM_OSV_API: "http://127.0.0.1:1" };
-    const warn = run("npm-wrapper.fish", "npx cowsay", dead);
+    const warn = run("npm-wrapper.fish", "npx cowsay@latest", dead);
     assert.equal(warn.status, 0, warn.out);
     assert.match(
       warn.out,
       /⚠️ {2}Malware scan could not run: could not reach OSV.*Continuing without it\./s,
     );
-    assert.match(warn.calls, /RAN npx cowsay/);
+    assert.match(warn.calls, /RAN npx cowsay@latest/);
     for (const flag of ["SAFE_PNPM_OSV_STRICT", "SAFE_PNPM_STRICT"]) {
-      const strict = run("npm-wrapper.fish", "npx cowsay", {
+      const strict = run("npm-wrapper.fish", "npx cowsay@latest", {
         ...dead,
         [flag]: "1",
       });
@@ -388,15 +419,15 @@ test(
   () => {
     for (const mode of ["badjson", "http500", "short"]) {
       const api = { SAFE_PNPM_OSV_API: `${osv.url}/${mode}` };
-      const warn = run("pnpm-wrapper.fish", "pnpm dlx cowsay", api);
+      const warn = run("pnpm-wrapper.fish", "pnpm dlx cowsay@latest", api);
       assert.equal(warn.status, 0, `${mode}: ${warn.out}`);
       assert.match(
         warn.out,
         /Malware scan could not run: .*Continuing without it\./s,
         mode,
       );
-      assert.match(warn.calls, /RAN pnpm dlx cowsay/, mode);
-      const strict = run("pnpm-wrapper.fish", "pnpm dlx cowsay", {
+      assert.match(warn.calls, /RAN pnpm dlx cowsay@latest/, mode);
+      const strict = run("pnpm-wrapper.fish", "pnpm dlx cowsay@latest", {
         ...api,
         SAFE_PNPM_OSV_STRICT: "1",
       });
@@ -411,10 +442,10 @@ test(
   "fish: a failed version lookup counts as a scan failure, not a pass",
   opts,
   () => {
-    const warn = run("npm-wrapper.fish", "npx broken-pkg");
+    const warn = run("npm-wrapper.fish", "npx broken-pkg@latest");
     assert.equal(warn.status, 0, warn.out);
     assert.match(warn.out, /could not look up broken-pkg/);
-    const strict = run("npm-wrapper.fish", "npx broken-pkg", {
+    const strict = run("npm-wrapper.fish", "npx broken-pkg@latest", {
       SAFE_PNPM_OSV_STRICT: "1",
     });
     assert.equal(strict.status, 1, strict.out);
@@ -512,9 +543,9 @@ test(
     assert.equal(bad.status, 1, bad.out);
     assert.match(bad.out, /no package code was executed/);
     assert.doesNotMatch(bad.calls, /RAN/);
-    const ok = runInstalled("npx cowsay");
+    const ok = runInstalled("npx cowsay@latest");
     assert.equal(ok.status, 0, ok.out);
-    assert.match(ok.calls, /RAN npx cowsay/);
+    assert.match(ok.calls, /RAN npx cowsay@latest/);
     const dlx = runInstalled("pnpm dlx mal-pkg");
     assert.equal(dlx.status, 1, dlx.out);
     assert.doesNotMatch(dlx.calls, /RAN/);

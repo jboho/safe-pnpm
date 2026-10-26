@@ -487,7 +487,9 @@ function _Safe_Pkg_Runner_Tail {
         }
         return
     }
-    if ($pkgList.Count) { $pkgList } else { $pos }
+    # The tag tells malware-scan.js to refuse a spec that names no version.
+    $tag = if ($Manager -eq 'npm') { 'exec-npm:' } else { 'exec-dlx:' }
+    foreach ($spec in $(if ($pkgList.Count) { $pkgList } else { $pos })) { if ($spec) { "$tag$spec" } }
 }
 
 # Runs before a download-and-run command: $true at once for any other command,

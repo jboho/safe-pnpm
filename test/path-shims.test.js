@@ -16,8 +16,8 @@ const TIMEOUT = 30000;
 // A throwaway HOME with the wrappers and the shims installed, and a "real"
 // bin directory after the shim directory on PATH. The real stubs log their
 // argv one per line, print STUB OUT on stdout and exit with $STUB_EXIT. The
-// stub npm also answers `npm view`, which the scanner runs by name, so that
-// lookup goes through the npm shim as well.
+// stub npm also answers `npm view` and `npm prefix -g`, which the scanner runs
+// by name, so those lookups go through the npm shim as well.
 let osv;
 let root;
 let home;
@@ -48,6 +48,7 @@ before(async () => {
       path.join(real, name),
       `#!/bin/sh
 if [ "${name}" = npm ] && [ "$1" = view ]; then echo '"1.2.3"'; exit 0; fi
+if [ "${name}" = npm ] && [ "$1" = prefix ]; then exit 0; fi
 { echo "RAN ${name}"; for a in "$@"; do printf '%s\\n' "$a"; done; } >> "${log}"
 if [ "${name}" = pnpm ] && [ "$1" = run ] && [ "$2" = nested ]; then
   pnpm install --global left-pad
@@ -111,11 +112,11 @@ test("every shim name runs its wrapper's check", () => {
 });
 
 test("a clean dlx reaches the real binary and only its output is on stdout", () => {
-  const r = run("pnpm", ["dlx", "cowsay"]);
+  const r = run("pnpm", ["dlx", "cowsay@latest"]);
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, "STUB OUT\n");
   assert.match(r.stderr, /none known malicious/);
-  assert.equal(r.calls, "RAN pnpm\ndlx\ncowsay\n");
+  assert.equal(r.calls, "RAN pnpm\ndlx\ncowsay@latest\n");
 });
 
 test("an allowed command passes argv through unchanged and keeps the exit code", () => {

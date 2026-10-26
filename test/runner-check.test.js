@@ -117,6 +117,7 @@ before(async () => {
     path.join(bin, "npm"),
     `#!/bin/sh
 echo "npm $*" >> "${log}"
+if [ "$1" = prefix ]; then echo "$NPM_PREFIX"; exit 0; fi
 if [ "$1" = view ]; then
   case "$4" in
     unknown-*) echo "npm error code E404" >&2; exit 1 ;;
@@ -157,11 +158,11 @@ function run(wrapper, line, extraEnv = {}, shell = "bash") {
 }
 
 test("npx of a clean package checks it, then runs it", () => {
-  const r = run("npm-wrapper.sh", "npx cowsay hi");
+  const r = run("npm-wrapper.sh", "npx cowsay@latest hi");
   assert.equal(r.status, 0, r.out);
   assert.match(r.out, /1 package checked against OSV; none known malicious/);
-  assert.match(r.calls, /npm view --json -- cowsay version/);
-  assert.match(r.calls, /RAN npx cowsay hi/);
+  assert.match(r.calls, /npm view --json -- cowsay@latest version/);
+  assert.match(r.calls, /RAN npx cowsay@latest hi/);
 });
 
 test("pnpx is checked like pnpm dlx before it runs", () => {
@@ -169,10 +170,10 @@ test("pnpx is checked like pnpm dlx before it runs", () => {
   assert.equal(bad.status, 1, bad.out);
   assert.match(bad.out, /mal-pkg@1\.2\.3\s+MAL-2099-1/);
   assert.doesNotMatch(bad.calls, /RAN/);
-  const ok = run("pnpm-wrapper.sh", "pnpx cowsay hi");
+  const ok = run("pnpm-wrapper.sh", "pnpx cowsay@^1 hi");
   assert.equal(ok.status, 0, ok.out);
-  assert.match(ok.calls, /npm view --json -- cowsay version/);
-  assert.match(ok.calls, /RAN pnpx cowsay hi/);
+  assert.match(ok.calls, /npm view --json -- cowsay@\^1 version/);
+  assert.match(ok.calls, /RAN pnpx cowsay@\^1 hi/);
 });
 
 // On a disk that ignores case (macOS by default) the shell finds the real
@@ -220,9 +221,9 @@ test("pnpm dlx and yarn dlx are checked before they run", () => {
   const y = run("yarn-wrapper.sh", "yarn dlx mal-pkg");
   assert.equal(y.status, 1, y.out);
   assert.doesNotMatch(y.calls, /RAN/);
-  const ok = run("pnpm-wrapper.sh", "pnpm dlx cowsay");
+  const ok = run("pnpm-wrapper.sh", "pnpm dlx cowsay@latest");
   assert.equal(ok.status, 0, ok.out);
-  assert.match(ok.calls, /RAN pnpm dlx cowsay/);
+  assert.match(ok.calls, /RAN pnpm dlx cowsay@latest/);
 });
 
 test("create commands check the create- package the manager would fetch", () => {
@@ -235,10 +236,10 @@ test("create commands check the create- package the manager would fetch", () => 
 });
 
 test("a package the registry does not have is noted and the command still runs", () => {
-  const r = run("npm-wrapper.sh", "npx unknown-pkg");
+  const r = run("npm-wrapper.sh", "npx unknown-pkg@latest");
   assert.equal(r.status, 0, r.out);
   assert.match(r.out, /0 packages checked.*1 not checked/);
-  assert.match(r.calls, /RAN npx unknown-pkg/);
+  assert.match(r.calls, /RAN npx unknown-pkg@latest/);
 });
 
 test("a local path is not sent to npm view or OSV", () => {
@@ -250,20 +251,20 @@ test("a local path is not sent to npm view or OSV", () => {
 
 test("an unreachable OSV warns and runs; strict mode blocks", () => {
   const dead = { SAFE_PNPM_OSV_API: "http://127.0.0.1:1" };
-  const warn = run("npm-wrapper.sh", "npx cowsay", dead);
+  const warn = run("npm-wrapper.sh", "npx cowsay@latest", dead);
   assert.equal(warn.status, 0, warn.out);
   assert.match(warn.out, /could not reach OSV.*Continuing without it/s);
-  assert.match(warn.calls, /RAN npx cowsay/);
-  const strict = run("npm-wrapper.sh", "npx cowsay", { ...dead, SAFE_PNPM_OSV_STRICT: "1" });
+  assert.match(warn.calls, /RAN npx cowsay@latest/);
+  const strict = run("npm-wrapper.sh", "npx cowsay@latest", { ...dead, SAFE_PNPM_OSV_STRICT: "1" });
   assert.equal(strict.status, 1, strict.out);
   assert.doesNotMatch(strict.calls, /RAN/);
 });
 
 test("a failed version lookup counts as a scan failure, not a pass", () => {
-  const warn = run("npm-wrapper.sh", "npx broken-pkg");
+  const warn = run("npm-wrapper.sh", "npx broken-pkg@latest");
   assert.equal(warn.status, 0, warn.out);
   assert.match(warn.out, /could not look up broken-pkg/);
-  const strict = run("npm-wrapper.sh", "npx broken-pkg", { SAFE_PNPM_OSV_STRICT: "1" });
+  const strict = run("npm-wrapper.sh", "npx broken-pkg@latest", { SAFE_PNPM_OSV_STRICT: "1" });
   assert.equal(strict.status, 1, strict.out);
   assert.doesNotMatch(strict.calls, /RAN/);
 });
@@ -272,4 +273,121 @@ test("commands that run no downloaded package skip the check", () => {
   const r = run("npm-wrapper.sh", "npm run build");
   assert.equal(r.status, 0, r.out);
   assert.doesNotMatch(r.calls, /npm view/);
+});
+
+// Issue 100: with no version, npx of a command that is not installed would
+// download whatever the registry has under that name, which may be a
+// placeholder OSV knows nothing about (npx tsc fetches tsc, not TypeScript).
+const UNPINNED = /cowsay names no version and would be downloaded/;
+
+function withFile(file, fn) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, "");
+  try {
+    return fn();
+  } finally {
+    fs.rmSync(path.join(root, "node_modules"), { recursive: true, force: true });
+    fs.rmSync(path.join(root, "global"), { recursive: true, force: true });
+  }
+}
+
+test("npx, npm exec, pnpm dlx and yarn dlx with no version are refused when not installed", () => {
+  for (const [wrapper, line] of [
+    ["npm-wrapper.sh", "npx cowsay hi"],
+    ["npm-wrapper.sh", "npm exec cowsay"],
+    ["npm-wrapper.sh", "npx --package cowsay say"],
+    ["pnpm-wrapper.sh", "pnpm dlx cowsay"],
+    ["pnpm-wrapper.sh", "pnpx cowsay"],
+    ["yarn-wrapper.sh", "yarn dlx cowsay"],
+  ]) {
+    const r = run(wrapper, line);
+    assert.equal(r.status, 1, `${line}\n${r.out}`);
+    assert.match(r.out, UNPINNED, line);
+    assert.match(r.out, /cowsay@1\.2\.3, or @latest/, line);
+    assert.match(r.out, /no package code was executed/, line);
+    assert.doesNotMatch(r.calls, /RAN/, line);
+  }
+});
+
+test("a malicious unpinned package is reported as malware, not as unpinned", () => {
+  const r = run("npm-wrapper.sh", "npx mal-pkg");
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /mal-pkg@1\.2\.3\s+MAL-2099-1/);
+  assert.doesNotMatch(r.out, /names no version/);
+});
+
+test("the unpinned refusal holds when OSV cannot be reached", () => {
+  const r = run("npm-wrapper.sh", "npx cowsay", { SAFE_PNPM_OSV_API: "http://127.0.0.1:1" });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /could not reach OSV/);
+  assert.match(r.out, UNPINNED);
+  assert.doesNotMatch(r.calls, /RAN/);
+});
+
+test("npx with no version runs a command installed in the project, a parent or globally", () => {
+  for (const file of [
+    path.join(root, "node_modules", ".bin", "cowsay"),
+    path.join(root, "node_modules", "cowsay", "package.json"),
+  ]) {
+    withFile(file, () => {
+      const r = run("npm-wrapper.sh", "npx cowsay hi");
+      assert.equal(r.status, 0, `${file}\n${r.out}`);
+      assert.match(r.calls, /RAN npx cowsay hi/, file);
+    });
+  }
+  const sub = path.join(root, "pkg", "sub");
+  fs.mkdirSync(sub, { recursive: true });
+  withFile(path.join(root, "node_modules", ".bin", "cowsay"), () => {
+    fs.writeFileSync(log, "");
+    const r = spawnSync("bash", ["-c", 'source "$HOME/.safe-pnpm/npm-wrapper.sh"; npx cowsay'], {
+      encoding: "utf8",
+      env,
+      cwd: sub,
+    });
+    assert.equal(r.status, 0, `${r.stdout}${r.stderr}`);
+  });
+  const prefix = path.join(root, "global");
+  for (const file of [path.join(prefix, "bin", "cowsay"), path.join(prefix, "lib", "node_modules", "cowsay", "package.json")]) {
+    withFile(file, () => {
+      const r = run("npm-wrapper.sh", "npx cowsay", { NPM_PREFIX: prefix });
+      assert.equal(r.status, 0, `${file}\n${r.out}`);
+      assert.match(r.calls, /npm prefix -g/);
+    });
+  }
+});
+
+test("--package with no version is refused unless that package is installed", () => {
+  const bad = run("npm-wrapper.sh", "npx --package cowsay say");
+  assert.equal(bad.status, 1, bad.out);
+  withFile(path.join(root, "node_modules", "cowsay", "package.json"), () => {
+    const ok = run("npm-wrapper.sh", "npx --package cowsay say");
+    assert.equal(ok.status, 0, ok.out);
+  });
+  const pinned = run("npm-wrapper.sh", "npx --package cowsay@1.5.0 say");
+  assert.equal(pinned.status, 0, pinned.out);
+});
+
+test("pnpm dlx and yarn dlx always download, so an installed copy does not count", () => {
+  withFile(path.join(root, "node_modules", ".bin", "cowsay"), () => {
+    for (const [wrapper, line] of [
+      ["pnpm-wrapper.sh", "pnpm dlx cowsay"],
+      ["yarn-wrapper.sh", "yarn dlx cowsay"],
+    ]) {
+      const r = run(wrapper, line);
+      assert.equal(r.status, 1, `${line}\n${r.out}`);
+      assert.match(r.out, UNPINNED, line);
+    }
+  });
+});
+
+test("create commands and paths are not refused for having no version", () => {
+  for (const [wrapper, line] of [
+    ["npm-wrapper.sh", "npm create vite"],
+    ["pnpm-wrapper.sh", "pnpm create vite app"],
+    ["npm-wrapper.sh", "npx ./local-tool"],
+  ]) {
+    const r = run(wrapper, line);
+    assert.equal(r.status, 0, `${line}\n${r.out}`);
+    assert.doesNotMatch(r.out, /names no version/, line);
+  }
 });
