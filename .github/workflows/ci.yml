@@ -57,18 +57,36 @@ jobs:
       - name: Put Podman behind a docker shim
         if: matrix.engine == 'podman'
         run: |
+          # The tests move HOME, and rootless Podman keeps its images under
+          # HOME, so the shim pins the runner's own.
           mkdir -p "$RUNNER_TEMP/shim"
-          printf '#!/bin/sh\nexec podman "$@"\n' > "$RUNNER_TEMP/shim/docker"
+          printf '#!/bin/sh\nHOME=%s exec podman "$@"\n' "$HOME" > "$RUNNER_TEMP/shim/docker"
           chmod +x "$RUNNER_TEMP/shim/docker"
           echo "$RUNNER_TEMP/shim" >> "$GITHUB_PATH"
           podman version
           podman info --format 'rootless={{.Host.Security.Rootless}}'
       - name: Start rootless Docker
         if: matrix.engine == 'docker'
+        env:
+          # Ubuntu's archive has no rootless extras, so the static release.
+          # download.docker.com publishes no checksums; these are the files
+          # as first fetched.
+          DOCKER_VERSION: 29.8.2
+          DOCKER_SHA256: 995d1ef289677f74fd58d8d2c35727b6a4ee389c69db8638a3e42d0487aa5b0f
+          EXTRAS_SHA256: 707ebf6a5afd88104086e7b6749997b2366e816aeaf2c3ef2305b08fde9ee007
         run: |
           # Ubuntu 24.04's AppArmor blocks the user namespace rootlesskit needs.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          command -v dockerd-rootless.sh || sudo apt-get install -y docker-ce-rootless-extras uidmap
+          command -v newuidmap || sudo apt-get install -y uidmap
+          cd "$RUNNER_TEMP"
+          base=https://download.docker.com/linux/static/stable/x86_64
+          curl -fsSLO "$base/docker-$DOCKER_VERSION.tgz"
+          curl -fsSLO "$base/docker-rootless-extras-$DOCKER_VERSION.tgz"
+          printf '%s  %s\n' "$DOCKER_SHA256" "docker-$DOCKER_VERSION.tgz" \
+            "$EXTRAS_SHA256" "docker-rootless-extras-$DOCKER_VERSION.tgz" | sha256sum -c
+          tar -xzf "docker-$DOCKER_VERSION.tgz"
+          tar -xzf "docker-rootless-extras-$DOCKER_VERSION.tgz"
+          export PATH="$RUNNER_TEMP/docker-rootless-extras:$RUNNER_TEMP/docker:$PATH"
           export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg"
           mkdir -p "$XDG_RUNTIME_DIR"
           nohup dockerd-rootless.sh > "$RUNNER_TEMP/dockerd-rootless.log" 2>&1 &
