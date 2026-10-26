@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const ASSETS_DIR = path.join(__dirname, "..", "assets");
+const { ASSETS_DIR, wrapperInstall } = require("./helpers/wrapper-install");
 const IMAGE = "safe-pnpm-e2e-test";
 const LOCKFILES = {
   npm: "package-lock.json",
@@ -16,9 +16,6 @@ const LOCKFILES = {
 const hasDocker =
   spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0;
 const skip = hasDocker ? false : "docker not available";
-const realDocker = spawnSync("sh", ["-c", "command -v docker"], {
-  encoding: "utf8",
-}).stdout.trim();
 
 let tmp;
 before(() => {
@@ -32,79 +29,10 @@ before(() => {
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
 // Runs `<manager> install` through the bash wrapper against the image built
-// from assets/Dockerfile. A shim in front of docker swaps the image tag for the
-// test build and logs each `docker run`, so the test sees the exact flags the
-// wrapper passed. The project has no dependencies, so nothing is downloaded.
-// opts.pkg replaces the project's package.json text; opts.mac puts a `uname`
-// reporting Darwin arm64 in front, so the macOS host path runs on any host.
-function install(manager, opts = {}) {
-  const root = fs.mkdtempSync(path.join(tmp, `${manager}-`));
-  const bin = path.join(root, "bin");
-  const proj = path.join(root, "proj");
-  const home = path.join(root, "home");
-  for (const d of [bin, proj, path.join(home, ".safe-pnpm")]) {
-    fs.mkdirSync(d, { recursive: true });
-  }
-  for (const f of ["link-check.js", "pnpm-arch.js"]) {
-    fs.copyFileSync(path.join(ASSETS_DIR, f), path.join(home, ".safe-pnpm", f));
-  }
-  if (opts.mac) {
-    fs.writeFileSync(
-      path.join(bin, "uname"),
-      '#!/bin/sh\nif [ "$1" = -m ]; then echo arm64; else echo Darwin; fi\n',
-      { mode: 0o755 },
-    );
-  }
-  const log = path.join(root, "docker-runs.log");
-  fs.writeFileSync(
-    path.join(bin, "docker"),
-    [
-      "#!/bin/sh",
-      `for a in "$@"; do shift; [ "$a" = safe-pnpm:latest ] && a=${IMAGE}; set -- "$@" "$a"; done`,
-      `[ "$1" = run ] && echo "$@" >> "${log}"`,
-      `exec "${realDocker}" "$@"`,
-      "",
-    ].join("\n"),
-    { mode: 0o755 },
-  );
-  // The host's own npm/pnpm/yarn would query the registry; these stubs keep
-  // the run offline apart from the container fetch.
-  for (const m of ["npm", "pnpm", "yarn"]) {
-    fs.writeFileSync(path.join(bin, m), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-  }
-  fs.writeFileSync(
-    path.join(proj, "package.json"),
-    opts.pkg ??
-      JSON.stringify({ name: "e2e", version: "1.0.0", private: true }),
-  );
-  // Paths go in through the environment, not the script text or argv, so a
-  // TMPDIR containing quotes or `$` can't change what bash runs. CodeQL
-  // counts every `bash -c` argv element as command text, so argv isn't enough.
-  const script =
-    'source "$SAFE_E2E_ASSETS/_safe_pkg_shared.sh"; source "$SAFE_E2E_ASSETS/$SAFE_E2E_MANAGER-wrapper.sh"; cd "$SAFE_E2E_PROJ"; "$SAFE_E2E_MANAGER" install </dev/null';
-  const r = spawnSync("bash", ["-c", script], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      SAFE_E2E_ASSETS: ASSETS_DIR,
-      SAFE_E2E_MANAGER: manager,
-      SAFE_E2E_PROJ: proj,
-      PATH: `${bin}:${process.env.PATH}`,
-      HOME: home,
-      // HOME moved, so point the docker CLI back at the real context config.
-      DOCKER_CONFIG:
-        process.env.DOCKER_CONFIG ?? path.join(os.homedir(), ".docker"),
-      NPM_TOKEN: "",
-      NODE_AUTH_TOKEN: "",
-      SAFE_PNPM_STRICT: "",
-      SAFE_PNPM_OSV_STRICT: "",
-    },
-  });
-  const runs = fs.existsSync(log)
-    ? fs.readFileSync(log, "utf8").trim().split("\n")
-    : [];
-  return { r, proj, runs };
-}
+// from assets/Dockerfile. The project has no dependencies, so nothing is
+// downloaded.
+const install = (manager, opts = {}) =>
+  wrapperInstall({ tmp, image: IMAGE, manager, ...opts });
 
 for (const manager of ["npm", "pnpm", "yarn"]) {
   test(`${manager}: a real install runs both containers as the host user`, { skip }, () => {

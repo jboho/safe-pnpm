@@ -38,3 +38,69 @@ jobs:
           node-version: '22'
       - run: npm ci
       - run: node --test test/windows-shims.test.js test/windows-cmd-shims.test.js test/wrappers.test.js
+
+  # Real installs under a rootless daemon (issue 99): Podman, which
+  # ubuntu-latest ships rootless, behind a `docker` shim, and rootless Docker
+  # started next to the runner's rootful one. A separate job, so a daemon that
+  # fails to start doesn't hide the unit-test results.
+  rootless:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [podman, docker]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      - name: Put Podman behind a docker shim
+        if: matrix.engine == 'podman'
+        run: |
+          # The tests move HOME, and rootless Podman keeps its images under
+          # HOME, so the shim pins the runner's own.
+          mkdir -p "$RUNNER_TEMP/shim"
+          printf '#!/bin/sh\nHOME=%s exec podman "$@"\n' "$HOME" > "$RUNNER_TEMP/shim/docker"
+          chmod +x "$RUNNER_TEMP/shim/docker"
+          echo "$RUNNER_TEMP/shim" >> "$GITHUB_PATH"
+          podman version
+          podman info --format 'rootless={{.Host.Security.Rootless}}'
+      - name: Start rootless Docker
+        if: matrix.engine == 'docker'
+        env:
+          # Ubuntu's archive has no rootless extras, so the static release.
+          # download.docker.com publishes no checksums; these are the files
+          # as first fetched.
+          DOCKER_VERSION: 29.8.2
+          DOCKER_SHA256: 995d1ef289677f74fd58d8d2c35727b6a4ee389c69db8638a3e42d0487aa5b0f
+          EXTRAS_SHA256: 707ebf6a5afd88104086e7b6749997b2366e816aeaf2c3ef2305b08fde9ee007
+        run: |
+          # Ubuntu 24.04's AppArmor blocks the user namespace rootlesskit needs.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          command -v newuidmap || sudo apt-get install -y uidmap
+          cd "$RUNNER_TEMP"
+          base=https://download.docker.com/linux/static/stable/x86_64
+          curl -fsSLO "$base/docker-$DOCKER_VERSION.tgz"
+          curl -fsSLO "$base/docker-rootless-extras-$DOCKER_VERSION.tgz"
+          printf '%s  %s\n' "$DOCKER_SHA256" "docker-$DOCKER_VERSION.tgz" \
+            "$EXTRAS_SHA256" "docker-rootless-extras-$DOCKER_VERSION.tgz" | sha256sum -c
+          tar -xzf "docker-$DOCKER_VERSION.tgz"
+          tar -xzf "docker-rootless-extras-$DOCKER_VERSION.tgz"
+          export PATH="$RUNNER_TEMP/docker-rootless-extras:$RUNNER_TEMP/docker:$PATH"
+          # runc creates each container's cgroup through the user's systemd,
+          # which the wrapper's --pids-limit needs; lingering starts it.
+          sudo loginctl enable-linger "$USER"
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          for _ in $(seq 30); do [ -S "$XDG_RUNTIME_DIR/bus" ] && break; sleep 1; done
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+          nohup dockerd-rootless.sh > "$RUNNER_TEMP/dockerd-rootless.log" 2>&1 &
+          export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/docker.sock"
+          for _ in $(seq 60); do docker info > /dev/null 2>&1 && break; sleep 1; done
+          docker info --format '{{.CgroupDriver}} {{json .SecurityOptions}}'
+          echo "DOCKER_HOST=$DOCKER_HOST" >> "$GITHUB_ENV"
+      - run: node --test test/rootless-e2e.test.js
+        env:
+          SAFE_PNPM_ROOTLESS_E2E: '1'
+      - name: Rootless Docker log
+        if: failure() && matrix.engine == 'docker'
+        run: cat "$RUNNER_TEMP/dockerd-rootless.log"
