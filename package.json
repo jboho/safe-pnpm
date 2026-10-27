@@ -28,6 +28,9 @@
   "engines": {
     "node": ">=16"
   },
+  "overrides": {
+    "zod": "4.6.7"
+  },
   "publishConfig": {
     "access": "public"
   },
