@@ -40,6 +40,7 @@ Open work is tracked as GitHub issues; the gaps left from M4 are in issue #103.
   - Refuse unpinned `npx`, `npm exec` and `dlx` of a package the project doesn't have installed (PR #113)
   - The scan image moves to Node 24.22.1 (PR #107) and `@socketsecurity/cli` to 1.10.0 (PR #110)
   - CI runs real installs under rootless Podman and rootless Docker (PR #112)
+- [x] 2026.11.0 released (2026-11-09, PR #127, tag `v2026.11.0`): the scan image moves to Node 24.22.2 (PR #119, PR #125) and `@socketsecurity/cli` to 1.14.1 (PR #121, PR #123)
 
 ## Notes
 - docs/socket.md (Socket.dev integration design)
