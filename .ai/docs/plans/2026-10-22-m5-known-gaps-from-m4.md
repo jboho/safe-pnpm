@@ -2,6 +2,13 @@
 
 Date: 2026-10-22. Tracked as issue #103; the roadmap no longer lists M5 (PR #104).
 
+Status on 2026-11-09, from the issues:
+- #100 (section 1): closed 2026-10-26, shipped in PR #113.
+- #97 (section 2): closed as not planned 2026-10-25. It waits on Yarn Berry support, which is issue #106 (open); PR #111 refuses Berry projects until then.
+- #98 (section 3): still open.
+- #99 (section 4): closed 2026-10-26, shipped in PR #112.
+- #103, the tracker: closed 2026-10-27.
+
 M5's two original sub-items (OSV checks for npx/dlx/create in fish, #60, and PowerShell, #61) are done. What is left is the four gaps moved to issues on 2026-10-21. Each one lands as its own PR off `main`, tests first, in all three shell families (sh/zsh/bash in `_safe_pkg_shared.sh`, fish in `_safe_pkg_prescan.fish`, PowerShell in `_safe_pkg_shared.ps1`). A gap may also be closed as a documented limitation, with the reason recorded in its issue.
 
 ## 1. Refuse unpinned npx of a command the project doesn't install (#100)
