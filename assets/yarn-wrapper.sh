@@ -9,7 +9,8 @@
 # bypasses aliases, not shell functions like this wrapper).
 # With the PATH shims (~/.safe-pnpm/bin) on PATH, `command yarn` reaches the shim,
 # so run the real binary by its absolute path instead.
-# Note: yarn v1 only. berry (v2+) requires separate handling.
+# Yarn 2+ projects run their packageManager pin through corepack in the
+# sandbox (see _safe_pkg_yarn_berry_check for what is refused).
 
 [ -z "${_SAFE_PKG_SHARED_LOADED:-}" ] && \
   # shellcheck disable=SC1091
@@ -20,7 +21,7 @@ yarn() {
   _safe_pkg_is_install yarn "$@" || { _safe_pkg_native yarn "$@"; return; }
 
   _safe_pkg_dispatch "yarn" "yarn.lock" "" \
-    "package.json yarn.lock .yarnrc .npmrc" "$@"
+    "package.json yarn.lock .yarnrc .npmrc .yarnrc.yml" "$@"
 }
 
 # On a disk that ignores case (macOS by default) the shell finds the real

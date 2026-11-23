@@ -91,9 +91,15 @@ _safe_pkg_valueflags() {
 #   more letters that start an install name count. Words after -- are walked
 #   too: npm and pnpm still run `npm -- install x` as an install, and yarn
 #   takes the command from before --, so `yarn global -- add x` is a global
-#   add. Bare `yarn` is an install (yarn v1).
+#   add. Bare `yarn` is an install (yarn v1). In a Yarn 2+ project, `up`,
+#   `dedupe`, `rebuild` and `workspaces focus` (printed as `focus`) are
+#   install-class too; Yarn 1 would run a package script by those names.
+#   So are the Yarn 2+ commands that install as a side effect, which
+#   _safe_pkg_yarn_berry_check refuses: `link`, `unlink`, `version` (but not
+#   `version check`), `set resolution` (printed as `setresolution`) and
+#   `pack --install-if-needed` (printed as `packinstall`).
 _safe_pkg_subcmd() {
-  local manager="$1" install native valueflags a n inst skip=0 seen=0 g=0
+  local manager="$1" install native valueflags a f n inst skip=0 seen=0 g=0 berry=0 ws=0 pend=""
   shift
   case "$manager" in
     pnpm)
@@ -104,7 +110,11 @@ _safe_pkg_subcmd() {
       native=" run run-script rum urn test t tst start stop restart exec x publish pack version v view info show config c get set ls list la ll audit outdated login logout whoami init create innit pkg prefix root bin docs help ping search team token owner access dist-tag deprecate cache link ln rebuild rb dedupe find-dupes explain why fund diff doctor " ;;
     yarn)
       install=" install add remove upgrade upgrade-interactive "
-      native=" run test start publish pack create init list ls info why outdated audit cache check config link unlink login logout owner tag team version versions bin generate-lock-entry import licenses autoclean help exec node " ;;
+      native=" run test start publish pack create init list ls info why outdated audit cache check config link unlink login logout owner tag team version versions bin generate-lock-entry import licenses autoclean help exec node "
+      if _safe_pkg_yarn_berry_root > /dev/null; then
+        berry=1
+        install="$install up dedupe rebuild "
+      fi ;;
   esac
   install="${install//-/}"
   native="${native//-/}"
@@ -131,6 +141,13 @@ _safe_pkg_subcmd() {
       [ "$inst" = 1 ] || continue
     fi
     seen=1
+    case "$pend $n" in
+      " "*) ;;
+      "version check") return 0 ;;
+      "set resolution") printf '%s\n' setresolution; return 0 ;;
+      set\ *) return 0 ;;
+      *) printf '%s\n' "$pend"; return 0 ;;
+    esac
     # yarn v1 spells a global install as a subcommand; only the mutating ones
     # are install-class (refused in _safe_pkg_dispatch), `yarn global list` is not.
     if [ "$g" = 1 ]; then
@@ -138,9 +155,24 @@ _safe_pkg_subcmd() {
       return 0
     fi
     if [ "$manager" = "yarn" ] && [ "$n" = "global" ]; then g=1; continue; fi
+    if [ "$ws" = 1 ] && [ "$n" = "focus" ]; then printf '%s\n' focus; return 0; fi
+    ws=0
+    if [ "$berry" = 1 ] && [ "$n" = "workspaces" ]; then ws=1; continue; fi
+    if [ "$berry" = 1 ]; then
+      case "$n" in
+        link|unlink) printf '%s\n' "$n"; return 0 ;;
+        version|set) pend="$n"; continue ;;
+        pack)
+          for f in "$@"; do
+            case "$f" in --install-if-needed*) printf '%s\n' packinstall; return 0 ;; esac
+          done
+          return 0 ;;
+      esac
+    fi
     case "$native" in *" $n "*) return 0 ;; esac
     if [ "$inst" = 1 ]; then printf '%s\n' "$n"; return 0; fi
   done
+  [ "$pend" = version ] && { printf '%s\n' version; return 0; }
   if [ "$manager" = "yarn" ] && [ "$seen" = 0 ]; then
     for a in "$@"; do
       case "$a" in -v|--version|-h|--help) return 0 ;; esac
@@ -336,39 +368,45 @@ _safe_pkg_prescan() {
   fi
 }
 
-# _safe_pkg_audit manager lockfile snapdir tmpdir
+# _safe_pkg_audit manager lockfile snapdir tmpdir [command...]
 #   Runs the manager's CVE audit on the tree phase 1 resolved, so a package
 #   passed to `add` is covered. Returns 1 to block. A non-zero exit means either
 #   advisories or that the audit itself could not run (offline, registry
 #   error); the output is shown so the user can tell which. Interactive runs
 #   prompt, non-interactive runs warn and continue, SAFE_PNPM_STRICT=1 blocks.
 #
-#   Runs on the host, so it never touches the project: it audits a throwaway
+#   With a command (the Yarn 2+ audit container), runs that instead. Otherwise
+#   runs on the host, so it never touches the project: it audits a throwaway
 #   copy of the post-fetch snapshot plus the registry config (.npmrc from the
 #   sandbox, and .yarnrc without its yarn-path line). pnpm also skips the
 #   project's .pnpmfile.cjs, which would otherwise run on the host.
 _safe_pkg_audit() {
   local manager="$1" lockfile="$2" snapdir="$3" tmpdir="$4"
+  shift 4
   [ -f "$snapdir/tree/$lockfile" ] || return 0
 
   local interactive=0
   [ -t 0 ] && interactive=1
 
   local auditdir audit_out audit_rc
-  auditdir=$(mktemp -d) || return 1
-  audit_out=$(mktemp) || { rm -rf "$auditdir"; return 1; }
-  cp -R "$snapdir/tree/." "$auditdir/"
-  [ -f "$tmpdir/.npmrc" ] && cp "$tmpdir/.npmrc" "$auditdir/.npmrc"
-  [ -f "$tmpdir/.yarnrc" ] && command grep -v '^[[:space:]]*"\{0,1\}yarn-path' "$tmpdir/.yarnrc" > "$auditdir/.yarnrc"
-
+  audit_out=$(mktemp) || return 1
   echo "→ $manager audit..." >&2
-  case "$manager" in
-    pnpm) (cd "$auditdir" && _safe_pkg_native pnpm audit --audit-level moderate --config.ignore-pnpmfile=true) >"$audit_out" 2>&1 ;;
-    npm)  (cd "$auditdir" && _safe_pkg_native npm  audit --audit-level moderate) >"$audit_out" 2>&1 ;;
-    yarn) (cd "$auditdir" && _safe_pkg_native yarn audit) >"$audit_out" 2>&1 ;;
-  esac
-  audit_rc=$?
-  rm -rf "$auditdir"
+  if [ $# -gt 0 ]; then
+    "$@" >"$audit_out" 2>&1
+    audit_rc=$?
+  else
+    auditdir=$(mktemp -d) || { rm -f "$audit_out"; return 1; }
+    cp -R "$snapdir/tree/." "$auditdir/"
+    [ -f "$tmpdir/.npmrc" ] && cp "$tmpdir/.npmrc" "$auditdir/.npmrc"
+    [ -f "$tmpdir/.yarnrc" ] && command grep -v '^[[:space:]]*"\{0,1\}yarn-path' "$tmpdir/.yarnrc" > "$auditdir/.yarnrc"
+    case "$manager" in
+      pnpm) (cd "$auditdir" && _safe_pkg_native pnpm audit --audit-level moderate --config.ignore-pnpmfile=true) >"$audit_out" 2>&1 ;;
+      npm)  (cd "$auditdir" && _safe_pkg_native npm  audit --audit-level moderate) >"$audit_out" 2>&1 ;;
+      yarn) (cd "$auditdir" && _safe_pkg_native yarn audit) >"$audit_out" 2>&1 ;;
+    esac
+    audit_rc=$?
+    rm -rf "$auditdir"
+  fi
 
   if [ "$audit_rc" -ne 0 ]; then
     tail -n 40 "$audit_out" >&2
@@ -719,9 +757,8 @@ _safe_pkg_unshared_lockfile_setting() {
 
 # _safe_pkg_yarn_berry dir
 #   Prints what marks dir as a Yarn 2+ (Berry) project and succeeds; fails
-#   when nothing does. The sandbox runs Yarn 1, which ignores a Berry lockfile,
-#   resolves every version again and writes a Yarn 1 lockfile that the
-#   copy-back puts over the project's own, so the install is refused instead.
+#   when nothing does. Yarn 1 would ignore a Berry lockfile and write a Yarn 1
+#   one over it, so a Berry project must never reach the Yarn 1 sandbox.
 _safe_pkg_yarn_berry() {
   local dir="$1" pm
   if [ -f "$dir/yarn.lock" ] && grep -q '^__metadata:' "$dir/yarn.lock"; then
@@ -737,6 +774,355 @@ _safe_pkg_yarn_berry() {
     esac
   fi
   return 1
+}
+
+# _safe_pkg_yarn_berry_root
+#   Prints the root of the Yarn 2+ project the current directory belongs to
+#   and succeeds; fails for a Yarn 1 project or none. The root is the nearest
+#   directory with a yarn.lock, walking up from here and stopping below HOME
+#   and /, or else the current directory. The project is Yarn 2+ when the root
+#   or the current directory carries a marker _safe_pkg_yarn_berry knows, so a
+#   workspace member (no lockfile, no pin of its own) finds its root.
+_safe_pkg_yarn_berry_root() {
+  local cwd root d
+  cwd="$(pwd)"
+  root="$cwd"
+  d="$cwd"
+  while [ "$d" != "$HOME" ] && [ "$d" != "/" ]; do
+    if [ -f "$d/yarn.lock" ]; then root="$d"; break; fi
+    d="$(dirname "$d")"
+  done
+  if _safe_pkg_yarn_berry "$root" > /dev/null || _safe_pkg_yarn_berry "$cwd" > /dev/null; then
+    printf '%s\n' "$root"
+    return 0
+  fi
+  return 1
+}
+
+# _safe_pkg_yarnrc_set file key
+#   Succeeds when the .yarnrc.yml file sets the top-level key (quoted or not).
+#   Only reliable on a file _safe_pkg_yarnrc_plain accepted.
+_safe_pkg_yarnrc_set() {
+  [ -f "$1" ] && grep -qE "^[\"']?$2[\"']?[[:space:]]*:" "$1"
+}
+
+# _safe_pkg_yarnrc_plain file
+#   Prints the number of the first line of the .yarnrc.yml file that does not
+#   keep every top-level key at the start of a line as a plain name, and
+#   succeeds; fails when the file is missing or plain. A flow mapping, a quoted
+#   or explicit (?) key, a merge key or a second document could set a key the
+#   line checks in _safe_pkg_yarn_berry_check do not see. So could a CR inside
+#   a line, which YAML reads as a line break, so only tabs and printable ASCII
+#   are allowed. BWK awk (macOS) ends a line at a NUL byte and would not see
+#   the rest.
+_safe_pkg_yarnrc_plain() {
+  local n
+  [ -f "$1" ] || return 1
+  if [ "$(LC_ALL=C tr -d '\000' < "$1" | wc -c)" -ne "$(wc -c < "$1")" ]; then
+    printf '%s\n' 1
+    return 0
+  fi
+  n="$(LC_ALL=C awk '
+    { sub(/\r$/, "") }
+    /[^\t -~]/ { print NR; exit }
+    /^[[:space:]]*$/ || /^[[:space:]]*#/ { next }
+    /^ / { if (started) next; print NR; exit }
+    /^[A-Za-z][A-Za-z0-9]*[[:space:]]*:/ { started = 1; next }
+    { print NR; exit }
+  ' "$1")"
+  [ -n "$n" ] && { printf '%s\n' "$n"; return 0; }
+  return 1
+}
+
+# _safe_pkg_yarnrc_interp file
+#   Prints the number of the first line of the .yarnrc.yml file that holds
+#   ${ or a backslash outside an npmAuthToken or npmAuthIdent setting, and
+#   succeeds; fails when there is none. Yarn fills ${VAR} in any setting from
+#   the environment, the token's included, and a double-quoted escape such as
+#   \x24{ becomes ${ first, so a path setting could write the token into the
+#   project, where phase 2 reads it.
+_safe_pkg_yarnrc_interp() {
+  local n
+  [ -f "$1" ] || return 1
+  n="$(LC_ALL=C awk '
+    /\$\{|\\/ && !/^[[:space:]]*(npmAuthToken|npmAuthIdent)[[:space:]]*:/ { print NR; exit }
+  ' "$1")"
+  [ -n "$n" ] && { printf '%s\n' "$n"; return 0; }
+  return 1
+}
+
+# _safe_pkg_yarn_manifest_check root
+#   Prints why a package.json the sandbox copies (the root's, and every one
+#   below it that the member copy finds) is refused, and succeeds; fails when
+#   none is. Yarn runs an exec: dependency's generator script while it fetches,
+#   with the token in its environment and YARN_ENABLE_SCRIPTS=0 or not, when
+#   dependenciesMeta marks the package built. Fails closed: a file node cannot
+#   parse, or no node at all, is refused.
+_safe_pkg_yarn_manifest_check() {
+  local out
+  # shellcheck disable=SC2016 # the JavaScript is single-quoted on purpose
+  if out="$(cd "$1" && {
+    printf './package.json\0'
+    find . -mindepth 2 -name package.json -not -path "*/node_modules/*" -not -path "./.yarn/*" \
+      -not -path "./.corepack/*" -not -path "./.safe-home/*" -not -path "./.safe-store/*" -print0
+  } | node -e '
+    const fs = require("fs");
+    const safe = (s) => String(s).replace(/[^ -~]/g, "?");
+    const fields = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies", "resolutions"];
+    for (const f of fs.readFileSync(0, "utf8").split("\0").filter(Boolean)) {
+      const p = safe(f.slice(2));
+      let m;
+      try { m = JSON.parse(fs.readFileSync(f, "utf8")); } catch { m = undefined; }
+      if (!m || typeof m !== "object") {
+        console.log(`${p} is not valid JSON, so the wrapper cannot check its dependencies. Fix the file and run the command again.`);
+        process.exit(1);
+      }
+      for (const k of fields) {
+        for (const [n, v] of Object.entries(m[k] ?? {})) {
+          if (/exec(:|%3a)/i.test(String(v))) {
+            console.log(`${p} depends on ${safe(n)} through exec:, which the wrapper does not support: Yarn runs its script while it fetches, when the registry token is still available.`);
+            process.exit(1);
+          }
+        }
+      }
+      for (const [n, v] of Object.entries(m.dependenciesMeta ?? {})) {
+        if (v && typeof v === "object" && "built" in v && v.built !== false) {
+          console.log(`${p} sets dependenciesMeta.${safe(n)}.built, which the wrapper does not support: it lets Yarn run an exec: dependency script while it fetches, when the registry token is still available. Remove the setting and run the command again.`);
+          process.exit(1);
+        }
+      }
+    }
+  ' 2>/dev/null)"; then
+    return 1
+  fi
+  printf '%s\n' "$1/${out:-package.json: the wrapper could not check the package.json files with node, so it does not run the command.}"
+  return 0
+}
+
+# _safe_pkg_yarn_berry_pin root
+#   Prints the packageManager value of root/package.json and succeeds when it
+#   pins an exact Yarn 3+ release (optionally with corepack's +hash), the
+#   spec every sandbox container hands to corepack.
+_safe_pkg_yarn_berry_pin() {
+  local pm
+  pm="$(grep -oE '"packageManager"[[:space:]]*:[[:space:]]*"[^"]*"' "$1/package.json" 2>/dev/null | head -n 1 | sed -E 's/.*:[[:space:]]*"//; s/"$//')"
+  printf '%s\n' "$pm"
+  printf '%s\n' "$pm" | grep -qE '^yarn@([3-9]|[1-9][0-9]+)\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.]+)?$'
+}
+
+# _safe_pkg_yarn_lock_check file
+#   Prints "G N" when line N of the yarn.lock is not in the plain layout Yarn
+#   writes, or "S RESOLUTION" for the first dependency from a source the
+#   sandbox does not run, and succeeds; fails when the lockfile passes or is
+#   missing. Yarn reads a lockfile as Yarn 1 when a leading # line is the
+#   `yarn lockfile v1` marker, otherwise as YAML where a repeated key's last
+#   value wins, so every line is checked:
+#   - Yarn 2+: column 0 holds __metadata or a quoted descriptor, indent 2 the
+#     entry fields, 4 and 6 their maps; a value is one quoted string or plain
+#     text that YAML cannot read as anything else. Each resolution must be
+#     npm:, workspace:, file:, portal:, link:, a patch: of an npm or
+#     workspace package, or an http(s) tarball off GitHub. Git and GitHub
+#     sources are packed by running their scripts during the fetch, with the
+#     registry token present; exec: runs a script to make the package.
+#   - Yarn 1: Yarn migrates the entries, rewriting a GitHub resolved URL into
+#     a git source, so resolved must be an http(s) URL off GitHub or a local
+#     .tgz name. Field names may be quoted, as npm writes them.
+_safe_pkg_yarn_lock_check() {
+  local f="$1" out
+  [ -f "$f" ] || return 1
+  # BWK awk (macOS) ends a line at a NUL byte and would not see the rest.
+  if [ "$(LC_ALL=C tr -d '\000' < "$f" | wc -c)" -ne "$(wc -c < "$f")" ]; then
+    printf '%s\n' "G 1"
+    return 0
+  fi
+  out="$(LC_ALL=C awk '
+    function fail(k, v) { print k " " v; done = 1; exit }
+    function urlok(u,   h) {
+      if (u !~ /^https?:\/\//) return 0
+      h = substr(u, index(u, "//") + 2)
+      sub(/[\/?#].*/, "", h)
+      sub(/.*@/, "", h)
+      sub(/:[0-9]*$/, "", h)
+      sub(/\.+$/, "", h)
+      h = tolower(h)
+      if (h == "" || h ~ /%/ || h == "github.com" || h ~ /\.github\.com$/) return 0
+      h = u
+      sub(/#.*/, "", h)
+      return tolower(h) !~ /\.git$/
+    }
+    function srcok(r,   s) {
+      s = r
+      if (s ~ /^@/) { if (!sub(/^@[^\/@]+\/[^@]+@/, "", s)) return 0 }
+      else if (!sub(/^[^@]+@/, "", s)) return 0
+      if (s ~ /^(npm|workspace|file|portal|link):/) return 1
+      if (s ~ /^patch:/) return substr(s, 7) ~ /^(@[^\/@]+\/)?[^@\/]+@(npm|workspace)%3[Aa]/
+      return urlok(s)
+    }
+    function valok(v) {
+      if (v ~ /^"[^"]*"$/) return 1
+      return v ~ /^[A-Za-z0-9._\/~^<=+]/ && index(v, " #") == 0 && index(v, ": ") == 0 && v !~ /:$/
+    }
+    function unq(v) { return v ~ /^"/ ? substr(v, 2, length(v) - 2) : v }
+    BEGIN { lead = 1 }
+    { sub(/\r$/, "") }
+    /[^ -~]/ || /\\/ { fail("G", NR) }
+    lead && /^#/ { if (tolower($0) ~ /^# +yarn +lockfile +v1$/) v1 = 1; next }
+    { lead = 0 }
+    /^ *$/ || /^#/ { next }
+    {
+      match($0, /^ */); ind = RLENGTH; line = substr($0, ind + 1)
+      if (!started && ind != 0) fail("G", NR)
+      if (started && ind > pind && !(pnov && ind == pind + 2)) fail("G", NR)
+      if (v1) {
+        if (ind == 0) {
+          if (line !~ /^("[^"]*"|[^ ",:#][^ ",:]*)(, ("[^"]*"|[^ ",:]+))*:$/ || line ~ /__metadata/) fail("G", NR)
+          dep = 0; nov = 1
+        } else if (ind == 2) {
+          if (line ~ /^"?(dependencies|optionalDependencies)"?:$/) { dep = 1; nov = 1 }
+          else if (match(line, /^("(version|resolved|integrity|uid)"|version|resolved|integrity|uid) /)) {
+            key = unq(substr(line, 1, RLENGTH - 1)); val = substr(line, RLENGTH + 1)
+            if (val !~ /^("[^"]*"|[^ "]+)$/) fail("G", NR)
+            if (key == "resolved") {
+              val = unq(val)
+              if (!urlok(val) && val !~ /^[^\/:]+\.tgz(#.*)?$/) fail("S", val)
+            }
+            dep = 0; nov = 0
+          } else fail("G", NR)
+        } else if (ind == 4 && dep && line ~ /^("[^"]*"|[^ "]+) ("[^"]*"|[^ "]+)$/) nov = 0
+        else fail("G", NR)
+      } else {
+        if (ind == 0) {
+          if (line != "__metadata:" && line !~ /^"[^"]*":$/) fail("G", NR)
+          nov = 1
+        } else {
+          if (ind == 2 || ind == 6) re = "^[A-Za-z]+:"
+          else if (ind == 4) re = "^(\"[^\"]*\"|[A-Za-z0-9][A-Za-z0-9._-]*):"
+          else fail("G", NR)
+          if (!match(line, re)) fail("G", NR)
+          key = substr(line, 1, RLENGTH - 1); val = substr(line, RLENGTH + 1)
+          if (val == "") nov = 1
+          else if (val !~ /^ / || !valok(substr(val, 2))) fail("G", NR)
+          else { nov = 0; val = substr(val, 2) }
+          if (ind == 2 && key == "resolved") fail("G", NR)
+          if (ind == 2 && key == "resolution") {
+            if (nov) fail("G", NR)
+            if (!srcok(unq(val))) fail("S", unq(val))
+          }
+        }
+      }
+      pind = ind; pnov = nov; started = 1
+    }
+  ' "$f")" || out="G 1"
+  [ -n "$out" ] && { printf '%s\n' "$out"; return 0; }
+  return 1
+}
+
+# _safe_pkg_yarn_berry_check root [yarn-args...]
+#   Prints why the wrapper will not run this command in the Yarn 2+ project at
+#   root and succeeds; fails when it will. Runs before any container:
+#   - rebuild runs build scripts outside an install, and workspaces focus has
+#     no fetch-only mode, so neither splits into the two phases. link, unlink,
+#     set resolution, version and pack --install-if-needed install as a side
+#     effect, and upgrade-interactive needs a terminal.
+#   - The sandbox runs exactly the packageManager pin through corepack and
+#     fetches with --mode=skip-build, which Yarn 3 added.
+#   - The .yarnrc.yml checks read lines, so a file must keep its top-level
+#     keys plain (_safe_pkg_yarnrc_plain). The project's may fill ${VAR} only
+#     in auth settings (_safe_pkg_yarnrc_interp).
+#   - package.json files must pass _safe_pkg_yarn_manifest_check.
+#   - A plugin is code that runs inside Yarn in phase 1, next to the token.
+#   - lockfileFilename moves the lockfile away from the yarn.lock the scan reads.
+#   - networkSettings could undo the sandbox's own, which keep phase 1 off
+#     github.com.
+#   - yarn.lock must pass _safe_pkg_yarn_lock_check.
+#   - Plug'n'Play (the default linker) keeps packages in .yarn and .pnp.cjs,
+#     and copy-back brings back node_modules only.
+#   The project's .yarnrc.yml wins over ~/.yarnrc.yml for nodeLinker, as in
+#   Yarn, and within one file the last line wins.
+_safe_pkg_yarn_berry_check() {
+  local root="$1" sub pm f n linker=""
+  shift
+  sub="$(_safe_pkg_subcmd yarn "$@")"
+  case "$sub" in
+    rebuild)
+      echo "yarn rebuild is not supported through the wrapper: it runs package build scripts outside an install, and the sandbox runs them only in the offline phase of one."
+      return 0 ;;
+    focus)
+      echo "yarn workspaces focus is not supported through the wrapper: it has no fetch-only mode, so the sandbox cannot fetch with the network on and build with it off."
+      return 0 ;;
+    link|unlink)
+      echo "yarn $sub is not supported through the wrapper: in a Yarn 2+ project it changes package.json and runs an install outside the sandbox's two phases. Edit the portal: or link: dependency in package.json, then run yarn install."
+      return 0 ;;
+    setresolution)
+      echo "yarn set resolution is not supported through the wrapper: it rewrites yarn.lock and runs an install outside the sandbox's two phases. Add the resolution to the resolutions field of package.json, then run yarn install."
+      return 0 ;;
+    version)
+      echo "yarn version is not supported through the wrapper: it changes package.json and runs an install outside the sandbox's two phases. Change the version in package.json, then run yarn install. yarn version check still runs."
+      return 0 ;;
+    packinstall)
+      echo "yarn pack --install-if-needed is not supported through the wrapper: it runs an install outside the sandbox's two phases. Run yarn install first, then yarn pack."
+      return 0 ;;
+    upgradeinteractive)
+      echo "yarn upgrade-interactive is not supported through the wrapper: it asks questions, and the sandbox runs Yarn without a terminal. Use yarn up with the versions you want."
+      return 0 ;;
+  esac
+  if ! pm="$(_safe_pkg_yarn_berry_pin "$root")"; then
+    # Shown in the message, so no byte a terminal would act on.
+    pm="$(printf '%s' "$pm" | LC_ALL=C tr -cd ' -~')"
+    case "$pm" in
+      yarn@[0-2].*|yarn@[0-2])
+        echo "$root/package.json pins ${pm%%+*}, and the wrapper supports Yarn 3 or later: older releases cannot fetch without running build scripts (--mode=skip-build)." ;;
+      yarn@*)
+        echo "$root/package.json pins $pm, which is not an exact Yarn version, and the sandbox runs exactly the pinned release through corepack. Pin an exact version (yarn set version stable writes one) and run the command again." ;;
+      *)
+        echo "$root/package.json does not pin a Yarn version with packageManager, and the sandbox runs the pinned Yarn through corepack. Add the pin (yarn set version stable does) and run the command again." ;;
+    esac
+    return 0
+  fi
+  for f in "$root/.yarnrc.yml" "$HOME/.yarnrc.yml"; do
+    if n="$(_safe_pkg_yarnrc_plain "$f")"; then
+      echo "$f has a line the wrapper cannot read safely (line $n): write each top-level setting as a plain name at the start of a line (key: value), not quoted, in braces or indented, use only printable ASCII and tabs, and run the command again."
+      return 0
+    fi
+    if [ "$f" = "$root/.yarnrc.yml" ] && n="$(_safe_pkg_yarnrc_interp "$f")"; then
+      echo "$f reads an environment variable or an escape (line $n), which the wrapper allows only in npmAuthToken and npmAuthIdent: Yarn fills \${VAR} in any setting, so a path setting could write the registry token into the project."
+      return 0
+    fi
+    if _safe_pkg_yarnrc_set "$f" plugins; then
+      echo "$f lists plugins, which the wrapper does not support: a plugin is code that runs inside Yarn while the registry token is available."
+      return 0
+    fi
+    if _safe_pkg_yarnrc_set "$f" lockfileFilename; then
+      echo "$f sets lockfileFilename, so Yarn would write the lockfile somewhere other than the yarn.lock the scan checks."
+      return 0
+    fi
+    if _safe_pkg_yarnrc_set "$f" networkSettings; then
+      echo "$f sets networkSettings, which the wrapper does not support: the sandbox sets its own to keep the fetch phase from downloading GitHub sources, and a setting here could override it."
+      return 0
+    fi
+  done
+  if f="$(_safe_pkg_yarn_manifest_check "$root")"; then
+    printf '%s\n' "$f"
+    return 0
+  fi
+  if f="$(_safe_pkg_yarn_lock_check "$root/yarn.lock")"; then
+    case "$f" in
+      G\ *) echo "$root/yarn.lock has a line the wrapper cannot read safely (line ${f#G }): the checks read the layout Yarn writes, and other YAML could hide a dependency from them. Run yarn install with the bypass below to let Yarn rewrite the file, or restore it from git." ;;
+      *) echo "$root/yarn.lock resolves a dependency from a source the wrapper does not support (${f#S }): Yarn packs git and GitHub dependencies, and makes exec: ones, by running their scripts while it fetches, when the registry token is still available. Supported sources are the npm registry, workspaces, local folders and tarballs, patches of those, and tarball URLs off GitHub." ;;
+    esac
+    return 0
+  fi
+  for f in "$root/.yarnrc.yml" "$HOME/.yarnrc.yml"; do
+    if _safe_pkg_yarnrc_set "$f" nodeLinker; then
+      linker="$(grep -E "^[\"']?nodeLinker[\"']?[[:space:]]*:" "$f" | tail -n 1 | sed -E "s/^[^:]*:[[:space:]]*//; s/[[:space:]]+#.*//; s/[[:space:]]+\$//; s/^[\"']//; s/[\"']\$//")"
+      break
+    fi
+  done
+  case "$linker" in
+    node-modules|pnpm) return 1 ;;
+  esac
+  echo "$root installs with Plug'n'Play (nodeLinker: ${linker:-pnp, the default}), which the wrapper does not support: the sandbox copies back node_modules, and Plug'n'Play has none. Set nodeLinker: node-modules in .yarnrc.yml and run the command again."
+  return 0
 }
 
 # _safe_pkg_dispatch manager lockfile workspace_file manifest_files [pkg-manager-args...]
@@ -792,9 +1178,12 @@ _safe_pkg_dispatch() {
     return 1
   fi
 
-  local berry
-  if [ "$manager" = "yarn" ] && berry="$(_safe_pkg_yarn_berry "$(pwd)")"; then
-    echo "✗ safe-pnpm: ${berry}, and the wrapper supports Yarn 1 projects only: its sandbox runs Yarn 1, which would resolve every version again and replace yarn.lock with a Yarn 1 lockfile." >&2
+  local berry_root berry_why
+  if [ "$manager" = "yarn" ] && berry_root="$(_safe_pkg_yarn_berry_root)" \
+    && berry_why="$(_safe_pkg_yarn_berry_check "$berry_root" "$@")"; then
+    # The reason can quote yarn.lock; terminal control bytes stay out.
+    berry_why="$(printf '%s' "$berry_why" | LC_ALL=C tr -d '\000-\010\013-\037\177')"
+    echo "✗ safe-pnpm: ${berry_why}" >&2
     echo "  To run it without the safety checks: $(_safe_pkg_bypass "$manager")$(printf ' %q' "$@")" >&2
     return 1
   fi
@@ -816,6 +1205,33 @@ _safe_pkg_strip_npmrc_auth() {
   # npmAuthToken/npmAuthIdent keys with `:`.
   grep -viE '(_authtoken|_auth|_password|username|npmauthtoken|npmauthident)[[:space:]]*[=:"[:space:]]' "$f" > "$f.clean" 2>/dev/null || : > "$f.clean"
   mv "$f.clean" "$f"
+}
+
+# _safe_pkg_strip_yarnrc_yml_auth path
+#   Removes the npmAuthToken and npmAuthIdent entries from a copied
+#   .yarnrc.yml, and every line under one that is indented deeper (a YAML
+#   block scalar such as `npmAuthIdent: |` puts the secret on the next line).
+#   Blank lines inside such a block go too. A line-only filter like
+#   _safe_pkg_strip_npmrc_auth would keep the rest of the settings phase 2
+#   needs but leave a block scalar's secret behind. A user:password@ in a
+#   URL goes as well. Returns 1 when it fails; phase 2 must then not run.
+_safe_pkg_strip_yarnrc_yml_auth() {
+  local f="$1"
+  [ -f "$f" ] || return 0
+  awk -v q="'" '
+    BEGIN { re = "npmauth(token|ident)[\"" q "]?[[:space:]]*:"; ui = "://[^/\"" q " ]*@" }
+    skip {
+      if ($0 ~ /^[[:space:]]*$/) next
+      match($0, /^[[:space:]]*/)
+      if (RLENGTH > ind) next
+      skip = 0
+    }
+    tolower($0) ~ re { match($0, /^[[:space:]]*/); ind = RLENGTH; skip = 1; next }
+    { gsub(ui, "://"); print }
+  ' "$f" > "$f.clean" && mv "$f.clean" "$f" && return 0
+  rm -f "$f.clean"
+  echo "✗ safe-pnpm: could not remove the registry credentials from $f; the build phase did not run." >&2
+  return 1
 }
 
 # _safe_pkg_user_auth tmpdir
@@ -968,7 +1384,7 @@ _safe_pkg_run() {
 #         package.json is saved to <saved> first and put back by
 #         _safe_pkg_pnpm_arch_restore.
 #   yarn: prints --ignore-platform (yarn 1 has no per-platform list), so every
-#         platform's build is fetched.
+#         platform's build is fetched. Yarn 2+ uses _safe_pkg_yarn_berry_arch.
 #   npm:  unchanged. --os/--cpu replace the container's platform instead of
 #         adding to it, and esbuild's install script in the (Linux) build
 #         container then fails for want of its Linux package.
@@ -991,6 +1407,22 @@ EOF_HP
       ;;
     yarn) printf '%s\n' "--ignore-platform" ;;
   esac
+}
+
+# _safe_pkg_yarn_berry_arch tmpdir
+#   The Yarn 2+ side of _safe_pkg_host_platform: on a macOS host, adds the
+#   host's os and cpu next to "current" in supportedArchitectures in the
+#   sandbox .yarnrc.yml, which is never copied back. Yarn 2+ has no
+#   --ignore-platform. A project that sets supportedArchitectures keeps its own.
+_safe_pkg_yarn_berry_arch() {
+  local f="$1/.yarnrc.yml" os cpu
+  read -r os cpu <<EOF_BA || return 0
+$(_safe_pkg_host_os_cpu)
+EOF_BA
+  [ -n "$cpu" ] || return 0
+  _safe_pkg_yarnrc_set "$f" supportedArchitectures && return 0
+  [ -s "$f" ] && [ -n "$(tail -c 1 "$f")" ] && echo >> "$f"
+  printf 'supportedArchitectures:\n  os:\n    - current\n    - %s\n  cpu:\n    - current\n    - %s\n' "$os" "$cpu" >> "$f"
 }
 
 # Prints "OS CPU" in npm's names for a macOS host, nothing otherwise.
@@ -1054,6 +1486,19 @@ EOF_HB
   return $rc
 }
 
+# _safe_pkg_yarn_berry_audit tmpdir workdir flags spec
+#   The Yarn 2+ audit container for _safe_pkg_audit. flags is the
+#   space-separated docker flag list (hardening, user, token, Yarn env), spec
+#   the packageManager pin corepack runs.
+_safe_pkg_yarn_berry_audit() {
+  [ -n "${ZSH_VERSION:-}" ] && setopt localoptions sh_word_split
+  # shellcheck disable=SC2086
+  docker run --rm --cap-drop ALL $3 -e YARN_ENABLE_SCRIPTS=0 \
+    -v "$1:/app" \
+    -w "$2" \
+    safe-pnpm:latest corepack "$4" npm audit --all --recursive --severity moderate
+}
+
 # _safe_pkg_sandbox tmpdir snapdir manager lockfile workspace_file manifest_files [args...]
 #   Body of _safe_pkg_run; tmpdir/snapdir are created and removed by the caller.
 _safe_pkg_sandbox() {
@@ -1064,12 +1509,24 @@ _safe_pkg_sandbox() {
   local subcmd
   subcmd="$(_safe_pkg_subcmd "$manager" "$@")"
 
-  local workspace_root _cwd rel_path d
+  local workspace_root _cwd rel_path d berry=0 spec=""
   _cwd="$(pwd)"
   workspace_root="$_cwd"
   rel_path=""
 
-  if [ -n "$workspace_file" ]; then
+  # Yarn 2+ runs the pinned Yarn through corepack at the project root
+  # (_safe_pkg_yarn_berry_root); _safe_pkg_dispatch already refused what it
+  # cannot run.
+  if [ "$manager" = "yarn" ] && d="$(_safe_pkg_yarn_berry_root)"; then
+    berry=1
+    spec="$(_safe_pkg_yarn_berry_pin "$d")" || {
+      echo "✗ safe-pnpm: $d/package.json does not pin an exact Yarn 3+ version with packageManager." >&2
+      return 1
+    }
+    workspace_root="$d"
+    rel_path="${_cwd#"$workspace_root"}"
+    rel_path="${rel_path#/}"
+  elif [ -n "$workspace_file" ]; then
     d="$_cwd"
     while [ "$d" != "$HOME" ] && [ "$d" != "/" ]; do
       if [ -f "$d/$workspace_file" ]; then
@@ -1089,15 +1546,46 @@ _safe_pkg_sandbox() {
     for f in $manifest_files; do
       [ -f "$f" ] && cp "$f" "$tmpdir/"
     done
-    if [ -n "$workspace_file" ] && [ -f "$workspace_file" ]; then
-      find . -name package.json -not -path "*/node_modules/*" -mindepth 2 | while read -r pkg; do
+    # Yarn 2+ keeps its workspace list in package.json, so members are always
+    # looked for there. .yarn holds Yarn's own files, never a member, and the
+    # sandbox's own folders would collide with the copies.
+    if [ "$berry" = 1 ] || { [ -n "$workspace_file" ] && [ -f "$workspace_file" ]; }; then
+      find . -mindepth 2 -name package.json -not -path "*/node_modules/*" -not -path "./.yarn/*" \
+        -not -path "./.corepack/*" -not -path "./.safe-home/*" -not -path "./.safe-store/*" | while read -r pkg; do
         member="$(dirname "${pkg#./}")"
         mkdir -p "$tmpdir/$member"
         cp "$pkg" "$tmpdir/$member/"
         printf '%s\n' "$member" >> "$snapdir/members"
       done
     fi
+    # patch: dependencies read their diffs from here during the fetch. Not
+    # copied back. Only regular .patch files in real folders: a symlink could
+    # bring any file on this machine into the sandbox, where build scripts
+    # read it.
+    if [ "$berry" = 1 ] && [ ! -L .yarn ] && [ -d .yarn/patches ] && [ ! -L .yarn/patches ]; then
+      [ -n "${ZSH_VERSION:-}" ] && setopt nullglob
+      mkdir -p "$tmpdir/.yarn/patches"
+      for f in .yarn/patches/*.patch; do
+        [ -f "$f" ] && [ ! -L "$f" ] && cp "$f" "$tmpdir/.yarn/patches/"
+      done
+    fi
   )
+
+  # Yarn 2+ reads ~/.yarnrc.yml too (registry settings and auth); the
+  # containers get a copy as their home's, stripped before phase 2. The copy
+  # ends with networkSettings that refuse github.com, so a GitHub dependency
+  # added in phase 1 cannot be downloaded and packed there (the image has no
+  # git for the other git sources). _safe_pkg_yarn_berry_check refuses a
+  # networkSettings of the user's own, which could override it.
+  if [ "$berry" = 1 ]; then
+    mkdir -p "$tmpdir/.safe-home"
+    local home_rc="$tmpdir/.safe-home/.yarnrc.yml"
+    if [ -f "$HOME/.yarnrc.yml" ]; then
+      cp "$HOME/.yarnrc.yml" "$home_rc"
+      [ -s "$home_rc" ] && [ -n "$(tail -c 1 "$home_rc")" ] && printf '\n' >> "$home_rc"
+    fi
+    printf '%s\n' 'networkSettings:' '  "github.com":' '    enableNetwork: false' >> "$home_rc"
+  fi
 
   local lockfile_setting
   if [ "$manager" = "pnpm" ] && lockfile_setting="$(_safe_pkg_lockfile_dir_setting "$tmpdir")"; then
@@ -1128,7 +1616,8 @@ _safe_pkg_sandbox() {
     npm)  store_flag="--cache /app/.safe-store"
           phase2_cmd="rebuild $store_flag" ;;
     yarn) store_flag="--cache-folder /app/.safe-store --cwd /app"
-          phase2_cmd="install --offline --force $store_flag" ;;
+          phase2_cmd="install --offline --force $store_flag"
+          [ "$berry" = 1 ] && phase2_cmd="install --immutable" ;;
     *)    store_flag=""; phase2_cmd="" ;;
   esac
 
@@ -1147,6 +1636,20 @@ _safe_pkg_sandbox() {
   local user_flags
   user_flags=$(_safe_pkg_user_flags) || return 1
 
+  # Every Yarn 2+ container: corepack keeps the pinned Yarn in the sandbox, so
+  # phase 2 runs it offline; yarnPath is ignored, so the version is the pin
+  # corepack verifies, not a script in the repository; the package cache sits
+  # in the sandbox; no telemetry. HOME is set even under rootless Docker,
+  # where user_flags leaves it out, so Yarn finds the sandbox ~/.yarnrc.yml.
+  local berry_env=""
+  if [ "$berry" = 1 ]; then
+    berry_env="-e COREPACK_HOME=/app/.corepack -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 -e YARN_IGNORE_PATH=1 -e YARN_CACHE_FOLDER=/app/.safe-store -e YARN_ENABLE_GLOBAL_CACHE=0 -e YARN_ENABLE_TELEMETRY=0"
+    case " $user_flags " in
+      *" -e HOME="*) ;;
+      *) berry_env="$berry_env -e HOME=/app/.safe-home" ;;
+    esac
+  fi
+
   # Tokens are forwarded only into the fetch phase, where --ignore-scripts
   # guarantees no package code runs. They are never present during phase 2.
   local token_env=""
@@ -1156,18 +1659,35 @@ _safe_pkg_sandbox() {
 
   # Host platform's native optional dependencies (see _safe_pkg_host_platform).
   # Yarn needs its flag in phase 2 too, or --force would prune what phase 1 added.
-  local host_flags
-  host_flags=$(_safe_pkg_host_platform "$manager" "$tmpdir" "$snapdir/arch-saved.json") || return 1
-  local phase2_host_flags=""
-  [ "$manager" = "yarn" ] && phase2_host_flags="$host_flags"
+  local host_flags="" phase2_host_flags=""
+  if [ "$berry" = 1 ]; then
+    _safe_pkg_yarn_berry_arch "$tmpdir"
+  else
+    host_flags=$(_safe_pkg_host_platform "$manager" "$tmpdir" "$snapdir/arch-saved.json") || return 1
+    [ "$manager" = "yarn" ] && phase2_host_flags="$host_flags"
+  fi
 
   # --- Phase 1: fetch (network on, token available, scripts disabled) ---
-  # shellcheck disable=SC2086
-  docker run --rm --cap-drop ALL $hardening $user_flags \
-    -v "${tmpdir}:/app" \
-    -w "$workdir" \
-    $token_env \
-    safe-pnpm:latest "$manager" "$@" --ignore-scripts $store_flag $host_flags
+  # Yarn 2+ rejects Yarn 1's flags; --mode=skip-build resolves and fetches
+  # without running any build script, and YARN_ENABLE_SCRIPTS=0 also stops a
+  # workspace's exec: dependency, which runs a script to make the package.
+  # Bare `yarn` is an install.
+  if [ "$berry" = 1 ]; then
+    [ $# -eq 0 ] && set -- install
+    # shellcheck disable=SC2086
+    docker run --rm --cap-drop ALL $hardening $user_flags \
+      -v "${tmpdir}:/app" \
+      -w "$workdir" \
+      $token_env $berry_env -e YARN_ENABLE_SCRIPTS=0 \
+      safe-pnpm:latest corepack "$spec" "$@" --mode=skip-build
+  else
+    # shellcheck disable=SC2086
+    docker run --rm --cap-drop ALL $hardening $user_flags \
+      -v "${tmpdir}:/app" \
+      -w "$workdir" \
+      $token_env \
+      safe-pnpm:latest "$manager" "$@" --ignore-scripts $store_flag $host_flags
+  fi
   local phase1_rc=$?
   local rc=$phase1_rc
 
@@ -1211,10 +1731,17 @@ _safe_pkg_sandbox() {
   fi
 
   # CVE audit on the resolved tree, after the snapshot and before any build
-  # script. A block discards the sandbox like a malware hit does.
-  if [ "$fetched" -eq 1 ] && ! _safe_pkg_audit "$manager" "$lockfile" "$snapdir" "$tmpdir"; then
-    fetched=0
-    rc=1
+  # script. A block discards the sandbox like a malware hit does. Yarn 2+
+  # audits in a container, with the network and auth phase 1 had: the host
+  # yarn may be Yarn 1 or none, and the project's Yarn must not run there.
+  # `yarn npm audit` runs no package code.
+  if [ "$fetched" -eq 1 ]; then
+    if [ "$berry" = 1 ]; then
+      _safe_pkg_audit "$manager" "$lockfile" "$snapdir" "$tmpdir" \
+        _safe_pkg_yarn_berry_audit "$tmpdir" "$workdir" "$hardening $user_flags $token_env $berry_env" "$spec"
+    else
+      _safe_pkg_audit "$manager" "$lockfile" "$snapdir" "$tmpdir"
+    fi || { fetched=0; rc=1; }
   fi
 
   if [ "$fetched" -eq 1 ] && [ "$run_build" -eq 1 ] && [ -n "$phase2_cmd" ]; then
@@ -1232,16 +1759,33 @@ _safe_pkg_sandbox() {
     _safe_pkg_strip_npmrc_auth "$tmpdir/.npmrc"
     _safe_pkg_strip_npmrc_auth "$tmpdir/.yarnrc"
     rm -f "$tmpdir/.safe-home/.npmrc"
+    if [ "$berry" = 1 ]; then
+      { _safe_pkg_strip_yarnrc_yml_auth "$tmpdir/.yarnrc.yml" \
+        && _safe_pkg_strip_yarnrc_yml_auth "$tmpdir/.safe-home/.yarnrc.yml"; } || { fetched=0; rc=1; }
+    fi
+  fi
 
+  if [ "$fetched" -eq 1 ] && [ "$run_build" -eq 1 ] && [ -n "$phase2_cmd" ]; then
     local net_flag="--network none"
     [ "${SAFE_PNPM_BUILD_NETWORK:-}" = "1" ] && net_flag=""
 
     # --- Phase 2: build (no token, no .npmrc auth, network off by default) ---
-    # shellcheck disable=SC2086
-    docker run --rm --cap-drop ALL $hardening $user_flags $net_flag \
-      -v "${tmpdir}:/app" \
-      -w "$workdir" \
-      safe-pnpm:latest "$manager" $phase2_cmd $phase2_host_flags
+    # Yarn 2+ installs from the phase 1 cache with the lockfile it wrote; Yarn
+    # and corepack stay offline even under SAFE_PNPM_BUILD_NETWORK=1.
+    if [ "$berry" = 1 ]; then
+      # shellcheck disable=SC2086
+      docker run --rm --cap-drop ALL $hardening $user_flags $net_flag \
+        -v "${tmpdir}:/app" \
+        -w "$workdir" \
+        $berry_env -e YARN_ENABLE_NETWORK=0 -e COREPACK_ENABLE_NETWORK=0 \
+        safe-pnpm:latest corepack "$spec" $phase2_cmd
+    else
+      # shellcheck disable=SC2086
+      docker run --rm --cap-drop ALL $hardening $user_flags $net_flag \
+        -v "${tmpdir}:/app" \
+        -w "$workdir" \
+        safe-pnpm:latest "$manager" $phase2_cmd $phase2_host_flags
+    fi
     rc=$?
   fi
 
