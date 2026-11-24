@@ -7,11 +7,11 @@ const path = require("node:path");
 const { infoStubSh } = require("./helpers/docker-info-stub");
 const { IMAGE, hasDocker, buildPwshImage } = require("./helpers/pwsh-image");
 
-// The fish and PowerShell sandboxes run Yarn 1. Given a Yarn 2+ (Berry)
-// project it ignores the Berry lockfile, resolves every version again and
-// writes a Yarn 1 lockfile that the copy-back puts over the project's own, so
-// those wrappers refuse yarn installs in a Berry project before phase 1. The
-// bash and zsh wrappers run Berry projects (test/yarn-berry.test.js).
+// The PowerShell sandbox runs Yarn 1. Given a Yarn 2+ (Berry) project it
+// ignores the Berry lockfile, resolves every version again and writes a Yarn 1
+// lockfile that the copy-back puts over the project's own, so that wrapper
+// refuses yarn installs in a Berry project before phase 1. The bash, zsh and
+// fish wrappers run Berry projects (test/yarn-berry.test.js).
 const ASSETS = path.join(__dirname, "..", "assets");
 const REFUSAL = "the wrapper supports Yarn 1 projects only";
 
@@ -109,28 +109,6 @@ function runShell(shell, mgr, args, { root, bin, proj }, pre = "") {
 
 for (const shell of ["bash", "zsh", "fish"]) {
   const skip = available(shell) ? false : `${shell} not available`;
-  for (const [file, contents, args, named] of shell === "fish" ? REFUSED : []) {
-    test(`${shell}: ${label(file, contents, args)} is refused before phase 1`, {
-      skip,
-    }, () => {
-      const p = project(file, contents);
-      try {
-        const { status, err } = runShell(shell, "yarn", args, p);
-        assert.equal(status, 1, err);
-        assert.ok(
-          err.includes(`${path.basename(p.proj)}${named}, and ${REFUSAL}`),
-          err,
-        );
-        assert.match(
-          err,
-          new RegExp(`without the safety checks: command yarn ${args.join(" ")}`),
-        );
-        assert.deepEqual(p.runs(), []);
-      } finally {
-        fs.rmSync(p.root, { recursive: true, force: true });
-      }
-    });
-  }
   for (const [file, contents, args] of KEPT) {
     test(`${shell}: ${label(file, contents, args)} reaches phase 1`, {
       skip,
@@ -162,7 +140,7 @@ for (const shell of ["bash", "zsh", "fish"]) {
   }
 }
 
-test("fish: the refusal holds under SAFE_PNPM_OSV_STRICT=1 too", {
+test("fish: a Berry project without a Yarn pin is refused under SAFE_PNPM_OSV_STRICT=1 too", {
   skip: available("fish") ? false : "fish not available",
 }, () => {
   const p = project("yarn.lock", BERRY_LOCK);
@@ -179,32 +157,34 @@ test("fish: the refusal holds under SAFE_PNPM_OSV_STRICT=1 too", {
     });
     const err = r.stderr.toString();
     assert.equal(r.status, 1, err);
-    assert.ok(err.includes(REFUSAL), err);
+    assert.match(err, /does not pin a Yarn version with packageManager/);
     assert.deepEqual(p.runs(), []);
   } finally {
     fs.rmSync(p.root, { recursive: true, force: true });
   }
 });
 
-test("fish: an out-of-date _safe_pkg_prescan.fish refuses instead of skipping the check", {
-  skip: available("fish") ? false : "fish not available",
-}, () => {
-  const p = project("yarn.lock", V1_LOCK);
-  try {
-    const { status, err } = runShell(
-      "fish",
-      "yarn",
-      ["install"],
-      p,
-      "functions -e _safe_pkg_yarn_berry; ",
-    );
-    assert.equal(status, 1, err);
-    assert.match(err, /_safe_pkg_prescan\.fish is missing or out of date/);
-    assert.deepEqual(p.runs(), []);
-  } finally {
-    fs.rmSync(p.root, { recursive: true, force: true });
-  }
-});
+for (const fn of ["_safe_pkg_yarn_berry", "_safe_pkg_yarn_berry_check"]) {
+  test(`fish: a _safe_pkg_prescan.fish without ${fn} refuses instead of skipping the check`, {
+    skip: available("fish") ? false : "fish not available",
+  }, () => {
+    const p = project("yarn.lock", V1_LOCK);
+    try {
+      const { status, err } = runShell(
+        "fish",
+        "yarn",
+        ["install"],
+        p,
+        `functions -e ${fn}; `,
+      );
+      assert.equal(status, 1, err);
+      assert.match(err, /_safe_pkg_prescan\.fish is missing or out of date/);
+      assert.deepEqual(p.runs(), []);
+    } finally {
+      fs.rmSync(p.root, { recursive: true, force: true });
+    }
+  });
+}
 
 // PowerShell: every case in one Linux pwsh container, one project dir each.
 const skipPs1 = hasDocker ? false : "docker not available";

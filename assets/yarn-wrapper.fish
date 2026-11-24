@@ -5,7 +5,8 @@
 # Intercepts install-class yarn commands and runs them in an isolated Docker
 # container that only sees package manifests (no source files, no .env).
 # Escape hatch: command yarn install bypasses to native yarn.
-# Yarn 1 only: a Yarn 2+ project is refused (the bash/zsh wrapper runs it).
+# A Yarn 3+ project runs its pinned Yarn through corepack in the sandbox
+# (_safe_pkg_yarn_berry_run); _safe_pkg_yarn_berry_check refuses what it cannot run.
 
 function yarn
     # fish autoloads _safe_pkg_prescan.fish only by that name; it defines the
@@ -25,11 +26,15 @@ function yarn
     # The value of a listed flag or a directory flag is skipped, unless it is an
     # install word or a flag. See _safe_pkg_subcmd in _safe_pkg_shared.sh.
     set -l install_cmds install add remove upgrade upgrade-interactive
-    # Yarn 2+ also installs with up and dedupe (refused below); Yarn 1 runs
-    # a package.json script by that name. Without the check, count them, so
-    # the out-of-date check below refuses them.
-    if not functions -q _safe_pkg_yarn_berry; or _safe_pkg_yarn_berry $PWD >/dev/null
-        set install_cmds $install_cmds up dedupe
+    # Yarn 2+ also installs with up, dedupe and rebuild, and as a side effect
+    # with link, unlink, version, set resolution and pack --install-if-needed
+    # (refused by _safe_pkg_yarn_berry_check); Yarn 1 runs a package.json
+    # script by the first three names. Without the helpers, count them, so the
+    # out-of-date check below refuses them.
+    set -l berry 0
+    if not functions -q _safe_pkg_yarn_berry_root _safe_pkg_yarn_berry; or _safe_pkg_yarn_berry_root >/dev/null
+        set berry 1
+        set install_cmds $install_cmds up dedupe rebuild
     end
     set -l native_cmds run test start publish pack create init list ls info why outdated audit cache check config link unlink login logout owner tag team version versions bin generate-lock-entry import licenses autoclean help exec node
     set -l value_flags (_safe_pkg_valueflags yarn)
@@ -39,6 +44,8 @@ function yarn
     set -l seen 0
     set -l g 0
     set -l skip 0
+    set -l ws 0
+    set -l pend
     for a in $argv
         if string match -q -- '-*=*' $a
             set skip 0
@@ -62,6 +69,17 @@ function yarn
                 test $inst -eq 1; or continue
             end
             set seen 1
+            # The word after Yarn 2+ `version` or `set`: `version check` and
+            # every `set` but `set resolution` change nothing.
+            if test -n "$pend"
+                if test "$pend $n" = "set resolution"
+                    set subcmd setresolution
+                else if test "$pend" = version; and test "$n" != check
+                    set subcmd version
+                end
+                set pend
+                break
+            end
             # yarn v1 spells a global install as a subcommand; only the mutating
             # ones are install-class (refused below), `yarn global list` is not.
             if test $g -eq 1
@@ -69,7 +87,30 @@ function yarn
                 break
             else if test "$n" = global
                 set g 1
-            else if contains -- $n $nnative
+                continue
+            end
+            if test $ws -eq 1; and test "$n" = focus
+                set subcmd focus
+                break
+            end
+            set ws 0
+            if test $berry -eq 1
+                switch $n
+                    case workspaces
+                        set ws 1
+                        continue
+                    case link unlink
+                        set subcmd $n
+                        break
+                    case version set
+                        set pend $n
+                        continue
+                    case pack
+                        string match -q -- '--install-if-needed*' $argv; and set subcmd packinstall
+                        break
+                end
+            end
+            if contains -- $n $nnative
                 break
             else if test $inst -eq 1
                 set subcmd $n
@@ -77,6 +118,7 @@ function yarn
             end
         end
     end
+    test "$pend" = version; and set subcmd version
     # Bare `yarn` runs an install (yarn v1), unless help or the version is asked for.
     if test $seen -eq 0
         set subcmd install
@@ -102,7 +144,8 @@ function yarn
 
     # An older _safe_pkg_prescan.fish lacks some of the checks below, and each
     # would then be an unknown command that lets the install through.
-    if not functions -q _safe_pkg_prescan _safe_pkg_is_global _safe_pkg_dir_flag _safe_pkg_yarn_berry
+    if not functions -q _safe_pkg_prescan _safe_pkg_is_global _safe_pkg_dir_flag _safe_pkg_yarn_berry \
+            _safe_pkg_yarn_berry_root _safe_pkg_yarn_berry_check _safe_pkg_yarn_berry_run
         echo "✗ safe-pnpm: _safe_pkg_prescan.fish is missing or out of date; run safe-pnpm update." >&2
         return 1
     end
@@ -133,11 +176,17 @@ function yarn
         return 1
     end
 
-    set -l berry (_safe_pkg_yarn_berry $PWD)
-    if test $status -eq 0
-        echo "✗ safe-pnpm: $berry, and the wrapper supports Yarn 1 projects only: its sandbox runs Yarn 1, which would resolve every version again and replace yarn.lock with a Yarn 1 lockfile." >&2
-        echo "  To run it without the safety checks: command yarn "(string join ' ' -- (string escape -- $pass_args)) >&2
-        return 1
+    # string collect keeps a newline in the path from splitting it.
+    set -l berry_root (_safe_pkg_yarn_berry_root | string collect)
+    if test $pipestatus[1] -eq 0
+        set -l why (_safe_pkg_yarn_berry_check $berry_root $subcmd)
+        if test $status -eq 0
+            # The reason can quote yarn.lock; terminal control bytes stay out.
+            set why (string join \n -- $why | LC_ALL=C tr -d '\000-\010\013-\037\177' | string collect)
+            echo "✗ safe-pnpm: $why" >&2
+            echo "  To run it without the safety checks: command yarn "(string join ' ' -- (string escape -- $pass_args)) >&2
+            return 1
+        end
     end
 
     _safe_pkg_prescan yarn yarn.lock $socket_flag
@@ -158,6 +207,11 @@ function yarn
             echo "✗ safe-pnpm: Docker not running and no TTY — refusing native yarn (set SAFE_PNPM_ALLOW_NATIVE_FALLBACK=1 to override)." >&2
             return 1
         end
+        return
+    end
+
+    if set -q berry_root[1]
+        _safe_pkg_yarn_berry_run $berry_root $pass_args
         return
     end
 

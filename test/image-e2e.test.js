@@ -79,40 +79,46 @@ test("pnpm: a project pinned to pnpm 9 installs on a Mac host and keeps its pack
 // with --mode=skip-build, so the root postinstall must not have run when it
 // ends; phase 2 builds offline and runs it. A second install finds the lockfile
 // up to date. Needs the registry to download Yarn 4.18.1 and ms.
-test("yarn: a Yarn 4 project with nodeLinker node-modules builds only in phase 2", { skip }, () => {
-  const pkg = JSON.stringify({
-    name: "e2e",
-    version: "1.0.0",
-    private: true,
-    packageManager: "yarn@4.18.1",
-    dependencies: { ms: "2.1.3" },
-    scripts: {
-      postinstall: "node -e \"require('fs').writeFileSync('node_modules/.safe-built', '')\"",
-    },
+const hasFish = spawnSync("fish", ["--version"], { stdio: "ignore" }).status === 0;
+for (const shell of ["bash", "fish"]) {
+  const label = shell === "bash" ? "yarn" : "yarn (fish)";
+  const shellSkip = skip || (shell === "fish" && !hasFish && "fish not available");
+  test(`${label}: a Yarn 4 project with nodeLinker node-modules builds only in phase 2`, { skip: shellSkip }, () => {
+    const pkg = JSON.stringify({
+      name: "e2e",
+      version: "1.0.0",
+      private: true,
+      packageManager: "yarn@4.18.1",
+      dependencies: { ms: "2.1.3" },
+      scripts: {
+        postinstall: "node -e \"require('fs').writeFileSync('node_modules/.safe-built', '')\"",
+      },
+    });
+    const { r, proj, runs, probeDir } = install("yarn", {
+      pkg,
+      shell,
+      commands: [["install"], ["install"]],
+      files: { ".yarnrc.yml": "nodeLinker: node-modules\nenableTelemetry: false\n" },
+      probe:
+        '[ -e "$src/node_modules/.safe-built" ] && touch "$out/built.$n"; [ -f "$src/yarn.lock" ] && cp "$src/yarn.lock" "$out/lock.$n"; [ "$n" = 1 ] && cp "$src/.safe-home/.yarnrc.yml" "$out/home-rc"',
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(runs.length, 6, "fetch, audit and build, twice");
+    assert.match(runs[0], / -e YARN_ENABLE_SCRIPTS=0 .* corepack yarn@4\.18\.1 install --mode=skip-build$/);
+    assert.match(runs[1], / -e YARN_ENABLE_SCRIPTS=0 .* corepack yarn@4\.18\.1 npm audit/);
+    assert.match(runs[2], / --network none .* corepack yarn@4\.18\.1 install --immutable/);
+    assert.equal(
+      fs.readFileSync(path.join(probeDir, "home-rc"), "utf8"),
+      'networkSettings:\n  "github.com":\n    enableNetwork: false\n',
+    );
+    assert.ok(!fs.existsSync(path.join(probeDir, "built.1")), "postinstall ran in phase 1");
+    assert.ok(!fs.existsSync(path.join(probeDir, "built.2")), "postinstall ran in the audit");
+    assert.ok(fs.existsSync(path.join(probeDir, "built.3")), "postinstall did not run in phase 2");
+    assert.ok(fs.existsSync(path.join(proj, "node_modules", "ms", "package.json")));
+    assert.ok(fs.existsSync(path.join(proj, "node_modules", ".safe-built")));
+    const lock = fs.readFileSync(path.join(proj, "yarn.lock"), "utf8");
+    assert.match(lock, /^"ms@npm:2\.1\.3":/m);
+    assert.equal(fs.readFileSync(path.join(probeDir, "lock.3"), "utf8"), lock);
+    assert.equal(fs.readFileSync(path.join(probeDir, "lock.4"), "utf8"), lock, "second fetch changed yarn.lock");
   });
-  const { r, proj, runs, probeDir } = install("yarn", {
-    pkg,
-    commands: [["install"], ["install"]],
-    files: { ".yarnrc.yml": "nodeLinker: node-modules\nenableTelemetry: false\n" },
-    probe:
-      '[ -e "$src/node_modules/.safe-built" ] && touch "$out/built.$n"; [ -f "$src/yarn.lock" ] && cp "$src/yarn.lock" "$out/lock.$n"; [ "$n" = 1 ] && cp "$src/.safe-home/.yarnrc.yml" "$out/home-rc"',
-  });
-  assert.equal(r.status, 0, r.stderr);
-  assert.equal(runs.length, 6, "fetch, audit and build, twice");
-  assert.match(runs[0], / -e YARN_ENABLE_SCRIPTS=0 .* corepack yarn@4\.18\.1 install --mode=skip-build$/);
-  assert.match(runs[1], / -e YARN_ENABLE_SCRIPTS=0 .* corepack yarn@4\.18\.1 npm audit/);
-  assert.match(runs[2], / --network none .* corepack yarn@4\.18\.1 install --immutable/);
-  assert.equal(
-    fs.readFileSync(path.join(probeDir, "home-rc"), "utf8"),
-    'networkSettings:\n  "github.com":\n    enableNetwork: false\n',
-  );
-  assert.ok(!fs.existsSync(path.join(probeDir, "built.1")), "postinstall ran in phase 1");
-  assert.ok(!fs.existsSync(path.join(probeDir, "built.2")), "postinstall ran in the audit");
-  assert.ok(fs.existsSync(path.join(probeDir, "built.3")), "postinstall did not run in phase 2");
-  assert.ok(fs.existsSync(path.join(proj, "node_modules", "ms", "package.json")));
-  assert.ok(fs.existsSync(path.join(proj, "node_modules", ".safe-built")));
-  const lock = fs.readFileSync(path.join(proj, "yarn.lock"), "utf8");
-  assert.match(lock, /^"ms@npm:2\.1\.3":/m);
-  assert.equal(fs.readFileSync(path.join(probeDir, "lock.3"), "utf8"), lock);
-  assert.equal(fs.readFileSync(path.join(probeDir, "lock.4"), "utf8"), lock, "second fetch changed yarn.lock");
-});
+}

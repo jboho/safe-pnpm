@@ -9,7 +9,8 @@ const realDocker = () =>
   spawnSync("sh", ["-c", "command -v docker"], { encoding: "utf8" }).stdout.trim();
 
 // Runs each of `commands` (argv arrays, e.g. ["install"]) with `manager`
-// through the bash wrapper, in one project under `tmp`, against `image`. A
+// through the bash wrapper (or the fish one, with shell: "fish"), in one
+// project under `tmp`, against `image`. A
 // shim in front of docker swaps the image tag for `image` and logs each
 // `docker run`, so a test sees the exact flags the wrapper passed. The host's
 // npm, pnpm and yarn are stubs, so the only registry traffic is the
@@ -18,7 +19,7 @@ const realDocker = () =>
 // path runs on any host. opts.files adds project files ({name: text}).
 // opts.probe is sh run after each `docker run` with $src (the sandbox dir),
 // $n (the run's number) and $out (the returned probeDir).
-function wrapperInstall({ tmp, image, manager, commands = [["install"]], pkg, mac, files = {}, probe }) {
+function wrapperInstall({ tmp, image, manager, commands = [["install"]], pkg, mac, files = {}, probe, shell = "bash" }) {
   const root = fs.mkdtempSync(path.join(tmp, `${manager}-`));
   const bin = path.join(root, "bin");
   const proj = path.join(root, "proj");
@@ -72,13 +73,22 @@ function wrapperInstall({ tmp, image, manager, commands = [["install"]], pkg, ma
   // TMPDIR containing quotes or `$` can't change what bash runs. CodeQL
   // counts every `bash -c` argv element as command text, so argv isn't enough.
   // Each command is one line of SAFE_E2E_COMMANDS, its words separated by tabs.
-  const script = [
-    'source "$SAFE_E2E_ASSETS/_safe_pkg_shared.sh"',
-    'source "$SAFE_E2E_ASSETS/$SAFE_E2E_MANAGER-wrapper.sh"',
-    'cd "$SAFE_E2E_PROJ" || exit 1',
-    'while IFS=$\'\\t\' read -r -a argv; do "$SAFE_E2E_MANAGER" "${argv[@]}" </dev/null || exit; done <<< "$SAFE_E2E_COMMANDS"',
-  ].join("; ");
-  const r = spawnSync("bash", ["-c", script], {
+  const script =
+    shell === "fish"
+      ? [
+          'source "$SAFE_E2E_ASSETS/_safe_pkg_prescan.fish"',
+          'source "$SAFE_E2E_ASSETS/$SAFE_E2E_MANAGER-wrapper.fish"',
+          'cd "$SAFE_E2E_PROJ"; or exit 1',
+          "for line in (string split \\n -- $SAFE_E2E_COMMANDS); $SAFE_E2E_MANAGER (string split \\t -- $line) </dev/null; or exit; end",
+        ].join("; ")
+      : [
+          'source "$SAFE_E2E_ASSETS/_safe_pkg_shared.sh"',
+          'source "$SAFE_E2E_ASSETS/$SAFE_E2E_MANAGER-wrapper.sh"',
+          'cd "$SAFE_E2E_PROJ" || exit 1',
+          'while IFS=$\'\\t\' read -r -a argv; do "$SAFE_E2E_MANAGER" "${argv[@]}" </dev/null || exit; done <<< "$SAFE_E2E_COMMANDS"',
+        ].join("; ");
+  const argv = shell === "fish" ? ["--no-config", "-c", script] : ["-c", script];
+  const r = spawnSync(shell, argv, {
     encoding: "utf8",
     env: {
       ...process.env,

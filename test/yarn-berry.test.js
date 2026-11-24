@@ -7,7 +7,7 @@ const path = require("node:path");
 const { startOsvStub } = require("./helpers/osv-stub");
 const { ROOTLESS_DOCKER, infoStubSh } = require("./helpers/docker-info-stub");
 
-// Yarn 2+ (Berry) projects in the bash and zsh wrappers. The sandbox runs the
+// Yarn 2+ (Berry) projects in the bash, zsh and fish wrappers. The sandbox runs the
 // project's pinned Yarn through corepack: phase 1 resolves and fetches with
 // --mode=skip-build (no package code runs), an audit container runs
 // `yarn npm audit` while the registry auth is still there, and phase 2 runs
@@ -341,7 +341,7 @@ before(async () => {
 });
 after(() => osv.stop());
 
-// Runs `yarn <args>` through the bash or zsh wrapper in a Berry project, with
+// Runs `yarn <args>` through the bash, zsh or fish wrapper in a Berry project, with
 // a stub docker that tells the containers apart by their arguments (fetch has
 // --mode=skip-build, the audit runs `npm audit`, the build has --immutable)
 // and records, per container, its arguments and the .yarnrc.yml files it can
@@ -510,7 +510,11 @@ exit 0
   fs.writeFileSync(path.join(bin, "docker"), stub, { mode: 0o755 });
 
   const words = (opts.args ?? ["install"]).map((a) => `'${a}'`).join(" ");
-  const script = `source "${path.join(ASSETS, "_safe_pkg_shared.sh")}"; source "${path.join(ASSETS, "yarn-wrapper.sh")}"; cd "${cwd}"; yarn ${words} </dev/null`;
+  const sources =
+    shell === "fish"
+      ? ["_safe_pkg_prescan.fish", "yarn-wrapper.fish"]
+      : ["_safe_pkg_shared.sh", "yarn-wrapper.sh"];
+  const script = `${sources.map((f) => `source "${path.join(ASSETS, f)}"; `).join("")}cd "${cwd}"; yarn ${words} </dev/null`;
   const env = {
     ...process.env,
     PATH: `${bin}:${process.env.PATH}`,
@@ -529,7 +533,9 @@ exit 0
   ]) {
     if (!(opts.env && k in opts.env)) delete env[k];
   }
-  const r = spawnSync(shell, ["-c", script], { stdio: "pipe", env });
+  const argv =
+    shell === "fish" ? ["--no-config", "-c", script] : ["-c", script];
+  const r = spawnSync(shell, argv, { stdio: "pipe", env });
 
   const at = (f) => path.join(log, f);
   const read = (f) => fs.readFileSync(at(f), "utf8");
@@ -559,7 +565,7 @@ const withRun = (shell, opts, fn) => {
   }
 };
 
-for (const shell of ["bash", "zsh"]) {
+for (const shell of ["bash", "zsh", "fish"]) {
   const skip = available(shell) ? false : `${shell} not available`;
   const t = (name, fn) => test(`${shell}: ${name}`, { skip }, fn);
 
