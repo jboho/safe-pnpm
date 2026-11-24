@@ -15,8 +15,10 @@ const realDocker = () =>
 // npm, pnpm and yarn are stubs, so the only registry traffic is the
 // container's fetch. opts.pkg replaces the project's package.json text;
 // opts.mac puts a `uname` reporting Darwin arm64 in front, so the macOS host
-// path runs on any host.
-function wrapperInstall({ tmp, image, manager, commands = [["install"]], pkg, mac }) {
+// path runs on any host. opts.files adds project files ({name: text}).
+// opts.probe is sh run after each `docker run` with $src (the sandbox dir),
+// $n (the run's number) and $out (the returned probeDir).
+function wrapperInstall({ tmp, image, manager, commands = [["install"]], pkg, mac, files = {}, probe }) {
   const root = fs.mkdtempSync(path.join(tmp, `${manager}-`));
   const bin = path.join(root, "bin");
   const proj = path.join(root, "proj");
@@ -35,13 +37,23 @@ function wrapperInstall({ tmp, image, manager, commands = [["install"]], pkg, ma
     );
   }
   const log = path.join(root, "docker-runs.log");
+  const probeDir = path.join(root, "probe");
+  fs.mkdirSync(probeDir);
+  const run = probe
+    ? [
+        `"${realDocker()}" "$@"; rc=$?`,
+        `src=""; prev=""; for a in "$@"; do [ "$prev" = -v ] && case "$a" in *:/app) src="\${a%:/app}" ;; esac; prev="$a"; done`,
+        `if [ "$1" = run ]; then n=$(wc -l < "${log}" | tr -d ' '); out="${probeDir}"; ${probe}; fi`,
+        "exit $rc",
+      ]
+    : [`exec "${realDocker()}" "$@"`];
   fs.writeFileSync(
     path.join(bin, "docker"),
     [
       "#!/bin/sh",
       `for a in "$@"; do shift; [ "$a" = safe-pnpm:latest ] && a=${image}; set -- "$@" "$a"; done`,
       `[ "$1" = run ] && echo "$@" >> "${log}"`,
-      `exec "${realDocker()}" "$@"`,
+      ...run,
       "",
     ].join("\n"),
     { mode: 0o755 },
@@ -53,6 +65,9 @@ function wrapperInstall({ tmp, image, manager, commands = [["install"]], pkg, ma
     path.join(proj, "package.json"),
     pkg ?? JSON.stringify({ name: "e2e", version: "1.0.0", private: true }),
   );
+  for (const [name, text] of Object.entries(files)) {
+    fs.writeFileSync(path.join(proj, name), text);
+  }
   // Paths go in through the environment, not the script text or argv, so a
   // TMPDIR containing quotes or `$` can't change what bash runs. CodeQL
   // counts every `bash -c` argv element as command text, so argv isn't enough.
@@ -82,7 +97,7 @@ function wrapperInstall({ tmp, image, manager, commands = [["install"]], pkg, ma
     },
   });
   const runs = fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n") : [];
-  return { r, proj, runs };
+  return { r, proj, runs, probeDir };
 }
 
 module.exports = { ASSETS_DIR, wrapperInstall };

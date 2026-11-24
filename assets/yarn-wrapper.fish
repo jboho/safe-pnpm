@@ -5,7 +5,7 @@
 # Intercepts install-class yarn commands and runs them in an isolated Docker
 # container that only sees package manifests (no source files, no .env).
 # Escape hatch: command yarn install bypasses to native yarn.
-# Note: yarn v1 only. berry (v2+) requires separate handling.
+# Yarn 1 only: a Yarn 2+ project is refused (the bash/zsh wrapper runs it).
 
 function yarn
     # fish autoloads _safe_pkg_prescan.fish only by that name; it defines the
@@ -25,6 +25,12 @@ function yarn
     # The value of a listed flag or a directory flag is skipped, unless it is an
     # install word or a flag. See _safe_pkg_subcmd in _safe_pkg_shared.sh.
     set -l install_cmds install add remove upgrade upgrade-interactive
+    # Yarn 2+ also installs with up and dedupe (refused below); Yarn 1 runs
+    # a package.json script by that name. Without the check, count them, so
+    # the out-of-date check below refuses them.
+    if not functions -q _safe_pkg_yarn_berry; or _safe_pkg_yarn_berry $PWD >/dev/null
+        set install_cmds $install_cmds up dedupe
+    end
     set -l native_cmds run test start publish pack create init list ls info why outdated audit cache check config link unlink login logout owner tag team version versions bin generate-lock-entry import licenses autoclean help exec node
     set -l value_flags (_safe_pkg_valueflags yarn)
     set -l ninstall (string replace -a - '' -- $install_cmds)

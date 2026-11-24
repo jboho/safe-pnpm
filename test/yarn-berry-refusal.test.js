@@ -7,10 +7,11 @@ const path = require("node:path");
 const { infoStubSh } = require("./helpers/docker-info-stub");
 const { IMAGE, hasDocker, buildPwshImage } = require("./helpers/pwsh-image");
 
-// The sandbox runs Yarn 1. Given a Yarn 2+ (Berry) project it ignores the
-// Berry lockfile, resolves every version again and writes a Yarn 1 lockfile
-// that the copy-back puts over the project's own, so yarn installs in a Berry
-// project are refused before phase 1, strict mode or not.
+// The fish and PowerShell sandboxes run Yarn 1. Given a Yarn 2+ (Berry)
+// project it ignores the Berry lockfile, resolves every version again and
+// writes a Yarn 1 lockfile that the copy-back puts over the project's own, so
+// those wrappers refuse yarn installs in a Berry project before phase 1. The
+// bash and zsh wrappers run Berry projects (test/yarn-berry.test.js).
 const ASSETS = path.join(__dirname, "..", "assets");
 const REFUSAL = "the wrapper supports Yarn 1 projects only";
 
@@ -44,6 +45,9 @@ const REFUSED = [
     "/package.json sets packageManager to yarn@3.6.0",
   ],
   ["yarn.lock", BERRY_LOCK, ["add", "is-odd"], "/yarn.lock is a Yarn 2+ lockfile"],
+  // Yarn 2+ install commands that Yarn 1 does not have.
+  ["yarn.lock", BERRY_LOCK, ["up", "is-odd"], "/yarn.lock is a Yarn 2+ lockfile"],
+  ["yarn.lock", BERRY_LOCK, ["dedupe"], "/yarn.lock is a Yarn 2+ lockfile"],
 ];
 
 // [file, contents, yarn args]
@@ -105,7 +109,7 @@ function runShell(shell, mgr, args, { root, bin, proj }, pre = "") {
 
 for (const shell of ["bash", "zsh", "fish"]) {
   const skip = available(shell) ? false : `${shell} not available`;
-  for (const [file, contents, args, named] of REFUSED) {
+  for (const [file, contents, args, named] of shell === "fish" ? REFUSED : []) {
     test(`${shell}: ${label(file, contents, args)} is refused before phase 1`, {
       skip,
     }, () => {
@@ -158,13 +162,13 @@ for (const shell of ["bash", "zsh", "fish"]) {
   }
 }
 
-test("bash: the refusal holds under SAFE_PNPM_OSV_STRICT=1 too", {
-  skip: available("bash") ? false : "bash not available",
+test("fish: the refusal holds under SAFE_PNPM_OSV_STRICT=1 too", {
+  skip: available("fish") ? false : "fish not available",
 }, () => {
   const p = project("yarn.lock", BERRY_LOCK);
   try {
-    const script = `source "${path.join(ASSETS, "_safe_pkg_shared.sh")}"; source "${path.join(ASSETS, "yarn-wrapper.sh")}"; cd "${p.proj}"; yarn install </dev/null`;
-    const r = spawnSync("bash", ["-c", script], {
+    const script = `source "${path.join(ASSETS, "_safe_pkg_prescan.fish")}"; source "${path.join(ASSETS, "yarn-wrapper.fish")}"; cd "${p.proj}"; yarn install </dev/null`;
+    const r = spawnSync("fish", ["--no-config", "-c", script], {
       stdio: "pipe",
       env: {
         ...process.env,

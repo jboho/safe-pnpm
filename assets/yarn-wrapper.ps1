@@ -7,13 +7,19 @@
 # Escape hatch: yarn.cmd install bypasses to native yarn.
 # With the PATH shims (~/.safe-pnpm/bin) on PATH, yarn.cmd is the shim, so the
 # refusal hints print the real binary's path instead.
-# Note: yarn v1 only. berry (v2+) requires separate handling.
+# Yarn 1 only: a Yarn 2+ project is refused (the bash/zsh wrapper runs it).
 
 . "$HOME\.safe-pnpm\_safe_pkg_shared.ps1"
 
 function global:yarn {
     if (-not (_Safe_Pkg_Runner_Check -Manager yarn -PassArgs $args)) { $global:LASTEXITCODE = 1; throw 'safe-pnpm: command refused' }
     $installCmds = @('install','add','remove','upgrade','upgrade-interactive')
+    # Yarn 2+ also installs with up and dedupe (refused below); Yarn 1 runs a
+    # package.json script by that name. Without the check, count them, so the
+    # out-of-date check below refuses them.
+    if (-not (Get-Command _Safe_Pkg_Yarn_Berry -ErrorAction SilentlyContinue) -or (_Safe_Pkg_Yarn_Berry -Dir (Get-Location).Path)) {
+        $installCmds += @('up','dedupe')
+    }
     $nativeCmds = @('run','test','start','publish','pack','create','init','list','ls','info','why','outdated','audit','cache','check','config','link','unlink','login','logout','owner','tag','team','version','versions','bin','generate-lock-entry','import','licenses','autoclean','help','exec','node')
     $valueFlags = @(_Safe_Pkg_Valueflags yarn)
     $installN = @($installCmds | ForEach-Object { $_ -replace '-','' })
