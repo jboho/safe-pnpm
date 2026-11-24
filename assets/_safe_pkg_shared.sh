@@ -1729,24 +1729,35 @@ _safe_pkg_sandbox() {
     done
   fi
 
+  # Member paths, each ending in NUL: a folder name can hold a newline, and a
+  # line per member would split it into two paths that are not members.
   : > "$snapdir/members"
 
+  # A file that does not reach the sandbox fails the run: the install would
+  # otherwise succeed without it.
   (
     cd "$workspace_root" || exit 1
     for f in $manifest_files; do
-      [ -f "$f" ] && cp "$f" "$tmpdir/"
+      if [ -f "$f" ]; then
+        cp "$f" "$tmpdir/" || exit 1
+      fi
     done
     # Yarn 2+ keeps its workspace list in package.json, so members are always
     # looked for there. .yarn holds Yarn's own files, never a member, and the
     # sandbox's own folders would collide with the copies.
     if [ "$berry" = 1 ] || { [ -n "$workspace_file" ] && [ -f "$workspace_file" ]; }; then
       find . -mindepth 2 -name package.json -not -path "*/node_modules/*" -not -path "./.yarn/*" \
-        -not -path "./.corepack/*" -not -path "./.safe-home/*" -not -path "./.safe-store/*" | while read -r pkg; do
-        member="$(dirname "${pkg#./}")"
-        mkdir -p "$tmpdir/$member"
-        cp "$pkg" "$tmpdir/$member/"
-        printf '%s\n' "$member" >> "$snapdir/members"
-      done
+        -not -path "./.corepack/*" -not -path "./.safe-home/*" -not -path "./.safe-store/*" -print0 |
+        while IFS= read -r -d '' pkg; do
+          # Not dirname: $(...) drops a folder name's trailing newlines.
+          member="${pkg#./}"
+          member="${member%/package.json}"
+          if ! { mkdir -p "$tmpdir/$member" && cp "$pkg" "$tmpdir/$member/"; }; then
+            echo "✗ safe-pnpm: could not copy $(printf '%q' "$member")/package.json into the sandbox; nothing was installed." >&2
+            exit 1
+          fi
+          printf '%s\0' "$member" >> "$snapdir/members"
+        done || exit 1
     fi
     # patch: dependencies read their diffs from here during the fetch. Not
     # copied back. Only regular .patch files in real folders: a symlink could
@@ -1754,12 +1765,14 @@ _safe_pkg_sandbox() {
     # read it.
     if [ "$berry" = 1 ] && [ ! -L .yarn ] && [ -d .yarn/patches ] && [ ! -L .yarn/patches ]; then
       [ -n "${ZSH_VERSION:-}" ] && setopt nullglob
-      mkdir -p "$tmpdir/.yarn/patches"
+      mkdir -p "$tmpdir/.yarn/patches" || exit 1
       for f in .yarn/patches/*.patch; do
-        [ -f "$f" ] && [ ! -L "$f" ] && cp "$f" "$tmpdir/.yarn/patches/"
+        if [ -f "$f" ] && [ ! -L "$f" ]; then
+          cp "$f" "$tmpdir/.yarn/patches/" || exit 1
+        fi
       done
     fi
-  )
+  ) || return 1
 
   # Yarn 2+ reads ~/.yarnrc.yml too (registry settings and auth); the
   # containers get a copy as their home's, stripped before phase 2. The copy
@@ -1909,7 +1922,7 @@ _safe_pkg_sandbox() {
     for f in package.json "$lockfile"; do
       [ -f "$tmpdir/$f" ] && cp "$tmpdir/$f" "$snapdir/tree/$f"
     done
-    while IFS= read -r m; do
+    while IFS= read -r -d '' m; do
       if [ -f "$tmpdir/$m/package.json" ]; then
         mkdir -p "$snapdir/tree/$m"
         cp "$tmpdir/$m/package.json" "$snapdir/tree/$m/package.json"
@@ -1990,12 +2003,12 @@ _safe_pkg_sandbox() {
     # One progress pair for the whole copy-back, not one per workspace member.
     local has_modules=0 copy_rc=0 copy_t0=$SECONDS
     [ -e "$tmpdir/node_modules" ] && has_modules=1
-    while IFS= read -r m; do
+    while IFS= read -r -d '' m; do
       [ -e "$tmpdir/$m/node_modules" ] && has_modules=1
     done < "$snapdir/members"
     [ "$has_modules" -eq 1 ] && echo "→ Copying node_modules back to the project (can take a minute; don't interrupt)..." >&2
     _safe_pkg_copy_modules "$tmpdir" "" "$workspace_root" || copy_rc=1
-    while IFS= read -r m; do
+    while IFS= read -r -d '' m; do
       _safe_pkg_copy_modules "$tmpdir" "$m" "$workspace_root" || copy_rc=1
     done < "$snapdir/members"
     [ "$copy_rc" -eq 0 ] && [ "$has_modules" -eq 1 ] && echo "→ Copied node_modules back in $((SECONDS - copy_t0))s." >&2
@@ -2003,7 +2016,7 @@ _safe_pkg_sandbox() {
     for f in package.json "$lockfile"; do
       [ -f "$snapdir/tree/$f" ] && cp "$snapdir/tree/$f" "${workspace_root}/$f"
     done
-    while IFS= read -r m; do
+    while IFS= read -r -d '' m; do
       [ -f "$snapdir/tree/$m/package.json" ] && cp "$snapdir/tree/$m/package.json" "${workspace_root}/$m/package.json"
     done < "$snapdir/members"
   fi

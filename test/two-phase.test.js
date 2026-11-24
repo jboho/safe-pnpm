@@ -64,7 +64,10 @@ const SHELLS = [
 // opts.shell     — shell that sources the wrapper (default bash); fish takes
 //                  the .fish wrapper as wrapperFile
 // opts.workspace — add a pnpm-workspace.yaml and member packages/a
-// opts.phase2    — bash run by the stub during phase 2, with $src = the /app
+// opts.members   — more member folder names under packages/; phase 1 gives
+//                  each one a node_modules
+// opts.unreadable — a project file (relative path) to chmod 000
+// opts.phase2   — bash run by the stub during phase 2, with $src = the /app
 //                  mount; stands in for an untrusted build script
 // opts.phase1Lock — lockfile contents phase 1 writes (default a placeholder)
 // opts.osvApi    — install the malware scanner and point it at this OSV API;
@@ -83,6 +86,8 @@ const SHELLS = [
 //                  package.json rewrite, with $src = the /app mount
 // opts.homeNpmrc — contents of the user's ~/.npmrc (default none)
 // opts.env       — extra environment for the wrapper (e.g. NPM_TOKEN: "")
+// opts.errexit   — false runs bash and zsh without set -e, as an
+//                  interactive shell does
 function runWrapper(manager, wrapperFile, opts = {}) {
   const shell = opts.shell ?? "bash";
   const lockfile = LOCKFILES[manager];
@@ -161,7 +166,15 @@ function runWrapper(manager, wrapperFile, opts = {}) {
       path.join(proj, "packages", "a", "package.json"),
       JSON.stringify({ name: "a", version: "1.0.0" }),
     );
+    for (const [i, m] of (opts.members ?? []).entries()) {
+      fs.mkdirSync(path.join(proj, "packages", m));
+      fs.writeFileSync(
+        path.join(proj, "packages", m, "package.json"),
+        JSON.stringify({ name: `m${i}`, version: "1.0.0" }),
+      );
+    }
   }
+  if (opts.unreadable) fs.chmodSync(path.join(proj, opts.unreadable), 0o000);
 
   const stub = `#!/usr/bin/env bash
 cmd="$1"
@@ -203,6 +216,15 @@ if [ "$n" = "1" ]; then
     mkdir -p "$src/packages/a/node_modules/member-dep"
     echo "module.exports=1" > "$src/packages/a/node_modules/member-dep/index.js"
   fi
+  ${
+    opts.members
+      ? `for d in "$src"/packages/*/; do
+    [ -f "$d/package.json" ] || continue
+    mkdir -p "$d/node_modules/member-dep"
+    echo "module.exports=1" > "$d/node_modules/member-dep/index.js"
+  done`
+      : ""
+  }
 fi
 if [ "$n" = "2" ]; then
 ${opts.phase2 ?? ":"}
@@ -222,7 +244,7 @@ cd "${proj}"
 ${manager} install </dev/null >/dev/null 2>"${log}/stderr"
 `
       : `
-set -e
+${opts.errexit === false ? "" : "set -e"}
 source "${path.join(ASSETS_DIR, "_safe_pkg_shared.sh")}"
 source "${path.join(ASSETS_DIR, wrapperFile)}"
 cd "${proj}"
@@ -545,6 +567,54 @@ ln -s "$src/../outside" "$src/packages/a"
       !fs.existsSync(path.join(proj, "packages", "a", "node_modules")),
       "a member dir swapped for a symlink must not be copied back",
     );
+  });
+
+  test(`pnpm workspace (${shell}): members whose folder names hold a space or a newline get their manifest and node_modules`, {
+    skip: !available || ext !== "sh",
+  }, () => {
+    const members = ["with space", "new\nline"];
+    const { proj, read, status } = runWrapper("pnpm", `pnpm-wrapper.${ext}`, {
+      shell,
+      workspace: true,
+      members,
+      errexit: false,
+    });
+    assert.equal(status, 0, read("stderr"));
+    for (const m of members) {
+      assert.ok(
+        fs.existsSync(
+          path.join(proj, "packages", m, "node_modules", "member-dep", "index.js"),
+        ),
+        `${JSON.stringify(m)} must get its node_modules back: ${read("stderr")}`,
+      );
+    }
+    for (const stray of ["line", path.join("packages", "new")]) {
+      assert.ok(
+        !fs.existsSync(path.join(proj, stray)),
+        `${stray} is half of a split folder name and must not be created`,
+      );
+    }
+  });
+
+  test(`pnpm workspace (${shell}): a member manifest that cannot be copied into the sandbox fails the install`, {
+    skip: !available || ext !== "sh" || process.getuid?.() === 0,
+  }, () => {
+    const { proj, read, status, runCount } = runWrapper(
+      "pnpm",
+      `pnpm-wrapper.${ext}`,
+      {
+        shell,
+        workspace: true,
+        members: ["b"],
+        unreadable: "packages/b/package.json",
+        // set -e would stop the shell at the failed cp on its own.
+        errexit: false,
+      },
+    );
+    fs.chmodSync(path.join(proj, "packages", "b", "package.json"), 0o644);
+    assert.notEqual(status, 0, "a failed member copy must fail the install");
+    assert.match(read("stderr"), /packages\/b\/package\.json/);
+    assert.equal(runCount, 0, "no container runs without every member manifest");
   });
 }
 
