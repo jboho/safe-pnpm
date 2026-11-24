@@ -52,6 +52,10 @@ const SHA = "4ff48cec099f0514c3e9bbca18706c9c21122bfb";
 const v1Lock = (resolved) =>
   `# yarn lockfile v1\n\n\nms@x:\n  version "2.1.3"\n  resolved "${resolved}"\n`;
 const msLock = (resolution) => berryLock([["ms@x", "2.1.3", resolution]]);
+const enc = encodeURIComponent;
+const EVIL_TGZ = "https://evil.example/ms-2.1.3.tgz";
+const NPM_TGZ = "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz";
+const ACME_TGZ = "https://npm.acme.example/@acme/x/-/x-1.0.0.tgz";
 const SOURCE_LOCKS = [
   [
     "#commit=",
@@ -111,6 +115,70 @@ const SOURCE_LOCKS = [
   ],
   ["virtual:", msLock("ms@virtual:abc#npm:2.1.3")],
   ["a scoped github:", msLock("@acme/x@github:acme/x")],
+  [
+    "an encoded __archiveUrl name",
+    msLock(`ms@npm:2.1.3::%5F%5FarchiveUrl=${enc(EVIL_TGZ)}`),
+  ],
+  [
+    "a second __archiveUrl",
+    msLock(
+      `ms@npm:2.1.3::__archiveUrl=${enc(NPM_TGZ)}&__archiveUrl=${enc(EVIL_TGZ)}`,
+    ),
+  ],
+  [
+    "a patch of a package with an __archiveUrl",
+    msLock(
+      `ms@patch:ms@${enc(`npm:2.1.3::__archiveUrl=${enc(EVIL_TGZ)}`)}#~/.yarn/patches/ms.patch::version=2.1.3&hash=abc`,
+    ),
+  ],
+];
+
+// Lockfiles that download a package from a server ~/.yarnrc.yml does not
+// name. Yarn sends the registry token with an npm: package's __archiveUrl
+// download, and migrates a Yarn 1 resolved URL into one.
+const ARCHIVE_LOCKS = [
+  [
+    "a scoped package",
+    berryLock([
+      [
+        "@acme/x@npm:^1.0.0",
+        "1.0.0",
+        `@acme/x@npm:1.0.0::__archiveUrl=${enc(EVIL_TGZ)}`,
+      ],
+    ]),
+  ],
+  [
+    "an unscoped package",
+    msLock(`ms@npm:2.1.3::__archiveUrl=${enc(EVIL_TGZ)}`),
+  ],
+  [
+    "a registry host as URL userinfo",
+    msLock(
+      `ms@npm:2.1.3::__archiveUrl=${enc("https://registry.npmjs.org@evil.example/ms.tgz")}`,
+    ),
+  ],
+  [
+    "http instead of https",
+    msLock(
+      `ms@npm:2.1.3::__archiveUrl=${enc(NPM_TGZ.replace("https", "http"))}`,
+    ),
+  ],
+  [
+    "a percent-encoded host",
+    msLock(
+      `ms@npm:2.1.3::__archiveUrl=${enc("https://registry%2enpmjs.org/ms.tgz")}`,
+    ),
+  ],
+  [
+    "a host with a trailing dot",
+    msLock(
+      `ms@npm:2.1.3::__archiveUrl=${enc("https://registry.npmjs.org./ms.tgz")}`,
+    ),
+  ],
+  [
+    "Yarn 1, a scoped tarball on another host",
+    `# yarn lockfile v1\n\n\n"@acme/x@^1.0.0":\n  version "1.0.0"\n  resolved "https://evil.example/r/@acme/x/-/@acme/x-1.0.0.tgz"\n`,
+  ],
 ];
 
 // Lockfiles that are valid YAML (or Yarn 1 syntax) but not the plain layout
@@ -142,7 +210,7 @@ const LINES_LOCKS = [
   ],
   [
     "__metadata in a Yarn 1 lockfile",
-    `${v1Lock("https://r.example/ms.tgz")}__metadata:\n  version "8"\n`,
+    `${v1Lock(NPM_TGZ)}__metadata:\n  version "8"\n`,
   ],
   [
     "resolution in a Yarn 1 lockfile",
@@ -246,6 +314,19 @@ const YARNRC = [
   "",
 ].join("\n");
 
+// The project's scope registry is one the user named in ~/.yarnrc.yml too,
+// which the sandbox requires before the fetch phase runs with the token.
+const HOME_YARNRC =
+  'npmScopes:\n  acme:\n    npmRegistryServer: "https://npm.acme.example"\n';
+
+// Yarn fills ${VAR} in ~/.yarnrc.yml from a project's .env.yarn, so the
+// containers that hold the token read no environment file. The path does not
+// exist, and the trailing ? tells Yarn that is fine.
+const NO_ENV_FILES = "YARN_INJECT_ENVIRONMENT_FILES=/nonexistent/.env.yarn?";
+
+// A project .yarnrc.yml with only the linker the sandbox needs, then `rest`.
+const rc = (rest) => `nodeLinker: node-modules\n${rest}`;
+
 const PKG = {
   name: "fixture",
   version: "1.0.0",
@@ -270,7 +351,7 @@ after(() => osv.stop());
 // opts.args       yarn arguments (default ["install"])
 // opts.pkg        project package.json object (default PKG)
 // opts.yarnrc     project .yarnrc.yml text, or null for none (default YARNRC)
-// opts.homeYarnrc ~/.yarnrc.yml text (default none)
+// opts.homeYarnrc ~/.yarnrc.yml text, or null for none (default HOME_YARNRC)
 // opts.lock       project yarn.lock text, or null for none (default LOCK)
 // opts.phase1Lock yarn.lock the fetch writes (default PHASE1_LOCK)
 // opts.workspace  root workspaces ["packages/*"] with member packages/a, run
@@ -337,8 +418,10 @@ function berry(shell, opts = {}) {
   if (yarnrc !== null) fs.writeFileSync(path.join(proj, ".yarnrc.yml"), yarnrc);
   const lock = opts.lock === undefined ? LOCK : opts.lock;
   if (lock !== null) fs.writeFileSync(path.join(proj, "yarn.lock"), lock);
-  if (opts.homeYarnrc !== undefined)
-    fs.writeFileSync(path.join(root, ".yarnrc.yml"), opts.homeYarnrc);
+  const homeYarnrc =
+    opts.homeYarnrc === undefined ? HOME_YARNRC : opts.homeYarnrc;
+  if (homeYarnrc !== null)
+    fs.writeFileSync(path.join(root, ".yarnrc.yml"), homeYarnrc);
   if (opts.patches) {
     const yarnDir =
       opts.patches === "linked"
@@ -505,6 +588,7 @@ for (const shell of ["bash", "zsh"]) {
           "COREPACK_ENABLE_DOWNLOAD_PROMPT=0",
           "YARN_ENABLE_SCRIPTS=0",
           "YARN_ENABLE_TELEMETRY=0",
+          NO_ENV_FILES,
         ]) {
           assert.ok(p1.includes(` -e ${e} `), `expected -e ${e} in: ${p1}`);
         }
@@ -589,6 +673,7 @@ for (const shell of ["bash", "zsh"]) {
         assert.match(a, / -e NPM_TOKEN /);
         assert.match(a, / -e YARN_ENABLE_SCRIPTS=0 /);
         assert.match(a, / -e YARN_ENABLE_TELEMETRY=0 /);
+        assert.ok(a.includes(` -e ${NO_ENV_FILES} `), a);
         assert.match(read("audit.yarnrc"), /SCOPE-SECRET/);
         assert.ok(
           !host.some((l) => / audit/.test(l)),
@@ -629,8 +714,11 @@ for (const shell of ["bash", "zsh"]) {
           err,
         );
         assert.match(p2, / --network none /);
-        // Phase 2 is where build scripts run.
-        assert.doesNotMatch(p2, /YARN_ENABLE_SCRIPTS/);
+        // Phase 2 is where build scripts run, and they may read .env.yarn.
+        assert.doesNotMatch(
+          p2,
+          /YARN_ENABLE_SCRIPTS|YARN_INJECT_ENVIRONMENT_FILES/,
+        );
         for (const e of [
           "YARN_ENABLE_NETWORK=0",
           "COREPACK_ENABLE_NETWORK=0",
@@ -717,8 +805,7 @@ for (const shell of ["bash", "zsh"]) {
   });
 
   t("~/.yarnrc.yml reaches the fetch, and phase 2 gets it without auth", () => {
-    const homeYarnrc =
-      'npmRegistries:\n  "//npm.home.example":\n    npmAuthToken: HOME-SECRET\n    npmAlwaysAuth: true\n';
+    const homeYarnrc = `${HOME_YARNRC}npmRegistries:\n  "//npm.home.example":\n    npmAuthToken: HOME-SECRET\n    npmAlwaysAuth: true\n`;
     withRun(shell, { homeYarnrc }, ({ read, err }) => {
       assert.equal(read("fetch.home"), homeYarnrc + GITHUB_BLOCK, err);
       assert.match(read("fetch.args"), / -e HOME=\/app\/\.safe-home /);
@@ -733,7 +820,10 @@ for (const shell of ["bash", "zsh"]) {
     () => {
       withRun(
         shell,
-        { homeYarnrc: "enableTelemetry: false\n", dockerInfo: ROOTLESS_DOCKER },
+        {
+          homeYarnrc: `${HOME_YARNRC}enableTelemetry: false\n`,
+          dockerInfo: ROOTLESS_DOCKER,
+        },
         ({ read, err }) => {
           for (const phase of ["fetch", "audit", "build"]) {
             assert.match(
@@ -797,6 +887,42 @@ for (const shell of ["bash", "zsh"]) {
     },
   );
 
+  t("registry and proxy settings that match ~/.yarnrc.yml still run", () => {
+    const homeYarnrc = `${HOME_YARNRC}npmRegistryServer: "https://npm.acme.example/"\nhttpsProxy: http://proxy.acme.example:3128\nenableStrictSsl: false\n`;
+    const yarnrc = rc(
+      `npmRegistryServer: "https://ci:PASS@NPM.acme.example"\nhttpsProxy: "http://proxy.acme.example:3128" # office\nenableStrictSsl: false\nnpmScopes:\n  "acme":\n    npmRegistryServer: 'https://npm.acme.example/'\n    npmAlwaysAuth: true\n`,
+    );
+    withRun(shell, { yarnrc, homeYarnrc }, ({ order, status, err }) => {
+      assert.equal(status, 0, err);
+      assert.deepEqual(order, ["fetch", "audit", "build"]);
+    });
+  });
+
+  t("the public npm registry and enableStrictSsl: true still run", () => {
+    const yarnrc = rc(
+      "npmRegistryServer: https://registry.npmjs.org\nenableStrictSsl: true\nnpmScopes:\n  types:\n    npmRegistryServer: https://registry.yarnpkg.com/\n",
+    );
+    withRun(shell, { yarnrc, homeYarnrc: null }, ({ order, status, err }) => {
+      assert.equal(status, 0, err);
+      assert.deepEqual(order, ["fetch", "audit", "build"]);
+    });
+  });
+
+  t("a refused registry is shown without its URL password", () => {
+    const yarnrc = rc(
+      'npmRegistryServer: "https://u:LEAK-PASS@npm.evil.example"\n',
+    );
+    withRun(shell, { yarnrc }, ({ order, status, err }) => {
+      assert.equal(status, 1, err);
+      assert.match(
+        err,
+        /sets npmRegistryServer to https:\/\/npm\.evil\.example,/,
+      );
+      assert.doesNotMatch(err, /LEAK-PASS/);
+      assert.deepEqual(order, []);
+    });
+  });
+
   t("dependenciesMeta built: false still runs", () => {
     const pkg = { ...PKG, dependenciesMeta: { ms: { built: false } } };
     withRun(shell, { pkg }, ({ order, status, err }) => {
@@ -829,7 +955,8 @@ for (const shell of ["bash", "zsh"]) {
   // GitHub sources run the package's own scripts to pack it, with the token,
   // during phase 1. Yarn checks networkSettings on every request it makes.
   t("the fetch's ~/.yarnrc.yml blocks GitHub when there is none", () => {
-    withRun(shell, {}, ({ read, err }) => {
+    const opts = { homeYarnrc: null, yarnrc: rc("") };
+    withRun(shell, opts, ({ read, err }) => {
       assert.equal(read("fetch.home"), GITHUB_BLOCK, err);
     });
   });
@@ -839,7 +966,7 @@ for (const shell of ["bash", "zsh"]) {
     () => {
       withRun(
         shell,
-        { homeYarnrc: "enableTelemetry: false" },
+        { homeYarnrc: "enableTelemetry: false", yarnrc: rc("") },
         ({ read, root, err }) => {
           assert.equal(
             read("fetch.home"),
@@ -858,6 +985,38 @@ for (const shell of ["bash", "zsh"]) {
 
   t("a lockfile with every supported source passes the check", () => {
     withRun(shell, { lock: SAFE_LOCK }, ({ order, status, err }) => {
+      assert.equal(status, 0, err);
+      assert.deepEqual(order, ["fetch", "audit", "build"]);
+    });
+  });
+
+  t("downloads from the public registries or ~/.yarnrc.yml still run", () => {
+    const corp = "https://npm.corp.example:8443/c/-/c-1.0.0.tgz";
+    const lock = berryLock([
+      [
+        "@acme/x@npm:^1.0.0",
+        "1.0.0",
+        `@acme/x@npm:1.0.0::__archiveUrl=${enc(ACME_TGZ)}`,
+      ],
+      [
+        "@acme/y@npm:^1.0.0",
+        "1.0.0",
+        `@acme/y@npm:1.0.0::__archiveUrl=${enc("https://NPM.Acme.Example/y.tgz")}`,
+      ],
+      ["ms@npm:^2.1.3", "2.1.3", `ms@npm:2.1.3::__archiveUrl=${enc(NPM_TGZ)}`],
+      ["c@npm:^1.0.0", "1.0.0", `c@npm:1.0.0::__archiveUrl=${enc(corp)}`],
+      ["d@npm:^1.0.0", "1.0.0+build.1", "d@npm:1.0.0+build.1"],
+    ]);
+    const homeYarnrc = `${HOME_YARNRC}npmRegistryServer: "https://bob:pw@npm.corp.example:8443/" # corp\n`;
+    withRun(shell, { lock, homeYarnrc }, ({ order, status, err }) => {
+      assert.equal(status, 0, err);
+      assert.deepEqual(order, ["fetch", "audit", "build"]);
+    });
+  });
+
+  t("a migrated Yarn 1 lockfile from a registry in ~/.yarnrc.yml runs", () => {
+    const lock = `# yarn lockfile v1\n\n\n"@acme/x@^1.0.0":\n  version "1.0.0"\n  resolved "${ACME_TGZ}#abc"\n`;
+    withRun(shell, { lock }, ({ order, status, err }) => {
       assert.equal(status, 0, err);
       assert.deepEqual(order, ["fetch", "audit", "build"]);
     });
@@ -892,16 +1051,15 @@ for (const shell of ["bash", "zsh"]) {
 
   t("URL credentials in .yarnrc.yml files stay out of phase 2", () => {
     const yarnrc = `${YARNRC}npmRegistryServer: "https://user:PASS-SECRET@npm.acme.example"\n`;
-    const homeYarnrc =
-      'npmRegistryServer: "https://bob:HOME-PASS@npm.home.example/x"\n';
+    const homeYarnrc = `${HOME_YARNRC}npmRegistryServer: "https://bob:HOME-PASS@npm.acme.example/"\n`;
     withRun(shell, { yarnrc, homeYarnrc }, ({ read, err }) => {
       assert.match(read("fetch.yarnrc"), /PASS-SECRET/, err);
-      const rc = read("build.yarnrc");
-      assert.doesNotMatch(rc, /PASS-SECRET|user:/);
-      assert.match(rc, /npmRegistryServer: "https:\/\/npm\.acme\.example"/);
+      const b = read("build.yarnrc");
+      assert.doesNotMatch(b, /PASS-SECRET|user:/);
+      assert.match(b, /npmRegistryServer: "https:\/\/npm\.acme\.example"/);
       const h = read("build.home");
       assert.doesNotMatch(h, /HOME-PASS|bob:/);
-      assert.match(h, /npmRegistryServer: "https:\/\/npm\.home\.example\/x"/);
+      assert.match(h, /npmRegistryServer: "https:\/\/npm\.acme\.example\/"/);
     });
   });
 
@@ -1099,6 +1257,82 @@ for (const shell of ["bash", "zsh"]) {
       ["install"],
       /\.yarnrc\.yml reads an environment variable or an escape \(line 12\)/,
     ],
+    // The fetch phase has the registry token, and Yarn sends a token to the
+    // registry a project names unless ~/.yarnrc.yml names it too.
+    ...[
+      ["npmRegistryServer", 'npmRegistryServer: "https://npm.evil.example"\n'],
+      [
+        "npmRegistryServer",
+        "npmRegistryServer: https://npm.acme.example@npm.evil.example\n",
+        "npmRegistryServer with the user's host as URL userinfo",
+      ],
+      ["npmAuditRegistry", "npmAuditRegistry: https://npm.evil.example\n"],
+      ["httpsProxy", 'httpsProxy: "http://proxy.evil.example:8080"\n'],
+      ["httpProxy", "httpProxy: http://proxy.evil.example:8080\n"],
+      ["enableStrictSsl", "enableStrictSsl: false\n"],
+      ["caFilePath", "caFilePath: ./ca.pem\n"],
+      [
+        "npmScopes.evil.npmRegistryServer",
+        "npmScopes:\n  evil:\n    npmAlwaysAuth: true\n    npmRegistryServer: https://npm.evil.example\n",
+      ],
+      [
+        "npmScopes.acme.npmRegistryServer",
+        'npmScopes:\n  acme:\n    npmRegistryServer: "https://npm.evil.example"\n',
+      ],
+    ].map(([key, setting, label = key]) => [
+      `${label} that ~/.yarnrc.yml does not set to the same value`,
+      { yarnrc: rc(setting) },
+      ["install"],
+      new RegExp(
+        `\\.yarnrc\\.yml sets ${key.replaceAll(".", "\\.")} to .*, which is not the value in .*\\.yarnrc\\.yml`,
+      ),
+    ]),
+    ...[
+      [
+        "a flow mapping in npmScopes",
+        'npmScopes:\n  evil: {npmRegistryServer: "https://npm.evil.example"}\n',
+        3,
+      ],
+      [
+        "a registry on the line after its key",
+        'npmRegistryServer:\n  "https://npm.evil.example"\n',
+        2,
+      ],
+      [
+        "a block scalar registry in npmScopes",
+        "npmScopes:\n  acme:\n    npmRegistryServer: >\n      https://npm.evil.example\n",
+        4,
+      ],
+      [
+        "an alias in npmScopes",
+        "npmScopes:\n  acme:\n    npmRegistryServer: *evil\n",
+        4,
+      ],
+      ["a merge key in npmScopes", "npmScopes:\n  acme:\n    <<: *evil\n", 4],
+      ["a scope that is an alias", "npmScopes:\n  evil: *acme\n", 3],
+      [
+        "a registry that goes on to the next line",
+        "npmRegistryServer: https://npm.acme.example\n  .evil.example\n",
+        2,
+      ],
+      [
+        "a scope registry that goes on to the next line",
+        "npmScopes:\n  acme:\n    npmRegistryServer: https://npm.acme.example\n      .evil.example\n",
+        4,
+      ],
+      [
+        "an unclosed quote in a registry",
+        'npmRegistryServer: "https://npm.acme.example\n',
+        2,
+      ],
+    ].map(([name, setting, line]) => [
+      `${name} in .yarnrc.yml`,
+      { yarnrc: rc(setting) },
+      ["install"],
+      new RegExp(
+        `\\.yarnrc\\.yml has a registry or proxy setting the wrapper cannot read safely \\(line ${line}\\)`,
+      ),
+    ]),
     [
       "an exec: dependency in package.json",
       {
@@ -1151,6 +1385,22 @@ for (const shell of ["bash", "zsh"]) {
       ["install"],
       /yarn\.lock resolves a dependency from a source the wrapper does not support/,
     ]),
+    ...ARCHIVE_LOCKS.map(([name, lock]) => [
+      `a download from another server in yarn.lock (${name})`,
+      { lock },
+      ["install"],
+      /yarn\.lock downloads a package from a server that is not a registry in /,
+    ]),
+    [
+      "a download from a scope registry when there is no ~/.yarnrc.yml",
+      {
+        homeYarnrc: null,
+        yarnrc: rc(""),
+        lock: msLock(`ms@npm:2.1.3::__archiveUrl=${enc(ACME_TGZ)}`),
+      },
+      ["install"],
+      /yarn\.lock downloads a package from a server that is not a registry in /,
+    ],
     ...LINES_LOCKS.map(([name, lock]) => [
       `yarn.lock with ${name}`,
       { lock },

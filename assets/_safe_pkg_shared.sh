@@ -851,6 +851,127 @@ _safe_pkg_yarnrc_interp() {
   return 1
 }
 
+# _safe_pkg_yarn_net_check root
+#   Prints why the registry, proxy and TLS settings of root/.yarnrc.yml are
+#   refused, and succeeds; fails when they pass. The fetch phase has the
+#   user's ~/.yarnrc.yml, literal tokens included, and Yarn sends a top-level
+#   token to whatever registry a scope resolves to, so each setting the
+#   project makes must already be in ~/.yarnrc.yml at the same key with the
+#   same value (case of the scheme and host, URL userinfo and a trailing slash
+#   aside). The public npm registries and enableStrictSsl: true always pass.
+#   Both files must have passed _safe_pkg_yarnrc_plain. Values must fit on
+#   their key's line, plain or quoted, and npmScopes must be plain block
+#   mappings: anchors, aliases, tags, merge keys, flow and block scalars could
+#   set a value the line reader does not see. npmRegistries is not read: it
+#   only keys credentials by host.
+_safe_pkg_yarn_net_check() {
+  local proj="$1/.yarnrc.yml" home="$HOME/.yarnrc.yml" out f k v n
+  [ -f "$proj" ] || return 1
+  [ -f "$home" ] || home=/dev/null
+  [ "$proj" -ef "$home" ] && return 1
+  out="$(LC_ALL=C awk '
+    BEGIN {
+      sq = sprintf("%c", 39)
+      keyre = "^[A-Za-z][A-Za-z0-9]*[ \t]*:"
+      scopere = "^(\"[^\"\\\\]*\"|" sq "[^" sq "]*" sq "|[A-Za-z0-9][A-Za-z0-9._-]*)[ \t]*:"
+      net = "^(npmRegistryServer|npmAuditRegistry|httpProxy|httpsProxy|enableStrictSsl|caFilePath|httpsCaFilePath|httpsCertFilePath|httpsKeyFilePath)$"
+    }
+    function bad(n) { print "U " (ishome ? "H" : "P") " " n; done = 1; exit }
+    function empty(s) { sub(/^[ \t]+/, "", s); return s == "" || s ~ /^#/ }
+    function val(s, n,   q, k, v, rest) {
+      sub(/^[ \t]+/, "", s)
+      if (empty(s)) bad(n)
+      q = substr(s, 1, 1)
+      if (q == "\"" || q == sq) {
+        rest = substr(s, 2); k = index(rest, q)
+        if (k == 0) bad(n)
+        v = substr(rest, 1, k - 1); rest = substr(rest, k + 1)
+        if (rest !~ /^([ \t]+#.*)?[ \t]*$/ || (q == "\"" && index(v, "\\"))) bad(n)
+      } else {
+        if (index("-?:,[]{}#&*!|>%@`", q)) bad(n)
+        v = s; sub(/[ \t]#.*/, "", v); sub(/[ \t]+$/, "", v)
+        if (v ~ /: / || v ~ /:$/) bad(n)
+      }
+      if (v ~ /[^!-~]/) bad(n)
+      return v
+    }
+    function norm(v,   s, a, r) {
+      if (match(v, /^[A-Za-z][A-Za-z0-9+.-]*:\/\//)) {
+        s = substr(v, 1, RLENGTH); a = substr(v, RLENGTH + 1); r = ""
+        if (match(a, /[\/\\?#]/)) { r = substr(a, RSTART); a = substr(a, 1, RSTART - 1) }
+        sub(/.*@/, "", a)
+        v = tolower(s a) r
+      }
+      sub(/\/+$/, "", v)
+      return v
+    }
+    function rec(p, v, n) {
+      v = norm(v)
+      if (ishome) H[p SUBSEP v] = 1
+      else { np++; P[np] = p; PV[np] = v; PL[np] = n }
+    }
+    FILENAME != cur { cur = FILENAME; ishome = (FILENAME == ARGV[1]); blk = 0; chk = -1 }
+    { sub(/\r$/, "") }
+    /^[ \t]*$/ { next }
+    {
+      match($0, /^[ \t]*/); ind = RLENGTH; line = substr($0, ind + 1)
+      if (chk >= 0) { if (ind > chk) bad(chkn); chk = -1 }
+    }
+    /^[ \t]*#/ { next }
+    ind == 0 {
+      blk = 0
+      if (!match(line, keyre)) next
+      key = substr(line, 1, RLENGTH); sub(/[ \t]*:$/, "", key); rest = substr(line, RLENGTH + 1)
+      if (key == "npmScopes") {
+        if (!empty(rest)) bad(FNR)
+        blk = 1; i1 = 0; scope = ""
+      } else if (key ~ net) { rec(key, val(rest, FNR), FNR); chk = 0; chkn = FNR }
+      next
+    }
+    !blk { next }
+    substr($0, 1, ind) ~ /\t/ { bad(FNR) }
+    {
+      if (!i1) i1 = ind
+      if (ind == i1) {
+        if (!match(line, scopere)) bad(FNR)
+        scope = substr(line, 1, RLENGTH); sub(/[ \t]*:$/, "", scope)
+        gsub("^[\"" sq "]|[\"" sq "]$", "", scope)
+        if (scope == "" || scope ~ /[^!-~]/ || !empty(substr(line, RLENGTH + 1))) bad(FNR)
+        i2 = 0; inval = 0
+        next
+      }
+      if (ind < i1 || scope == "") bad(FNR)
+      if (!i2) i2 = ind
+      if (ind > i2) { if (inval) next; bad(FNR) }
+      if (ind < i2 || !match(line, keyre)) bad(FNR)
+      key = substr(line, 1, RLENGTH); sub(/[ \t]*:$/, "", key)
+      inval = key != "npmRegistryServer"
+      if (!inval) { rec("npmScopes." scope "." key, val(substr(line, RLENGTH + 1), FNR), FNR); chk = i2; chkn = FNR }
+    }
+    END {
+      if (done) exit
+      for (i = 1; i <= np; i++) {
+        p = P[i]; v = PV[i]
+        if ((p == "npmRegistryServer" || p ~ /^npmScopes\..*\.npmRegistryServer$/) && (v == "https://registry.yarnpkg.com" || v == "https://registry.npmjs.org")) continue
+        if (p == "enableStrictSsl" && v == "true") continue
+        if ((p SUBSEP v) in H) continue
+        print "D " p " " v " " PL[i]
+        exit
+      }
+    }
+  ' "$home" "$proj")" || out="U P 1"
+  [ -n "$out" ] || return 1
+  case "$out" in
+    U\ *)
+      case "$out" in U\ H\ *) f="$HOME/.yarnrc.yml" ;; *) f="$proj" ;; esac
+      echo "$f has a registry or proxy setting the wrapper cannot read safely (line ${out##* }): write it as key: value on one line, with a plain or quoted value and no anchors, aliases, tags, braces or multi-line text, and run the command again." ;;
+    *)
+      out="${out#D }"; k="${out%% *}"; out="${out#* }"; v="${out% *}"; n="${out##* }"
+      echo "$proj sets $k to $v, which is not the value in $HOME/.yarnrc.yml. The fetch phase has the registry token, and Yarn could send it to a registry or proxy the project picked. If you trust that server, add the same setting (line $n) to $HOME/.yarnrc.yml and run the command again." ;;
+  esac
+  return 0
+}
+
 # _safe_pkg_yarn_manifest_check root
 #   Prints why a package.json the sandbox copies (the root's, and every one
 #   below it that the member copy finds) is refused, and succeeds; fails when
@@ -910,13 +1031,40 @@ _safe_pkg_yarn_berry_pin() {
   printf '%s\n' "$pm" | grep -qE '^yarn@([3-9]|[1-9][0-9]+)\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.]+)?$'
 }
 
+# _safe_pkg_yarn_origins
+#   Prints the registry origins (scheme://host[:port], lowercase) the user
+#   trusts, each between spaces: the public npm registries and every
+#   npmRegistryServer in ~/.yarnrc.yml, top-level or under npmScopes.
+_safe_pkg_yarn_origins() {
+  local f="$HOME/.yarnrc.yml"
+  [ -r "$f" ] || f=/dev/null
+  LC_ALL=C awk -v sq="'" '
+    BEGIN { o = " https://registry.npmjs.org https://registry.yarnpkg.com " }
+    { sub(/\r$/, "") }
+    match($0, "^[ \t]*[\"" sq "]?npmRegistryServer[\"" sq "]?[ \t]*:[ \t]*") {
+      v = substr($0, RLENGTH + 1); sub(/[ \t]+#.*/, "", v); sub(/[ \t]+$/, "", v)
+      gsub("^[\"" sq "]|[\"" sq "]$", "", v)
+      v = tolower(v)
+      if (!match(v, /^https?:\/\/[^\/?#\\]*/)) next
+      a = substr(v, 1, RLENGTH); s = substr(a, 1, index(a, "//") + 1); a = substr(a, length(s) + 1)
+      sub(/.*@/, "", a)
+      if (a ~ /^[a-z0-9.-]+(:[0-9]+)?$/) o = o s a " "
+    }
+    END { print o }
+  ' "$f"
+}
+
 # _safe_pkg_yarn_lock_check file
 #   Prints "G N" when line N of the yarn.lock is not in the plain layout Yarn
-#   writes, or "S RESOLUTION" for the first dependency from a source the
-#   sandbox does not run, and succeeds; fails when the lockfile passes or is
-#   missing. Yarn reads a lockfile as Yarn 1 when a leading # line is the
-#   `yarn lockfile v1` marker, otherwise as YAML where a repeated key's last
-#   value wins, so every line is checked:
+#   writes, "S RESOLUTION" for the first dependency from a source the sandbox
+#   does not run, or "A RESOLUTION" for one downloaded from a server outside
+#   _safe_pkg_yarn_origins, and succeeds; fails when the lockfile passes or is
+#   missing. Yarn sends the registry token with an npm: package's
+#   __archiveUrl download, wherever it points, and migrates a Yarn 1 resolved
+#   URL into one; the URL must start with a trusted origin, with no userinfo
+#   or percent escape in the host. Yarn reads a lockfile as Yarn 1 when a
+#   leading # line is the `yarn lockfile v1` marker, otherwise as YAML where
+#   a repeated key's last value wins, so every line is checked:
 #   - Yarn 2+: column 0 holds __metadata or a quoted descriptor, indent 2 the
 #     entry fields, 4 and 6 their maps; a value is one quoted string or plain
 #     text that YAML cannot read as anything else. Each resolution must be
@@ -935,8 +1083,32 @@ _safe_pkg_yarn_lock_check() {
     printf '%s\n' "G 1"
     return 0
   fi
-  out="$(LC_ALL=C awk '
+  out="$(LC_ALL=C awk -v origins="$(_safe_pkg_yarn_origins)" '
     function fail(k, v) { print k " " v; done = 1; exit }
+    function dec(u,   out, i, c) {
+      out = ""
+      while ((i = index(u, "%")) > 0) {
+        c = tolower(substr(u, i + 1, 2))
+        if (c !~ /^[0-9a-f][0-9a-f]$/) return ""
+        c = (index(hx, substr(c, 1, 1)) - 1) * 16 + index(hx, substr(c, 2, 1)) - 1
+        if (c < 33 || c > 126) return ""
+        out = out substr(u, 1, i - 1) sprintf("%c", c)
+        u = substr(u, i + 3)
+      }
+      return out u
+    }
+    function trusted(u,   a, s) {
+      if (u ~ /[^!-~]/) return 0
+      u = tolower(u)
+      if (!match(u, /^https?:\/\/[a-z0-9.-]+(:[0-9]+)?/)) return 0
+      a = substr(u, 1, RLENGTH); s = substr(u, RLENGTH + 1)
+      if (s != "" && s !~ /^\//) return 0
+      return index(origins, " " a " ") > 0
+    }
+    function archok(r,   i) {
+      if ((i = index(r, "::__archiveUrl=")) == 0) return 1
+      return trusted(dec(substr(r, i + 15)))
+    }
     function urlok(u,   h) {
       if (u !~ /^https?:\/\//) return 0
       h = substr(u, index(u, "//") + 2)
@@ -954,8 +1126,9 @@ _safe_pkg_yarn_lock_check() {
       s = r
       if (s ~ /^@/) { if (!sub(/^@[^\/@]+\/[^@]+@/, "", s)) return 0 }
       else if (!sub(/^[^@]+@/, "", s)) return 0
-      if (s ~ /^(npm|workspace|file|portal|link):/) return 1
-      if (s ~ /^patch:/) return substr(s, 7) ~ /^(@[^\/@]+\/)?[^@\/]+@(npm|workspace)%3[Aa]/
+      if (s ~ /^npm:/) return substr(s, 5) ~ /^[0-9A-Za-z.+-]+(::__archiveUrl=[A-Za-z0-9%._~-]+)?$/
+      if (s ~ /^(workspace|file|portal|link):/) return 1
+      if (s ~ /^patch:/) return substr(s, 7) ~ /^(@[^\/@]+\/)?[^@\/]+@(npm%3[Aa]([0-9A-Za-z.-]|%2[Bb])+|workspace%3[Aa][^#]*)(#|$)/
       return urlok(s)
     }
     function valok(v) {
@@ -963,7 +1136,7 @@ _safe_pkg_yarn_lock_check() {
       return v ~ /^[A-Za-z0-9._\/~^<=+]/ && index(v, " #") == 0 && index(v, ": ") == 0 && v !~ /:$/
     }
     function unq(v) { return v ~ /^"/ ? substr(v, 2, length(v) - 2) : v }
-    BEGIN { lead = 1 }
+    BEGIN { lead = 1; hx = "0123456789abcdef" }
     { sub(/\r$/, "") }
     /[^ -~]/ || /\\/ { fail("G", NR) }
     lead && /^#/ { if (tolower($0) ~ /^# +yarn +lockfile +v1$/) v1 = 1; next }
@@ -985,6 +1158,7 @@ _safe_pkg_yarn_lock_check() {
             if (key == "resolved") {
               val = unq(val)
               if (!urlok(val) && val !~ /^[^\/:]+\.tgz(#.*)?$/) fail("S", val)
+              if (urlok(val) && !trusted(val)) fail("A", val)
             }
             dep = 0; nov = 0
           } else fail("G", NR)
@@ -1007,6 +1181,7 @@ _safe_pkg_yarn_lock_check() {
           if (ind == 2 && key == "resolution") {
             if (nov) fail("G", NR)
             if (!srcok(unq(val))) fail("S", unq(val))
+            if (!archok(unq(val))) fail("A", unq(val))
           }
         }
       }
@@ -1029,6 +1204,8 @@ _safe_pkg_yarn_lock_check() {
 #   - The .yarnrc.yml checks read lines, so a file must keep its top-level
 #     keys plain (_safe_pkg_yarnrc_plain). The project's may fill ${VAR} only
 #     in auth settings (_safe_pkg_yarnrc_interp).
+#   - The project's registry, proxy and TLS settings must already be in
+#     ~/.yarnrc.yml (_safe_pkg_yarn_net_check).
 #   - package.json files must pass _safe_pkg_yarn_manifest_check.
 #   - A plugin is code that runs inside Yarn in phase 1, next to the token.
 #   - lockfileFilename moves the lockfile away from the yarn.lock the scan reads.
@@ -1101,6 +1278,10 @@ _safe_pkg_yarn_berry_check() {
       return 0
     fi
   done
+  if f="$(_safe_pkg_yarn_net_check "$root")"; then
+    printf '%s\n' "$f"
+    return 0
+  fi
   if f="$(_safe_pkg_yarn_manifest_check "$root")"; then
     printf '%s\n' "$f"
     return 0
@@ -1108,6 +1289,7 @@ _safe_pkg_yarn_berry_check() {
   if f="$(_safe_pkg_yarn_lock_check "$root/yarn.lock")"; then
     case "$f" in
       G\ *) echo "$root/yarn.lock has a line the wrapper cannot read safely (line ${f#G }): the checks read the layout Yarn writes, and other YAML could hide a dependency from them. Run yarn install with the bypass below to let Yarn rewrite the file, or restore it from git." ;;
+      A\ *) echo "$root/yarn.lock downloads a package from a server that is not a registry in $HOME/.yarnrc.yml (${f#A }): Yarn sends the registry token with that download. If you trust the server, add it to $HOME/.yarnrc.yml as an npmRegistryServer (top-level or under npmScopes); otherwise remove the entry from yarn.lock. Then run the command again." ;;
       *) echo "$root/yarn.lock resolves a dependency from a source the wrapper does not support (${f#S }): Yarn packs git and GitHub dependencies, and makes exec: ones, by running their scripts while it fetches, when the registry token is still available. Supported sources are the npm registry, workspaces, local folders and tarballs, patches of those, and tarball URLs off GitHub." ;;
     esac
     return 0
@@ -1486,6 +1668,13 @@ EOF_HB
   return $rc
 }
 
+# Yarn fills ${VAR} in rc values, ~/.yarnrc.yml's included, from the project's
+# .env.yarn as well as the environment, so the containers that hold the token
+# load no environment file. Yarn reads this setting from the environment
+# before any rc file, skips the file because of the trailing ?, and keeps the
+# first value it reads, so a project's injectEnvironmentFiles cannot undo it.
+_SAFE_PKG_YARN_NO_ENV_FILES='YARN_INJECT_ENVIRONMENT_FILES=/nonexistent/.env.yarn?'
+
 # _safe_pkg_yarn_berry_audit tmpdir workdir flags spec
 #   The Yarn 2+ audit container for _safe_pkg_audit. flags is the
 #   space-separated docker flag list (hardening, user, token, Yarn env), spec
@@ -1494,6 +1683,7 @@ _safe_pkg_yarn_berry_audit() {
   [ -n "${ZSH_VERSION:-}" ] && setopt localoptions sh_word_split
   # shellcheck disable=SC2086
   docker run --rm --cap-drop ALL $3 -e YARN_ENABLE_SCRIPTS=0 \
+    -e "$_SAFE_PKG_YARN_NO_ENV_FILES" \
     -v "$1:/app" \
     -w "$2" \
     safe-pnpm:latest corepack "$4" npm audit --all --recursive --severity moderate
@@ -1679,6 +1869,7 @@ _safe_pkg_sandbox() {
       -v "${tmpdir}:/app" \
       -w "$workdir" \
       $token_env $berry_env -e YARN_ENABLE_SCRIPTS=0 \
+      -e "$_SAFE_PKG_YARN_NO_ENV_FILES" \
       safe-pnpm:latest corepack "$spec" "$@" --mode=skip-build
   else
     # shellcheck disable=SC2086
