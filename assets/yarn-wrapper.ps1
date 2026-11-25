@@ -7,19 +7,32 @@
 # Escape hatch: yarn.cmd install bypasses to native yarn.
 # With the PATH shims (~/.safe-pnpm/bin) on PATH, yarn.cmd is the shim, so the
 # refusal hints print the real binary's path instead.
-# Yarn 1 only: a Yarn 2+ project is refused (the bash/zsh wrapper runs it).
+# A Yarn 2+ project goes through _Safe_Pkg_Yarn_Berry_Check and then the
+# Yarn 2+ sandbox (_Safe_Pkg_Yarn_Berry_Run); Yarn 2 itself is refused.
 
 . "$HOME\.safe-pnpm\_safe_pkg_shared.ps1"
 
 function global:yarn {
     if (-not (_Safe_Pkg_Runner_Check -Manager yarn -PassArgs $args)) { $global:LASTEXITCODE = 1; throw 'safe-pnpm: command refused' }
     $installCmds = @('install','add','remove','upgrade','upgrade-interactive')
-    # Yarn 2+ also installs with up and dedupe (refused below); Yarn 1 runs a
-    # package.json script by that name. Without the check, count them, so the
-    # out-of-date check below refuses them.
-    if (-not (Get-Command _Safe_Pkg_Yarn_Berry -ErrorAction SilentlyContinue) -or (_Safe_Pkg_Yarn_Berry -Dir (Get-Location).Path)) {
-        $installCmds += @('up','dedupe')
+    # A Yarn 2+ project also installs with up, dedupe and rebuild; Yarn 1 runs
+    # a package.json script by that name. When the project cannot be told
+    # apart (shared file out of date, unreadable file), count them, so the
+    # checks below refuse them. A missing function is a non-terminating error
+    # in PowerShell, so a check that calls one would print it and go on.
+    $shared = @(Get-Command _Safe_Pkg_Is_Global, _Safe_Pkg_Dir_Flag, _Safe_Pkg_Quote_Args, _Safe_Pkg_Yarn_Berry, _Safe_Pkg_Yarn_Berry_Root, _Safe_Pkg_Yarn_Berry_Check, _Safe_Pkg_Yarn_Berry_Run -ErrorAction Ignore).Count -eq 7
+    $berryRoot = $null
+    $berryErr = ''
+    if ($shared) {
+        try { $berryRoot = _Safe_Pkg_Yarn_Berry_Root } catch {
+            $e = $_.Exception
+            if ($e.InnerException) { $e = $e.InnerException }
+            $berryErr = "$($e.Message)"
+            if (-not $berryErr) { $berryErr = 'unknown error' }
+        }
     }
+    $berry = -not $shared -or $berryErr -or $berryRoot
+    if ($berry) { $installCmds += @('up','dedupe','rebuild') }
     $nativeCmds = @('run','test','start','publish','pack','create','init','list','ls','info','why','outdated','audit','cache','check','config','link','unlink','login','logout','owner','tag','team','version','versions','bin','generate-lock-entry','import','licenses','autoclean','help','exec','node')
     $valueFlags = @(_Safe_Pkg_Valueflags yarn)
     $installN = @($installCmds | ForEach-Object { $_ -replace '-','' })
@@ -33,6 +46,8 @@ function global:yarn {
     $seen = 0
     $g = $false
     $skip = $false
+    $ws = $false
+    $pend = ''
     # Without _Safe_Pkg_Dir_Flag every unlisted flag counts as taking a value,
     # and the install is refused below.
     $hasDirFlag = [bool](Get-Command _Safe_Pkg_Dir_Flag -ErrorAction SilentlyContinue)
@@ -50,13 +65,36 @@ function global:yarn {
             if (-not $inst) { continue }
         }
         $seen = 1
+        # Yarn 2+: the word after `version` or `set` decides.
+        if ($pend) {
+            if ($pend -eq 'version' -and $n -eq 'check') { }
+            elseif ($pend -eq 'set' -and $n -eq 'resolution') { $cmd = 'setresolution' }
+            elseif ($pend -eq 'set') { }
+            else { $cmd = $pend }
+            $pend = ''
+            break
+        }
         # yarn v1 spells a global install as a subcommand; only the mutating
         # ones are install-class (refused below), `yarn global list` is not.
         if ($g) { if ($n -in 'add','remove','upgrade') { $cmd = 'global' }; break }
         if ($n -eq 'global') { $g = $true; continue }
+        if ($ws -and $n -eq 'focus') { $cmd = 'focus'; break }
+        $ws = $false
+        if ($berry -and $n -eq 'workspaces') { $ws = $true; continue }
+        if ($berry) {
+            # Refused by the Yarn 2+ checks: they change what is installed.
+            if ($n -in 'link','unlink') { $cmd = $n; break }
+            if ($n -in 'version','set') { $pend = $n; continue }
+            if ($n -eq 'pack') {
+                if ($args | Where-Object { "$_".StartsWith('--install-if-needed', [StringComparison]::Ordinal) }) { $cmd = 'packinstall' }
+                break
+            }
+        }
         if ($nativeN -contains $n) { break }
         if ($inst) { $cmd = $n; break }
     }
+    # A bare `yarn version` applies the deferred version changes.
+    if ($pend -eq 'version') { $cmd = 'version' }
     if ($seen -eq 0) {
         $cmd = 'install'
         if ($args | Where-Object { $_ -in '-v','--version','-h','--help' }) { $cmd = '' }
@@ -71,9 +109,7 @@ function global:yarn {
     $socketFlag = $args -contains '--socket'
     $passArgs = @($args | Where-Object { $_ -ne '--socket' })
 
-    # A missing function is a non-terminating error in PowerShell, so a check
-    # that calls one would print it and let the install through.
-    if (@(Get-Command _Safe_Pkg_Is_Global, _Safe_Pkg_Dir_Flag, _Safe_Pkg_Quote_Args, _Safe_Pkg_Yarn_Berry -ErrorAction SilentlyContinue).Count -ne 4) {
+    if (-not $shared) {
         Write-Host "✗ safe-pnpm: _safe_pkg_shared.ps1 is missing or out of date; run safe-pnpm update." -ForegroundColor Red
         $global:LASTEXITCODE = 1
         throw 'safe-pnpm: command refused'
@@ -105,12 +141,29 @@ function global:yarn {
         throw 'safe-pnpm: command refused'
     }
 
-    $berry = _Safe_Pkg_Yarn_Berry -Dir (Get-Location).Path
-    if ($berry) {
-        Write-Host "✗ safe-pnpm: $berry, and the wrapper supports Yarn 1 projects only: its sandbox runs Yarn 1, which would resolve every version again and replace yarn.lock with a Yarn 1 lockfile." -ForegroundColor Red
+    if ($berryErr) {
+        Write-Host "✗ safe-pnpm: could not read this project's Yarn files ($berryErr), so the wrapper cannot tell which Yarn it uses and does not run the command." -ForegroundColor Red
         Write-Host "  To run it without the safety checks: $(_Safe_Pkg_Bypass yarn) $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
         $global:LASTEXITCODE = 1
         throw 'safe-pnpm: command refused'
+    }
+
+    # A Yarn 2+ project runs only with an exact Yarn pin and after the checks
+    # in _Safe_Pkg_Yarn_Berry_Check. Any error here is a refusal.
+    $berrySpec = ''
+    if ($berryRoot) {
+        $why = 'the Yarn 2+ checks gave no answer.'
+        try {
+            $chk = _Safe_Pkg_Yarn_Berry_Check -Root $berryRoot -Subcmd $cmd
+            if ($chk.Ok -is [bool] -and $chk.Ok -and $chk.Spec) { $berrySpec = [string]$chk.Spec }
+            elseif ($chk.Reason) { $why = [string]$chk.Reason }
+        } catch { $why = "the Yarn 2+ checks failed: $($_.Exception.Message)" }
+        if (-not $berrySpec) {
+            Write-Host "✗ safe-pnpm: $why" -ForegroundColor Red
+            Write-Host "  To run it without the safety checks: $(_Safe_Pkg_Bypass yarn) $(_Safe_Pkg_Quote_Args $passArgs)" -ForegroundColor Red
+            $global:LASTEXITCODE = 1
+            throw 'safe-pnpm: command refused'
+        }
     }
 
     if (-not (_Safe_Pkg_Prescan -Manager yarn -Lockfile 'yarn.lock' -Socket:$socketFlag)) { $global:LASTEXITCODE = 1; throw 'safe-pnpm: command refused' }
@@ -118,6 +171,11 @@ function global:yarn {
     docker info 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) {
         _Safe_Pkg_Native_Fallback -Manager yarn -PassArgs $passArgs
+        return
+    }
+
+    if ($berryRoot) {
+        _Safe_Pkg_Yarn_Berry_Run -Root $berryRoot -Spec $berrySpec -PassArgs $passArgs
         return
     }
 
