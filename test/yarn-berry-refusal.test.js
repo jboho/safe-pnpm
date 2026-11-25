@@ -7,11 +7,13 @@ const path = require("node:path");
 const { infoStubSh } = require("./helpers/docker-info-stub");
 const { IMAGE, hasDocker, buildPwshImage } = require("./helpers/pwsh-image");
 
-// The fish and PowerShell sandboxes run Yarn 1. Given a Yarn 2+ (Berry)
-// project it ignores the Berry lockfile, resolves every version again and
-// writes a Yarn 1 lockfile that the copy-back puts over the project's own, so
-// those wrappers refuse yarn installs in a Berry project before phase 1. The
-// bash and zsh wrappers run Berry projects (test/yarn-berry.test.js).
+// The fish sandbox runs Yarn 1. Given a Yarn 2+ (Berry) project it ignores
+// the Berry lockfile, resolves every version again and writes a Yarn 1
+// lockfile that the copy-back puts over the project's own, so that wrapper
+// refuses yarn installs in a Berry project before phase 1. The bash, zsh and
+// PowerShell wrappers run Berry projects (test/yarn-berry.test.js,
+// test/ps1-yarn-berry.test.js). The PowerShell cases here are projects its
+// Yarn 2+ checks refuse, and they must not reach the Yarn 1 sandbox either.
 const ASSETS = path.join(__dirname, "..", "assets");
 const REFUSAL = "the wrapper supports Yarn 1 projects only";
 
@@ -49,6 +51,14 @@ const REFUSED = [
   ["yarn.lock", BERRY_LOCK, ["up", "is-odd"], "/yarn.lock is a Yarn 2+ lockfile"],
   ["yarn.lock", BERRY_LOCK, ["dedupe"], "/yarn.lock is a Yarn 2+ lockfile"],
 ];
+
+// What the PowerShell wrapper's Yarn 2+ checks say about the REFUSED
+// projects: none pins a Yarn version, except the two that do and then set no
+// nodeLinker.
+const ps1Reason = (file) =>
+  file === "package.json"
+    ? /installs with Plug'n'Play \(nodeLinker: pnp, the default\)/
+    : /does not pin a Yarn version with packageManager/;
 
 // [file, contents, yarn args]
 const KEPT = [
@@ -228,6 +238,7 @@ function runPs1Cases() {
     "_safe_pkg_shared.ps1",
     "npm-wrapper.ps1",
     "yarn-wrapper.ps1",
+    "yarn-berry-check.js",
   ]) {
     fs.copyFileSync(path.join(ASSETS, f), path.join(safe, f));
   }
@@ -303,7 +314,7 @@ function runPs1Cases() {
   return ps1Result;
 }
 
-REFUSED.forEach(([file, contents, args, named], i) => {
+REFUSED.forEach(([file, contents, args], i) => {
   test(`ps1: ${label(file, contents, args)} is refused before phase 1`, {
     skip: skipPs1,
   }, () => {
@@ -312,7 +323,8 @@ REFUSED.forEach(([file, contents, args, named], i) => {
     assert.ok(r, out);
     const text = r.slice(1).join("|");
     assert.equal(r[0], "1", text);
-    assert.ok(text.includes(`/w/p${i}${named}, and ${REFUSAL}`), text);
+    assert.match(text, ps1Reason(file));
+    assert.ok(!text.includes(REFUSAL), text);
     assert.match(
       text,
       new RegExp(`without the safety checks: yarn\\.cmd ${args.join(" ")}`),
