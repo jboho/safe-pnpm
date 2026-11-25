@@ -358,6 +358,8 @@ after(() => osv.stop());
 //                 from packages/a; the fetch gives every member a node_modules
 // opts.member     the member folder's name in place of "a"
 // opts.memberPkg  packages/a/package.json text (default a plain manifest)
+// opts.members    with opts.workspace, more member folder names under
+//                 packages/; the fetch gives each one a node_modules
 // opts.patches    put .yarn/patches/ms.patch in the project; "mixed" adds a
 //                 notes.txt and a link.patch symlink to a file outside it;
 //                 "linked" makes .yarn a symlink to a folder outside it
@@ -463,6 +465,13 @@ function berry(shell, opts = {}) {
       path.join(cwd, "package.json"),
       opts.memberPkg ?? JSON.stringify({ name: "a", version: "1.0.0" }),
     );
+    for (const [i, m] of (opts.members ?? []).entries()) {
+      fs.mkdirSync(path.join(proj, "packages", m));
+      fs.writeFileSync(
+        path.join(proj, "packages", m, "package.json"),
+        JSON.stringify({ name: `m${i}`, version: "1.0.0" }),
+      );
+    }
   }
   fs.writeFileSync(
     path.join(log, "phase1-lock"),
@@ -507,6 +516,15 @@ if [ "$phase" = fetch ]; then
     echo '{"name":"a","version":"1.0.0","dependencies":{"ms":"^2.1.3"}}' > "$src/packages/a/package.json"
   fi
   for m in "$src"/packages/*/; do [ -d "$m" ] && mkdir -p "$m/node_modules/x"; done
+  ${
+    opts.members
+      ? `for d in "$src"/packages/*/; do
+    [ -f "$d/package.json" ] || continue
+    mkdir -p "$d/node_modules/ms"
+    echo "module.exports=1" > "$d/node_modules/ms/index.js"
+  done`
+      : ""
+  }
 fi
 ${opts.auditFails ? '[ "$phase" = audit ] && { echo "1 high severity advisory" >&2; exit 1; }' : ""}
 exit 0
@@ -932,6 +950,31 @@ for (const shell of ["bash", "zsh", "fish"]) {
       },
     );
   }
+
+  t(
+    "members whose folder names hold a space or a newline get their manifest and node_modules",
+    () => {
+      const members = ["with space", "new\nline"];
+      withRun(shell, { workspace: true, members }, ({ proj, status, err }) => {
+        assert.equal(status, 0, err);
+        for (const m of members) {
+          const dir = path.join(proj, "packages", m);
+          assert.ok(
+            fs.existsSync(path.join(dir, "node_modules", "ms", "index.js")),
+            `${JSON.stringify(m)} must get its node_modules back: ${err}`,
+          );
+          assert.ok(fs.existsSync(path.join(dir, "package.json")));
+        }
+        for (const stray of ["line", path.join("packages", "new")]) {
+          assert.ok(
+            !fs.existsSync(path.join(proj, stray)),
+            `${stray} is half of a split folder name and must not be created`,
+          );
+        }
+        assert.doesNotMatch(err, /No such file/);
+      });
+    },
+  );
 
   t(".yarn/patches reaches the sandbox, so patch: dependencies resolve", () => {
     withRun(shell, { patches: true }, ({ read, err }) => {
