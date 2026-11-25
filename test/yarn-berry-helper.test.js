@@ -14,6 +14,7 @@ const {
   HOME_YARNRC,
   PKG,
   REFUSED,
+  msLock,
 } = require("./helpers/yarn-berry-fixtures");
 
 // assets/yarn-berry-check.js holds the Yarn 2+ checks and the sandbox file
@@ -150,6 +151,21 @@ test("check: the reason for a pin with control characters has none", () => {
   assert.match(r.reason, /not an exact Yarn version/);
   assert.match(r.reason, /^[ -~]*$/);
 });
+
+// A host name may end in dots and still resolve to github.com.
+for (const host of ["github.com.", "github.com.."]) {
+  test(`check: a tarball from ${host} is refused like one from github.com`, () => {
+    const { dir, proj } = project({
+      lock: msLock(`ms@https://${host}/vercel/ms/tarball/v1`),
+    });
+    const r = helper("check", proj, dir, "install");
+    assert.equal(r.ok, false, r.stdout);
+    assert.match(
+      r.reason,
+      /ms@https:\/\/github\.com\.+\/vercel\/ms\/tarball\/v1/,
+    );
+  });
+}
 
 for (const [name, args] of [
   ["no mode", []],
