@@ -355,7 +355,8 @@ after(() => osv.stop());
 // opts.lock       project yarn.lock text, or null for none (default LOCK)
 // opts.phase1Lock yarn.lock the fetch writes (default PHASE1_LOCK)
 // opts.workspace  root workspaces ["packages/*"] with member packages/a, run
-//                 from packages/a
+//                 from packages/a; the fetch gives every member a node_modules
+// opts.member     the member folder's name in place of "a"
 // opts.memberPkg  packages/a/package.json text (default a plain manifest)
 // opts.patches    put .yarn/patches/ms.patch in the project; "mixed" adds a
 //                 notes.txt and a link.patch symlink to a file outside it;
@@ -368,6 +369,7 @@ after(() => osv.stop());
 // opts.auditFails the audit container exits 1
 // opts.dockerInfo canned `docker info --format` answers
 // opts.env        extra environment
+// opts.pre        shell code run before the wrapper files are sourced
 function berry(shell, opts = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "safe-berry-"));
   const bin = path.join(root, "bin");
@@ -455,7 +457,7 @@ function berry(shell, opts = {}) {
   }
   let cwd = proj;
   if (opts.workspace) {
-    cwd = path.join(proj, "packages", "a");
+    cwd = path.join(proj, "packages", opts.member ?? "a");
     fs.mkdirSync(cwd, { recursive: true });
     fs.writeFileSync(
       path.join(cwd, "package.json"),
@@ -491,6 +493,7 @@ case " $* " in
 esac
 echo "$phase" >> "${log}/order"
 echo "$@" > "${log}/$phase.args"
+printf '%s\\n' "$@" > "${log}/$phase.argv"
 [ -f "$src/.yarnrc.yml" ] && cp "$src/.yarnrc.yml" "${log}/$phase.yarnrc"
 [ -f "$src/.safe-home/.yarnrc.yml" ] && cp "$src/.safe-home/.yarnrc.yml" "${log}/$phase.home"
 [ -d "$src/.yarn/patches" ] && ls -A "$src/.yarn/patches" > "${log}/$phase.patches"
@@ -503,6 +506,7 @@ if [ "$phase" = fetch ]; then
   if [ -d "$src/packages/a" ]; then
     echo '{"name":"a","version":"1.0.0","dependencies":{"ms":"^2.1.3"}}' > "$src/packages/a/package.json"
   fi
+  for m in "$src"/packages/*/; do [ -d "$m" ] && mkdir -p "$m/node_modules/x"; done
 fi
 ${opts.auditFails ? '[ "$phase" = audit ] && { echo "1 high severity advisory" >&2; exit 1; }' : ""}
 exit 0
@@ -514,7 +518,7 @@ exit 0
     shell === "fish"
       ? ["_safe_pkg_prescan.fish", "yarn-wrapper.fish"]
       : ["_safe_pkg_shared.sh", "yarn-wrapper.sh"];
-  const script = `${sources.map((f) => `source "${path.join(ASSETS, f)}"; `).join("")}cd "${cwd}"; yarn ${words} </dev/null`;
+  const script = `${opts.pre ?? ""}${sources.map((f) => `source "${path.join(ASSETS, f)}"; `).join("")}cd "${cwd}"; yarn ${words} </dev/null`;
   const env = {
     ...process.env,
     PATH: `${bin}:${process.env.PATH}`,
@@ -535,7 +539,8 @@ exit 0
   }
   const argv =
     shell === "fish" ? ["--no-config", "-c", script] : ["-c", script];
-  const r = spawnSync(shell, argv, { stdio: "pipe", env });
+  // A wrapper that loops forever fails the test instead of hanging the suite.
+  const r = spawnSync(shell, argv, { stdio: "pipe", env, timeout: 120000 });
 
   const at = (f) => path.join(log, f);
   const read = (f) => fs.readFileSync(at(f), "utf8");
@@ -869,6 +874,64 @@ for (const shell of ["bash", "zsh", "fish"]) {
       });
     },
   );
+
+  if (shell === "fish") {
+    // fish before 3.5 has no `path` builtin.
+    t(
+      "without the path builtin, a member install still finds the root and copies back",
+      () => {
+        withRun(
+          shell,
+          { workspace: true, pre: "function path; return 127; end; " },
+          ({ order, proj, status, err }) => {
+            assert.equal(status, 0, err);
+            assert.deepEqual(order, ["fetch", "audit", "build"]);
+            assert.ok(
+              fs.existsSync(path.join(proj, "node_modules", "ms")),
+              err,
+            );
+            assert.ok(
+              fs.existsSync(
+                path.join(proj, "packages", "a", "node_modules", "x"),
+              ),
+              err,
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // Folder names a shell could split, trim or read as a flag.
+  for (const member of ["a b", "a ", "-x"]) {
+    t(
+      `from member folder ${JSON.stringify(member)}, the run works in that folder and copies its node_modules back`,
+      () => {
+        withRun(
+          shell,
+          { workspace: true, member },
+          ({ read, proj, status, err }) => {
+            assert.equal(status, 0, err);
+            for (const phase of ["fetch", "audit", "build"]) {
+              const argv = read(`${phase}.argv`).split("\n");
+              assert.equal(
+                argv[argv.indexOf("-w") + 1],
+                `/app/packages/${member}`,
+                `${phase}: ${argv.join(" ")}`,
+              );
+            }
+            const dir = path.join(proj, "packages", member);
+            assert.ok(fs.existsSync(path.join(dir, "node_modules", "x")), err);
+            assert.ok(fs.existsSync(path.join(dir, "package.json")));
+            // A trimmed "a " would land in a new packages/a.
+            assert.deepEqual(fs.readdirSync(path.join(proj, "packages")), [
+              member,
+            ]);
+          },
+        );
+      },
+    );
+  }
 
   t(".yarn/patches reaches the sandbox, so patch: dependencies resolve", () => {
     withRun(shell, { patches: true }, ({ read, err }) => {

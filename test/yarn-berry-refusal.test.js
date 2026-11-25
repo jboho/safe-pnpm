@@ -164,21 +164,93 @@ test("fish: a Berry project without a Yarn pin is refused under SAFE_PNPM_OSV_ST
   }
 });
 
-for (const fn of ["_safe_pkg_yarn_berry", "_safe_pkg_yarn_berry_check"]) {
-  test(`fish: a _safe_pkg_prescan.fish without ${fn} refuses instead of skipping the check`, {
-    skip: available("fish") ? false : "fish not available",
-  }, () => {
-    const p = project("yarn.lock", V1_LOCK);
+// Every name the yarn-wrapper.fish guard lists.
+for (const fn of [
+  "_safe_pkg_prescan",
+  "_safe_pkg_is_global",
+  "_safe_pkg_dir_flag",
+  "_safe_pkg_yarn_berry",
+  "_safe_pkg_yarn_berry_root",
+  "_safe_pkg_yarn_berry_check",
+  "_safe_pkg_yarn_berry_run",
+]) {
+  for (const [kind, lock] of [
+    ["Yarn 1", V1_LOCK],
+    ["Berry", BERRY_LOCK],
+  ]) {
+    test(`fish: a _safe_pkg_prescan.fish without ${fn} refuses a ${kind} install instead of skipping the check`, {
+      skip: available("fish") ? false : "fish not available",
+    }, () => {
+      const p = project("yarn.lock", lock);
+      try {
+        const { status, err } = runShell(
+          "fish",
+          "yarn",
+          ["install"],
+          p,
+          `functions -e ${fn}; `,
+        );
+        assert.equal(status, 1, err);
+        // Without _safe_pkg_prescan the wrapper stops at its first line.
+        assert.match(
+          err,
+          fn === "_safe_pkg_prescan"
+            ? /_safe_pkg_prescan\.fish not installed/
+            : /_safe_pkg_prescan\.fish is missing or out of date/,
+        );
+        assert.deepEqual(p.runs(), []);
+      } finally {
+        fs.rmSync(p.root, { recursive: true, force: true });
+      }
+    });
+  }
+}
+
+// fish before 3.5 has no `path` builtin. The walk up to yarn.lock must still
+// end, so a yarn call from a folder without a yarn.lock does not hang.
+test("fish: without the path builtin, yarn from a subfolder still finishes", {
+  skip: available("fish") ? false : "fish not available",
+}, () => {
+  const p = project("yarn.lock", V1_LOCK);
+  try {
+    fs.writeFileSync(path.join(p.bin, "yarn"), `#!/bin/sh\necho "yarn $*" >> "${p.root}/yarn.log"\n`, { mode: 0o755 });
+    const sub = path.join(p.proj, "src", "deep");
+    fs.mkdirSync(sub, { recursive: true });
+    const script = `function path; return 127; end; source "${path.join(ASSETS, "_safe_pkg_prescan.fish")}"; source "${path.join(ASSETS, "yarn-wrapper.fish")}"; cd "${sub}"; yarn --version </dev/null`;
+    const r = spawnSync("fish", ["--no-config", "-c", script], {
+      stdio: "pipe",
+      timeout: 20000,
+      env: { ...process.env, PATH: `${p.bin}:${process.env.PATH}`, HOME: p.root },
+    });
+    assert.equal(r.signal, null, "yarn did not finish");
+    assert.equal(r.status, 0, r.stderr.toString());
+    assert.equal(fs.readFileSync(path.join(p.root, "yarn.log"), "utf8"), "yarn --version\n");
+  } finally {
+    fs.rmSync(p.root, { recursive: true, force: true });
+  }
+});
+
+// The major version as bash reads it: a leading zero is not Yarn 2+, and a
+// major too large for a number still is (here refused for Plug'n'Play, since
+// the project has no .yarnrc.yml).
+for (const shell of ["bash", "zsh", "fish"]) {
+  const skip = available(shell) ? false : `${shell} not available`;
+  test(`${shell}: packageManager yarn@00004.0.0 is a Yarn 1 project`, { skip }, () => {
+    const p = project("package.json", pkg({ packageManager: "yarn@00004.0.0" }));
     try {
-      const { status, err } = runShell(
-        "fish",
-        "yarn",
-        ["install"],
-        p,
-        `functions -e ${fn}; `,
-      );
+      const { err } = runShell(shell, "yarn", ["install"], p);
+      assert.equal(p.runs().length, 1, err);
+      assert.ok(!p.runs()[0].includes("corepack"), p.runs()[0]);
+    } finally {
+      fs.rmSync(p.root, { recursive: true, force: true });
+    }
+  });
+  test(`${shell}: packageManager yarn@9223372036854775808.0.0 is a Yarn 2+ project`, { skip }, () => {
+    const p = project("package.json", pkg({ packageManager: "yarn@9223372036854775808.0.0" }));
+    try {
+      const { status, err } = runShell(shell, "yarn", ["install"], p);
       assert.equal(status, 1, err);
-      assert.match(err, /_safe_pkg_prescan\.fish is missing or out of date/);
+      assert.match(err, /installs with Plug'n'Play/);
       assert.deepEqual(p.runs(), []);
     } finally {
       fs.rmSync(p.root, { recursive: true, force: true });

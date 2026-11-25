@@ -29,7 +29,7 @@ function _safe_pkg_audit --argument manager lockfile snapdir tmpdir
     set -l audit_rc 0
     if set -q argv[5]
         echo "→ $manager audit..." >&2
-        $argv[5..] >$audit_out 2>&1
+        $argv[5..-1] >$audit_out 2>&1
         set audit_rc $status
     else
         set -l auditdir (mktemp -d)
@@ -752,8 +752,10 @@ function _safe_pkg_yarn_berry --argument dir
         return 0
     end
     if test -f "$dir/package.json"
-        set -l m (string match -r -- '"packageManager"\s*:\s*"(yarn@([0-9]+)[0-9.]*)' <"$dir/package.json")
-        if set -q m[3]; and test $m[3] -ge 2
+        set -l m (string match -r -- '"packageManager"\s*:\s*"(yarn@[0-9][0-9.]*)' <"$dir/package.json")
+        # The major as text, as the bash wrapper reads it: no leading zero,
+        # and no number that `test` would overflow on.
+        if set -q m[2]; and string match -qr -- '^yarn@([2-9]|[1-9][0-9])' $m[2]
             echo "$dir/package.json sets packageManager to "(string trim -r -c . -- $m[2])
             return 0
         end
@@ -775,7 +777,12 @@ function _safe_pkg_yarn_berry_root
             set root $d
             break
         end
-        set d (path dirname -- $d)
+        # string replace, not `path dirname`, which fish before 3.5 lacks;
+        # and stop if d stops changing, so a failed step cannot loop forever.
+        set -l up (string replace -r -- '/[^/]*\z' '' "$d" | string collect)
+        test -n "$up"; or set up /
+        test "$up" = "$d"; and break
+        set d $up
     end
     if _safe_pkg_yarn_berry $root >/dev/null; or _safe_pkg_yarn_berry $PWD >/dev/null
         printf '%s\n' $root
@@ -1306,7 +1313,10 @@ function _safe_pkg_yarn_berry_arch --argument tmpdir
     set -l oc (_safe_pkg_host_os_cpu)
     set -q oc[2]; or return 0
     _safe_pkg_yarnrc_set "$f" supportedArchitectures; and return 0
-    if test -s "$f"; and test -n "$(tail -c 1 "$f")"
+    # A last byte that is a newline leaves last empty. Not "$(...)": fish
+    # before 3.4 cannot parse it, and this file would then define nothing.
+    set -l last (tail -c 1 "$f" 2>/dev/null)
+    if test -s "$f"; and test -n "$last"
         echo >>"$f"
     end
     printf 'supportedArchitectures:\n  os:\n    - current\n    - %s\n  cpu:\n    - current\n    - %s\n' $oc[1] $oc[2] >>"$f"
@@ -1319,7 +1329,11 @@ end
 #   .env.yarn too, and this setting, read before any rc file, keeps a
 #   project's injectEnvironmentFiles from undoing it.
 function _safe_pkg_yarn_berry_audit --argument tmpdir workdir spec
-    docker run --rm --cap-drop ALL $argv[4..] -e YARN_ENABLE_SCRIPTS=0 \
+    # Not $argv[4..]: fish before 3.2 has no open-ended range, and 4..-1
+    # counts backwards when there is no fourth argument.
+    set -l flags
+    set -q argv[4]; and set flags $argv[4..-1]
+    docker run --rm --cap-drop ALL $flags -e YARN_ENABLE_SCRIPTS=0 \
         -e "YARN_INJECT_ENVIRONMENT_FILES=/nonexistent/.env.yarn?" \
         -v "$tmpdir:/app" -w "$workdir" \
         safe-pnpm:latest corepack "$spec" npm audit --all --recursive --severity moderate
@@ -1335,8 +1349,9 @@ function _safe_pkg_copy_modules --argument base member dest_root
     test -n "$member"; and set rel "$member/node_modules"
     set -l src "$base/$rel"
     test -e "$src"; or test -L "$src"; or return 0
-    set -l want (path resolve -- "$base")/$rel
-    set -l got (path resolve -- "$src" | string collect)
+    # builtin realpath, not `path resolve`, which fish before 3.5 lacks.
+    set -l want (builtin realpath -- "$base" | string collect)/$rel
+    set -l got (builtin realpath -- "$src" 2>/dev/null | string collect)
     if not test -d "$src"; or test -L "$src"; or test "$got" != "$want"
         echo "✗ safe-pnpm: sandbox $rel is not a plain directory; not copied back." >&2
         return 1
@@ -1356,7 +1371,8 @@ end
 #   the command was run in. See the berry parts of _safe_pkg_sandbox in
 #   _safe_pkg_shared.sh.
 function _safe_pkg_yarn_berry_run --argument root
-    set -l args $argv[2..]
+    set -l args
+    set -q argv[2]; and set args $argv[2..-1]
     set -l spec (_safe_pkg_yarn_berry_pin "$root")
     or begin
         echo "✗ safe-pnpm: $root/package.json does not pin an exact Yarn 3+ version with packageManager." >&2
@@ -1392,10 +1408,9 @@ function _safe_pkg_yarn_berry_run --argument root
     # a folder name with a newline or edge spaces stays whole.
     for pkg in (find . -mindepth 2 -name package.json -not -path "*/node_modules/*" -not -path "./.yarn/*" \
             -not -path "./.corepack/*" -not -path "./.safe-home/*" -not -path "./.safe-store/*" -print0 | string split0)
-        # A named capture sets member without a command substitution, which
-        # would split the name at a newline.
-        string match -rq -- '(?s)^\./(?<member>.+)/package\.json$' $pkg
-        or continue
+        # string collect keeps a newline in the name from splitting it.
+        set -l member (string replace -r -- '(?s)^\./(.+)/package\.json\z' '$1' $pkg | string collect)
+        test -n "$member"; or continue
         mkdir -p "$tmpdir/$member"
         cp "$pkg" "$tmpdir/$member/"
         set members $members $member
@@ -1422,7 +1437,8 @@ function _safe_pkg_yarn_berry_run --argument root
     set -l home_rc $tmpdir/.safe-home/.yarnrc.yml
     if test -f "$HOME/.yarnrc.yml"
         cp "$HOME/.yarnrc.yml" $home_rc
-        if test -s $home_rc; and test -n "$(tail -c 1 $home_rc)"
+        set -l last (tail -c 1 $home_rc 2>/dev/null)
+        if test -s $home_rc; and test -n "$last"
             printf '\n' >>$home_rc
         end
     end
