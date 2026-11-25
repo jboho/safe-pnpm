@@ -213,25 +213,406 @@ function _Safe_Pkg_Quote_Args {
 }
 
 # Returns what marks Dir as a Yarn 2+ (Berry) project, or $null. See
-# _safe_pkg_yarn_berry in _safe_pkg_shared.sh.
+# _safe_pkg_yarn_berry in _safe_pkg_shared.sh. The files are read one byte per
+# character and the version is compared as text, as grep and `case` do there:
+# a number conversion fails on a long run of digits, and outside a try that
+# failure only prints an error, which left a Berry project looking like Yarn 1.
+# ReadAllText is not used: it switches to UTF-8 or UTF-16 when the file starts
+# with a byte order mark. An unreadable file throws; the caller refuses.
 function _Safe_Pkg_Yarn_Berry {
     param([string]$Dir)
-    $lock = Join-Path $Dir 'yarn.lock'
-    if ((Test-Path -LiteralPath $lock) -and (@(Get-Content -LiteralPath $lock) -cmatch '^__metadata:').Count) {
+    $bytes = [Text.Encoding]::GetEncoding(28591)
+    $lock = [IO.Path]::Combine($Dir, 'yarn.lock')
+    if ([IO.File]::Exists($lock) -and [regex]::IsMatch($bytes.GetString([IO.File]::ReadAllBytes($lock)), '(?m)^__metadata:')) {
         return "$lock is a Yarn 2+ lockfile"
     }
-    $rc = Join-Path $Dir '.yarnrc.yml'
-    if (Test-Path -LiteralPath $rc) { return "$rc is a Yarn 2+ settings file" }
-    $pkg = Join-Path $Dir 'package.json'
-    if (Test-Path -LiteralPath $pkg) {
-        foreach ($line in Get-Content -LiteralPath $pkg) {
-            if ($line -cmatch '"packageManager"\s*:\s*"(yarn@(\d+)[\d.]*)') {
-                if ([int]$Matches[2] -ge 2) { return "$pkg sets packageManager to $($Matches[1].TrimEnd('.'))" }
-                break
-            }
+    $rc = [IO.Path]::Combine($Dir, '.yarnrc.yml')
+    if ([IO.File]::Exists($rc)) { return "$rc is a Yarn 2+ settings file" }
+    $pkg = [IO.Path]::Combine($Dir, 'package.json')
+    if ([IO.File]::Exists($pkg)) {
+        $m = [regex]::Match($bytes.GetString([IO.File]::ReadAllBytes($pkg)), '"packageManager"[ \t\v\f\r]*:[ \t\v\f\r]*"(yarn@[0-9][0-9.]*)')
+        if ($m.Success -and $m.Groups[1].Value -cmatch '\Ayarn@(?:[2-9]|[1-9][0-9])') {
+            return "$pkg sets packageManager to $($m.Groups[1].Value -creplace '\.\z', '')"
         }
     }
     return $null
+}
+
+# The root of the Yarn 2+ project the current directory belongs to, or $null
+# when it is not in one. See _safe_pkg_yarn_berry_root in _safe_pkg_shared.sh:
+# the nearest yarn.lock at or above the current directory, below $HOME and the
+# filesystem root, names the root. The loop ends when a folder has no parent
+# or the parent is not shorter, so it cannot spin on a path it cannot shorten.
+function _Safe_Pkg_Yarn_Berry_Root {
+    $cwd = (Get-Location).ProviderPath
+    $root = $cwd
+    $d = $cwd
+    $cmp = [StringComparison]::Ordinal
+    if ($IsWindows -or $env:OS -eq 'Windows_NT') { $cmp = [StringComparison]::OrdinalIgnoreCase }
+    while ($d -and -not [string]::Equals($d, $HOME, $cmp)) {
+        $parent = [IO.Path]::GetDirectoryName($d)
+        if (-not $parent -or $parent.Length -ge $d.Length) { break }
+        if ([IO.File]::Exists([IO.Path]::Combine($d, 'yarn.lock'))) { $root = $d; break }
+        $d = $parent
+    }
+    if ((_Safe_Pkg_Yarn_Berry -Dir $root) -or (_Safe_Pkg_Yarn_Berry -Dir $cwd)) { return $root }
+    return $null
+}
+
+# Full path of a program on PATH, or $null. Functions and aliases are skipped,
+# and the path is absolute because Windows looks in the current folder before
+# PATH when it starts a program by bare name.
+function _Safe_Pkg_App {
+    param([string]$Name)
+    $c = Get-Command $Name -CommandType Application -ErrorAction Ignore | Select-Object -First 1
+    if ($c) { return $c.Source }
+    return $null
+}
+
+# Runs a program with exactly these arguments and returns its exit code, and
+# with -Capture its output. `& exe @args` does not pass them exactly: on Linux
+# and macOS PowerShell expands * ? [ ] and ~ in them against the current
+# folder, and before PowerShell 7.3 it drops empty arguments and splits one
+# that holds a quote. A folder or package name must not turn into docker flags.
+# Without -Capture the program writes to the terminal directly.
+function _Safe_Pkg_Exec {
+    param([string]$Exe, [string[]]$Arguments, [string]$WorkDir, [switch]$Capture)
+    # A .cmd or .bat goes through cmd.exe, which reads the arguments again.
+    if ($IsWindows -and [IO.Path]::GetExtension($Exe) -ine '.exe') {
+        throw "safe-pnpm: $Exe is not an .exe, so its arguments cannot be passed safely"
+    }
+    $psi = [Diagnostics.ProcessStartInfo]::new($Exe)
+    $psi.UseShellExecute = $false
+    $psi.WorkingDirectory = (Get-Location).ProviderPath
+    if ($WorkDir) { $psi.WorkingDirectory = $WorkDir }
+    if ($Capture) {
+        $utf8 = [Text.UTF8Encoding]::new($false)
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.StandardOutputEncoding = $utf8
+        $psi.StandardErrorEncoding = $utf8
+    }
+    foreach ($a in $Arguments) {
+        if ($null -eq $a) { throw 'safe-pnpm: an empty argument slot reached _Safe_Pkg_Exec' }
+        $psi.ArgumentList.Add($a)
+    }
+    $p = [Diagnostics.Process]::Start($psi)
+    try {
+        $out = ''
+        $err = ''
+        if ($Capture) {
+            $o = $p.StandardOutput.ReadToEndAsync()
+            $e = $p.StandardError.ReadToEndAsync()
+        }
+        # A short wait in a loop, so Ctrl-C is seen between two waits.
+        while (-not $p.WaitForExit(200)) { }
+        if ($Capture) {
+            $out = $o.GetAwaiter().GetResult()
+            $err = $e.GetAwaiter().GetResult()
+        }
+        return [pscustomobject]@{ Rc = [int]$p.ExitCode; Out = $out; Err = $err }
+    } finally {
+        if (-not $p.HasExited) { try { if (-not $p.WaitForExit(3000)) { $p.Kill() } } catch { } }
+        $p.Dispose()
+    }
+}
+
+function _Safe_Pkg_Refuse {
+    param([string]$Message)
+    Write-Host "✗ safe-pnpm: $Message" -ForegroundColor Red
+    $global:LASTEXITCODE = 1
+    throw 'safe-pnpm: command refused'
+}
+
+# Runs one mode of ~/.safe-pnpm/yarn-berry-check.js (the Yarn 2+ checks and the
+# sandbox file staging; see that file) and returns its answer. Anything but a
+# complete "ok" answer is Ok = $false with a Reason: a missing helper or node,
+# a non-zero exit, output without the closing "end" line, or a line this
+# cannot decode. The helper runs from its own folder with absolute paths only:
+# a node preload reads the package.json of the current folder first, and dies
+# on one that is not JSON.
+function _Safe_Pkg_Yarn_Berry_Helper {
+    param([string]$Mode, [string[]]$Arguments)
+    $r = [pscustomobject]@{ Ok = $false; Reason = ''; Spec = ''; Members = [string[]]@() }
+    try {
+        $dir = [IO.Path]::Combine($HOME, '.safe-pnpm')
+        $helper = [IO.Path]::Combine($dir, 'yarn-berry-check.js')
+        if (-not [IO.File]::Exists($helper)) {
+            $r.Reason = "the Yarn 2+ checks are not installed ($helper is missing); run safe-pnpm update."
+            return $r
+        }
+        $node = _Safe_Pkg_App node
+        if (-not $node) {
+            $r.Reason = 'node was not found on PATH, and the Yarn 2+ sandbox needs it.'
+            return $r
+        }
+        $run = _Safe_Pkg_Exec -Exe $node -Arguments (@($helper, $Mode) + @($Arguments)) -WorkDir $dir -Capture
+        $tail = ($run.Err -creplace '[^ -~]', ' ').Trim()
+        if ($tail.Length -gt 300) { $tail = $tail.Substring(0, 300) }
+        $bad = "the Yarn 2+ helper ($helper) gave no answer the wrapper can read (exit $($run.Rc)). $tail".Trim()
+        $lines = @($run.Out.Split([char]10))
+        $n = $lines.Count
+        $first = $lines[0]
+        $isOk = [string]::Equals($first, 'ok', [StringComparison]::Ordinal)
+        if ($run.Rc -ne 0 -or $n -lt 3 -or $lines[$n - 1].Length -ne 0 -or
+            -not [string]::Equals($lines[$n - 2], 'end', [StringComparison]::Ordinal) -or
+            -not ($isOk -or [string]::Equals($first, 'refuse', [StringComparison]::Ordinal))) {
+            $r.Reason = $bad
+            return $r
+        }
+        $utf8 = [Text.UTF8Encoding]::new($false, $true)
+        $reason = ''
+        $spec = ''
+        $members = [Collections.Generic.List[string]]::new()
+        for ($i = 1; $i -le $n - 3; $i++) {
+            $m = [regex]::Match($lines[$i], '\A(reason|spec|member) ([A-Za-z0-9+/=]*)\z')
+            if (-not $m.Success) { $r.Reason = $bad; return $r }
+            $val = $utf8.GetString([Convert]::FromBase64String($m.Groups[2].Value))
+            # Only these three words can be here, so -ceq cannot be misled.
+            if ($m.Groups[1].Value -ceq 'reason') { $reason = $val -creplace '[\x00-\x08\x0B-\x1F\x7F]', '' }
+            elseif ($m.Groups[1].Value -ceq 'spec') { $spec = $val }
+            else {
+                # A member is a folder under the root, written with "/". It is
+                # joined to the sandbox and project paths for the copy back.
+                $bs = $val.IndexOf([char]92) -ge 0
+                $odd = $val.Length -eq 0 -or $val.IndexOf([char]0) -ge 0 -or [IO.Path]::IsPathRooted($val)
+                foreach ($seg in $val.Split([char]47)) {
+                    if ($seg.Length -eq 0 -or [string]::Equals($seg, '.', [StringComparison]::Ordinal) -or
+                        [string]::Equals($seg, '..', [StringComparison]::Ordinal)) { $odd = $true }
+                }
+                if ($odd) { $r.Reason = $bad; return $r }
+                if ($bs) {
+                    $r.Reason = "the workspace folder $($val -creplace '[^ -~]', '?') has a backslash in its name, which the PowerShell wrapper cannot copy back; nothing was installed."
+                    return $r
+                }
+                $members.Add($val)
+            }
+        }
+        if (-not $isOk) {
+            if (-not $reason) { $reason = "the Yarn 2+ helper refused ($Mode) without a reason." }
+            $r.Reason = $reason
+            return $r
+        }
+        $r.Spec = $spec
+        $r.Members = [string[]]$members.ToArray()
+        $r.Ok = $true
+    } catch {
+        $r.Ok = $false
+        $r.Reason = "the Yarn 2+ helper could not run: $($_.Exception.Message)"
+    }
+    return $r
+}
+
+# The checks a Yarn 2+ project must pass before the sandbox runs it; see
+# _safe_pkg_yarn_berry_check in _safe_pkg_shared.sh. Subcmd is the word the
+# wrapper's walk settled on. Returns Ok with the exact Yarn pin in Spec, or
+# Ok = $false with the reason to print.
+function _Safe_Pkg_Yarn_Berry_Check {
+    param([string]$Root, [string]$Subcmd)
+    if (-not (_Safe_Pkg_App node)) {
+        return [pscustomobject]@{
+            Ok = $false
+            Reason = "$([IO.Path]::Combine($Root, 'package.json')): the wrapper could not check the package.json files with node, so it does not run the command."
+            Spec = ''
+            Members = [string[]]@()
+        }
+    }
+    $r = _Safe_Pkg_Yarn_Berry_Helper -Mode check -Arguments @($Root, $HOME, $Subcmd)
+    if ($r.Ok -and $r.Spec -cnotmatch '\Ayarn@(?:[3-9]|[1-9][0-9]+)\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.]+)?\z') {
+        $r.Ok = $false
+        $r.Reason = "the Yarn 2+ helper returned no exact Yarn pin for $Root."
+    }
+    return $r
+}
+
+# The Yarn 2+ audit: `yarn npm audit` in a container with the pinned Yarn,
+# because the yarn on this machine may be Yarn 1 or missing. Same messages and
+# rules as _Safe_Pkg_Audit.
+function _Safe_Pkg_Yarn_Berry_Audit {
+    param([string]$Docker, [string]$SnapDir, [string[]]$RunArgs)
+    if (-not [IO.File]::Exists([IO.Path]::Combine($SnapDir, 'tree', 'yarn.lock'))) { return $true }
+    Write-Host "→ yarn audit..." -ForegroundColor Cyan
+    $run = _Safe_Pkg_Exec -Exe $Docker -Arguments $RunArgs -Capture
+    if ($run.Rc -eq 0) { return $true }
+    $lines = @(($run.Out + $run.Err) -split "`r?`n" | Where-Object { $_ })
+    foreach ($l in @($lines | Select-Object -Last 40)) { [Console]::Error.WriteLine($l) }
+    if ($env:SAFE_PNPM_STRICT -eq '1') {
+        Write-Host "✗ yarn audit failed or found issues. Blocking (SAFE_PNPM_STRICT=1)." -ForegroundColor Red
+        return $false
+    }
+    if (-not [Console]::IsInputRedirected) {
+        $ans = Read-Host "⚠️  yarn audit failed or found issues. Continue anyway? [y/N]"
+        if ($ans -notmatch '^[Yy]') { return $false }
+    } else {
+        Write-Host "⚠️  yarn audit failed or found issues — continuing in non-interactive mode." -ForegroundColor Yellow
+    }
+    return $true
+}
+
+# The two-phase sandbox for a Yarn 2+ project; see the Yarn 2+ steps of
+# _safe_pkg_sandbox in _safe_pkg_shared.sh. Root is the project root, Spec the
+# packageManager pin corepack runs in every container. A failure before the
+# first container is a refusal; a later one sets $LASTEXITCODE, as the Yarn 1
+# sandbox does. -Os and -Cpu override the detected host platform (tests).
+function _Safe_Pkg_Yarn_Berry_Run {
+    param([string]$Root, [string]$Spec, [string[]]$PassArgs, [string]$Os, [string]$Cpu)
+    $tmp = $null
+    $snap = $null
+    $rc = 1
+    try {
+        if (-not $Root -or $Spec -cnotmatch '\Ayarn@[0-9]') {
+            _Safe_Pkg_Refuse 'the Yarn 2+ sandbox was started without a project root or a Yarn pin; nothing was installed.'
+        }
+        $docker = _Safe_Pkg_App docker
+        if (-not $docker) { _Safe_Pkg_Refuse 'docker was not found on PATH; nothing was installed.' }
+
+        # The folder the command ran in, as a path under /app.
+        $cwd = (Get-Location).ProviderPath
+        $cmp = [StringComparison]::Ordinal
+        if ($IsWindows -or $env:OS -eq 'Windows_NT') { $cmp = [StringComparison]::OrdinalIgnoreCase }
+        $sep = [string][IO.Path]::DirectorySeparatorChar
+        $workdir = '/app'
+        if ($cwd.Length -gt $Root.Length -and $cwd.StartsWith($Root, $cmp)) {
+            $rel = $cwd.Substring($Root.Length)
+            if ($rel.StartsWith($sep, [StringComparison]::Ordinal)) { $rel = $rel.Substring(1) }
+            if ($sep -ne '/') { $rel = $rel.Replace($sep, '/') }
+            if ($rel) { $workdir = "/app/$rel" }
+        }
+
+        $userFlags = @()
+        try { $userFlags = @(_Safe_Pkg_User) } catch {
+            Write-Host "✗ $($_.Exception.Message)" -ForegroundColor Red
+            $global:LASTEXITCODE = 1
+            throw 'safe-pnpm: command refused'
+        }
+
+        if (-not $Os) {
+            $P = [Runtime.InteropServices.OSPlatform]
+            if ([Runtime.InteropServices.RuntimeInformation]::IsOSPlatform($P::Windows)) { $Os = 'win32' }
+            elseif ([Runtime.InteropServices.RuntimeInformation]::IsOSPlatform($P::OSX)) { $Os = 'darwin' }
+        }
+        if (-not $Cpu) {
+            $arch = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+            if ($arch -eq 'X64') { $Cpu = 'x64' } elseif ($arch -eq 'Arm64') { $Cpu = 'arm64' }
+        }
+        if (-not $Os) { $Os = '-' }
+        if (-not $Cpu) { $Cpu = '-' }
+
+        $tmp = (New-TemporaryFile | ForEach-Object { Remove-Item $_ -Force; New-Item -Type Directory $_ }).FullName
+        # Host-only, never mounted into a container: the post-fetch manifest
+        # snapshots that copy-back reads from.
+        $snap = (New-TemporaryFile | ForEach-Object { Remove-Item $_ -Force; New-Item -Type Directory $_ }).FullName
+
+        # Manifests, lockfile, settings files, member manifests and patches go
+        # into the sandbox; a file that cannot be copied stops the run here.
+        $staged = _Safe_Pkg_Yarn_Berry_Helper -Mode stage -Arguments @($Root, $HOME, $tmp, $snap, $Os, $Cpu)
+        if (-not $staged.Ok) { _Safe_Pkg_Refuse $staged.Reason }
+        $members = @($staged.Members)
+
+        $hard = @(_Safe_Pkg_Hardening)
+        # Every Yarn 2+ container: corepack keeps the pinned Yarn in the
+        # sandbox, yarnPath is ignored, the cache sits in the sandbox, no
+        # telemetry. HOME is set when the user flags leave it out (Windows,
+        # rootless Docker), so Yarn finds the sandbox ~/.yarnrc.yml.
+        $berryEnv = @('-e','COREPACK_HOME=/app/.corepack','-e','COREPACK_ENABLE_DOWNLOAD_PROMPT=0','-e','YARN_IGNORE_PATH=1',
+            '-e','YARN_CACHE_FOLDER=/app/.safe-store','-e','YARN_ENABLE_GLOBAL_CACHE=0','-e','YARN_ENABLE_TELEMETRY=0')
+        if (-not @($userFlags | Where-Object { "$_".StartsWith('HOME=', [StringComparison]::Ordinal) }).Count) {
+            $berryEnv += @('-e','HOME=/app/.safe-home')
+        }
+        $noScripts = @('-e','YARN_ENABLE_SCRIPTS=0','-e','YARN_INJECT_ENVIRONMENT_FILES=/nonexistent/.env.yarn?')
+
+        # Tokens are forwarded only into the fetch and audit containers, where
+        # no package code runs. They are never present during phase 2.
+        $tokenEnv = @()
+        if ($env:NODE_AUTH_TOKEN) { $tokenEnv += @('-e','NODE_AUTH_TOKEN') }
+        if ($env:NPM_TOKEN)       { $tokenEnv += @('-e','NPM_TOKEN') }
+        $tokenEnv += @(_Safe_Pkg_User_Auth -TmpDir $tmp)
+
+        $yarnArgs = @()
+        foreach ($a in $PassArgs) { $yarnArgs += "$a" }
+        if (-not $yarnArgs.Count) { $yarnArgs = @('install') }
+
+        # Phase 1: fetch (network on, token available, scripts disabled).
+        $mount = @('-v', "${tmp}:/app", '-w', $workdir)
+        $p1 = @('run','--rm','--cap-drop','ALL') + $hard + $userFlags + $mount + $tokenEnv + $berryEnv + $noScripts +
+            @('safe-pnpm:latest','corepack',$Spec) + $yarnArgs + @('--mode=skip-build')
+        $rc = (_Safe_Pkg_Exec -Exe $docker -Arguments $p1).Rc
+
+        # From here on $fetched says whether the sandbox may still be built
+        # and copied back; every failed step clears it.
+        $fetched = $false
+        if ($rc -eq 0) {
+            if (_Safe_Pkg_Malware_Scan (Join-Path $tmp 'yarn.lock')) { $fetched = $true } else { $rc = 1 }
+        }
+
+        if ($fetched) {
+            $step = _Safe_Pkg_Yarn_Berry_Helper -Mode snapshot -Arguments @($tmp, $snap)
+            if (-not $step.Ok) {
+                Write-Host "✗ safe-pnpm: $($step.Reason)" -ForegroundColor Red
+                $fetched = $false
+                $rc = 1
+            }
+        }
+
+        if ($fetched) {
+            $pa = @('run','--rm','--cap-drop','ALL') + $hard + $userFlags + $tokenEnv + $berryEnv + $noScripts + $mount +
+                @('safe-pnpm:latest','corepack',$Spec,'npm','audit','--all','--recursive','--severity','moderate')
+            if (-not (_Safe_Pkg_Yarn_Berry_Audit -Docker $docker -SnapDir $snap -RunArgs $pa)) {
+                $fetched = $false
+                $rc = 1
+            }
+        }
+
+        if ($fetched) {
+            # Strip registry credentials before any build script can run.
+            _Safe_Pkg_Strip_NpmrcAuth (Join-Path $tmp '.npmrc')
+            _Safe_Pkg_Strip_NpmrcAuth (Join-Path $tmp '.yarnrc')
+            $homeNpmrc = [IO.Path]::Combine($tmp, '.safe-home', '.npmrc')
+            if ([IO.File]::Exists($homeNpmrc)) { [IO.File]::Delete($homeNpmrc) }
+            $step = _Safe_Pkg_Yarn_Berry_Helper -Mode strip -Arguments @($tmp)
+            if (-not $step.Ok) {
+                Write-Host "✗ safe-pnpm: $($step.Reason)" -ForegroundColor Red
+                $fetched = $false
+                $rc = 1
+            }
+        }
+
+        if ($fetched) {
+            $netFlag = @('--network','none')
+            if ($env:SAFE_PNPM_BUILD_NETWORK -eq '1') { $netFlag = @() }
+
+            # Phase 2: build (no token, no credentials in the settings files,
+            # network off by default). Yarn and corepack stay offline even
+            # under SAFE_PNPM_BUILD_NETWORK=1.
+            $p2 = @('run','--rm','--cap-drop','ALL') + $hard + $userFlags + $netFlag + $mount + $berryEnv +
+                @('-e','YARN_ENABLE_NETWORK=0','-e','COREPACK_ENABLE_NETWORK=0','safe-pnpm:latest','corepack',$Spec,'install','--immutable')
+            $rc = (_Safe_Pkg_Exec -Exe $docker -Arguments $p2).Rc
+
+            if (-not (_Safe_Pkg_Copy_Modules -Base $tmp -Rel 'node_modules' -DestRoot $Root)) { $rc = 1 }
+            foreach ($m in $members) {
+                if (-not (_Safe_Pkg_Copy_Modules -Base $tmp -Rel "$m/node_modules" -DestRoot $Root)) { $rc = 1 }
+            }
+            # Manifests and lockfile come from the snapshot taken after the
+            # fetch, never from the sandbox the build scripts could write to.
+            $step = _Safe_Pkg_Yarn_Berry_Helper -Mode restore -Arguments @($snap, $Root)
+            if (-not $step.Ok) {
+                Write-Host "✗ safe-pnpm: $($step.Reason)" -ForegroundColor Red
+                $rc = 1
+            }
+        }
+    } catch {
+        if ($_.Exception.Message -eq 'safe-pnpm: command refused') { throw }
+        Write-Host "✗ safe-pnpm: the Yarn 2+ sandbox stopped on an error: $($_.Exception.Message)" -ForegroundColor Red
+        $global:LASTEXITCODE = 1
+        throw 'safe-pnpm: command refused'
+    } finally {
+        # $tmp holds a copy of the registry credentials; remove both folders
+        # even if the run is interrupted with Ctrl-C.
+        foreach ($d in @($tmp, $snap)) {
+            if ($d) { Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction Ignore }
+        }
+    }
+    $global:LASTEXITCODE = $rc
 }
 
 # Returns the file and key of the first setting in Dir's .npmrc or
@@ -828,7 +1209,9 @@ function _Safe_Pkg_Copy_Modules {
     if (-not (_Safe_Pkg_Links_Ok -Base $Base -Rel $Rel)) { return $false }
     $dest = Join-Path $DestRoot $Rel
     if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Recurse -Force }
-    New-Item -Type Directory -Force (Split-Path $dest -Parent) | Out-Null
+    # Not New-Item: it trims a trailing space from the folder name, and would
+    # create "packages/a" next to a member folder named "packages/a ".
+    [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($dest)) | Out-Null
     try {
         _Safe_Pkg_Copy_Tree -From $src -To $dest
     } catch {
@@ -847,15 +1230,21 @@ function _Safe_Pkg_Links_Ok {
         Write-Host "✗ safe-pnpm: link check not installed — run 'safe-pnpm update'. $Rel not copied back." -ForegroundColor Red
         return $false
     }
-    # A missing `node` leaves $LASTEXITCODE at whatever an earlier native
-    # command set (often 0), which would read as a pass.
-    if (-not (Get-Command node -CommandType Application -ErrorAction SilentlyContinue)) {
+    $node = _Safe_Pkg_App node
+    if (-not $node) {
         Write-Host "✗ safe-pnpm: node not found; link check cannot run. $Rel not copied back." -ForegroundColor Red
         return $false
     }
-    $global:LASTEXITCODE = 1
-    $out = (& node $checker $Base $Rel 2>&1 | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0) {
+    # Rel holds folder names from the project, so node gets it as one exact
+    # argument (see _Safe_Pkg_Exec). An error counts as a failed check.
+    $rc = 1
+    $out = ''
+    try {
+        $run = _Safe_Pkg_Exec -Exe $node -Arguments @($checker, $Base, $Rel) -WorkDir (Split-Path $checker -Parent) -Capture
+        $rc = $run.Rc
+        $out = ($run.Out + $run.Err).Trim()
+    } catch { $out = "$($_.Exception.Message)" }
+    if ($rc -ne 0) {
         Write-Host "✗ safe-pnpm: $Rel not copied back. $out" -ForegroundColor Red
         return $false
     }
