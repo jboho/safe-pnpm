@@ -7,7 +7,7 @@ const path = require("node:path");
 const { startOsvStub } = require("./helpers/osv-stub");
 const { ROOTLESS_DOCKER, infoStubSh } = require("./helpers/docker-info-stub");
 
-// Yarn 2+ (Berry) projects in the bash and zsh wrappers. The sandbox runs the
+// Yarn 2+ (Berry) projects in the bash, zsh and fish wrappers. The sandbox runs the
 // project's pinned Yarn through corepack: phase 1 resolves and fetches with
 // --mode=skip-build (no package code runs), an audit container runs
 // `yarn npm audit` while the registry auth is still there, and phase 2 runs
@@ -43,7 +43,7 @@ before(async () => {
 });
 after(() => osv.stop());
 
-// Runs `yarn <args>` through the bash or zsh wrapper in a Berry project, with
+// Runs `yarn <args>` through the bash, zsh or fish wrapper in a Berry project, with
 // a stub docker that tells the containers apart by their arguments (fetch has
 // --mode=skip-build, the audit runs `npm audit`, the build has --immutable)
 // and records, per container, its arguments and the .yarnrc.yml files it can
@@ -57,7 +57,8 @@ after(() => osv.stop());
 // opts.lock       project yarn.lock text, or null for none (default LOCK)
 // opts.phase1Lock yarn.lock the fetch writes (default PHASE1_LOCK)
 // opts.workspace  root workspaces ["packages/*"] with member packages/a, run
-//                 from packages/a
+//                 from packages/a; the fetch gives every member a node_modules
+// opts.member     the member folder's name in place of "a"
 // opts.memberPkg  packages/a/package.json text (default a plain manifest)
 // opts.members    with opts.workspace, more member folder names under
 //                 packages/; the fetch gives each one a node_modules
@@ -72,6 +73,7 @@ after(() => osv.stop());
 // opts.auditFails the audit container exits 1
 // opts.dockerInfo canned `docker info --format` answers
 // opts.env        extra environment
+// opts.pre        shell code run before the wrapper files are sourced
 function berry(shell, opts = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "safe-berry-"));
   const bin = path.join(root, "bin");
@@ -159,7 +161,7 @@ function berry(shell, opts = {}) {
   }
   let cwd = proj;
   if (opts.workspace) {
-    cwd = path.join(proj, "packages", "a");
+    cwd = path.join(proj, "packages", opts.member ?? "a");
     fs.mkdirSync(cwd, { recursive: true });
     fs.writeFileSync(
       path.join(cwd, "package.json"),
@@ -202,6 +204,7 @@ case " $* " in
 esac
 echo "$phase" >> "${log}/order"
 echo "$@" > "${log}/$phase.args"
+printf '%s\\n' "$@" > "${log}/$phase.argv"
 [ -f "$src/.yarnrc.yml" ] && cp "$src/.yarnrc.yml" "${log}/$phase.yarnrc"
 [ -f "$src/.safe-home/.yarnrc.yml" ] && cp "$src/.safe-home/.yarnrc.yml" "${log}/$phase.home"
 [ -d "$src/.yarn/patches" ] && ls -A "$src/.yarn/patches" > "${log}/$phase.patches"
@@ -214,6 +217,7 @@ if [ "$phase" = fetch ]; then
   if [ -d "$src/packages/a" ]; then
     echo '{"name":"a","version":"1.0.0","dependencies":{"ms":"^2.1.3"}}' > "$src/packages/a/package.json"
   fi
+  for m in "$src"/packages/*/; do [ -d "$m" ] && mkdir -p "$m/node_modules/x"; done
   ${
     opts.members
       ? `for d in "$src"/packages/*/; do
@@ -230,7 +234,11 @@ exit 0
   fs.writeFileSync(path.join(bin, "docker"), stub, { mode: 0o755 });
 
   const words = (opts.args ?? ["install"]).map((a) => `'${a}'`).join(" ");
-  const script = `source "${path.join(ASSETS, "_safe_pkg_shared.sh")}"; source "${path.join(ASSETS, "yarn-wrapper.sh")}"; cd "${cwd}"; yarn ${words} </dev/null`;
+  const sources =
+    shell === "fish"
+      ? ["_safe_pkg_prescan.fish", "yarn-wrapper.fish"]
+      : ["_safe_pkg_shared.sh", "yarn-wrapper.sh"];
+  const script = `${opts.pre ?? ""}${sources.map((f) => `source "${path.join(ASSETS, f)}"; `).join("")}cd "${cwd}"; yarn ${words} </dev/null`;
   const env = {
     ...process.env,
     PATH: `${bin}:${process.env.PATH}`,
@@ -249,7 +257,10 @@ exit 0
   ]) {
     if (!(opts.env && k in opts.env)) delete env[k];
   }
-  const r = spawnSync(shell, ["-c", script], { stdio: "pipe", env });
+  const argv =
+    shell === "fish" ? ["--no-config", "-c", script] : ["-c", script];
+  // A wrapper that loops forever fails the test instead of hanging the suite.
+  const r = spawnSync(shell, argv, { stdio: "pipe", env, timeout: 120000 });
 
   const at = (f) => path.join(log, f);
   const read = (f) => fs.readFileSync(at(f), "utf8");
@@ -279,7 +290,7 @@ const withRun = (shell, opts, fn) => {
   }
 };
 
-for (const shell of ["bash", "zsh"]) {
+for (const shell of ["bash", "zsh", "fish"]) {
   const skip = available(shell) ? false : `${shell} not available`;
   const t = (name, fn) => test(`${shell}: ${name}`, { skip }, fn);
 
@@ -583,6 +594,64 @@ for (const shell of ["bash", "zsh"]) {
       });
     },
   );
+
+  if (shell === "fish") {
+    // fish before 3.5 has no `path` builtin.
+    t(
+      "without the path builtin, a member install still finds the root and copies back",
+      () => {
+        withRun(
+          shell,
+          { workspace: true, pre: "function path; return 127; end; " },
+          ({ order, proj, status, err }) => {
+            assert.equal(status, 0, err);
+            assert.deepEqual(order, ["fetch", "audit", "build"]);
+            assert.ok(
+              fs.existsSync(path.join(proj, "node_modules", "ms")),
+              err,
+            );
+            assert.ok(
+              fs.existsSync(
+                path.join(proj, "packages", "a", "node_modules", "x"),
+              ),
+              err,
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // Folder names a shell could split, trim or read as a flag.
+  for (const member of ["a b", "a ", "-x"]) {
+    t(
+      `from member folder ${JSON.stringify(member)}, the run works in that folder and copies its node_modules back`,
+      () => {
+        withRun(
+          shell,
+          { workspace: true, member },
+          ({ read, proj, status, err }) => {
+            assert.equal(status, 0, err);
+            for (const phase of ["fetch", "audit", "build"]) {
+              const argv = read(`${phase}.argv`).split("\n");
+              assert.equal(
+                argv[argv.indexOf("-w") + 1],
+                `/app/packages/${member}`,
+                `${phase}: ${argv.join(" ")}`,
+              );
+            }
+            const dir = path.join(proj, "packages", member);
+            assert.ok(fs.existsSync(path.join(dir, "node_modules", "x")), err);
+            assert.ok(fs.existsSync(path.join(dir, "package.json")));
+            // A trimmed "a " would land in a new packages/a.
+            assert.deepEqual(fs.readdirSync(path.join(proj, "packages")), [
+              member,
+            ]);
+          },
+        );
+      },
+    );
+  }
 
   t(
     "members whose folder names hold a space or a newline get their manifest and node_modules",
