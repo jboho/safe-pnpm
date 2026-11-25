@@ -87,6 +87,10 @@ const NO_NODE_PATH = "/w/bin:/usr/bin:/bin";
 // rootless    the stub docker answers `docker info` like a rootless daemon
 // local       copy the project into the container and make this file
 //             unreadable there (a bind mount may ignore the mode)
+// auth        registry tokens in the project's .npmrc, .yarnrc and
+//             .yarnrc.yml, and a user .npmrc line the sandbox copies
+// tmpdir      a folder under /w/tmpdirs to use as TMPDIR for the call
+// fakeHelper  the text yarn-berry-check.js prints instead of its answer
 const CASES = [];
 const add = (id, opts = {}) => {
   CASES.push({ id, ...opts });
@@ -226,6 +230,7 @@ add("nohelper", { hideHelper: true });
 add("backslash", { workspace: true, members: ["a\\b"] });
 add("buildfail", { env: { BUILD_RC: "7" } });
 add("fetchfail", { env: { FETCH_RC: "5" } });
+add("chainfetchfail", { chain: true, env: { FETCH_RC: "5" } });
 add("buildnet", { env: { SAFE_PNPM_BUILD_NETWORK: "1" } });
 add("deep", { args: ["--version"], cwd: "src/deep" });
 add("deepinstall", { cwd: "src/deep" });
@@ -251,6 +256,23 @@ const UNREADABLE = ["yarn.lock", "package.json", "packages/b/package.json"];
 for (const [i, local] of UNREADABLE.entries()) {
   add(`unreadable${i}`, { local, workspace: true, members: ["b"] });
 }
+const AUTH_NPMRC =
+  "registry=https://registry.npmjs.org/\n//registry.npmjs.org/:_authToken=NPMRC-SECRET\n";
+const AUTH_YARNRC =
+  'registry "https://registry.yarnpkg.com"\n_authToken "YARNRC-SECRET"\n';
+const AUTH_YARNRC_YML = `${YARNRC}npmAuthToken: "RC-SECRET"\n`;
+const USER_NPMRC = `//registry.npmjs.org/:_authToken=\${NPM_TOKEN}\n`;
+add("auth", { auth: true });
+// Characters PowerShell's -Path reads as a wildcard.
+const TMPDIRS = ["t*", "t?q", "t[x]"];
+for (const [i, tmpdir] of TMPDIRS.entries()) {
+  add(`tmpdir${i}`, { auth: true, tmpdir });
+}
+add("npmrclocked", { auth: true, env: { LOCK_NPMRC: "1" } });
+add("stripfail", { env: { BAD_YARNRC: "1" } });
+const b64 = (s) => Buffer.from(s).toString("base64");
+add("noend", { fakeHelper: `ok\nspec ${b64("yarn@4.18.1")}\n` });
+add("badspec", { fakeHelper: `ok\nspec ${b64("yarn@4.18.1 x")}\nend\n` });
 
 const DOCKER_STUB = `#!/bin/sh
 if [ -n "$ROOTLESS" ]; then
@@ -276,9 +298,18 @@ printf '%s\\n' "$@" > "$d/$phase.argv"
 [ -f "$src/.safe-home/.yarnrc.yml" ] && cp "$src/.safe-home/.yarnrc.yml" "$d/$phase.home"
 [ -d "$src/.yarn/patches" ] && ls -A "$src/.yarn/patches" > "$d/$phase.patches"
 find "$src/.corepack" "$src/.safe-home" "$src/.safe-store" -name package.json > "$d/$phase.reserved" 2>/dev/null
+[ -e "$src/.npmrc" ] && cp "$src/.npmrc" "$d/$phase.npmrc" 2>/dev/null
+[ -e "$src/.yarnrc" ] && cp "$src/.yarnrc" "$d/$phase.yarnrc1" 2>/dev/null
+[ -e "$src/.safe-home/.npmrc" ] && cp "$src/.safe-home/.npmrc" "$d/$phase.homenpmrc" 2>/dev/null
 if [ "$phase" = fetch ]; then
   echo "FETCH-OUT $CASE"
   [ "\${FETCH_RC:-0}" = 0 ] || exit "$FETCH_RC"
+  if [ -n "$LOCK_NPMRC" ]; then
+    chmod 000 "$src/.npmrc"
+    if [ -r "$src/.npmrc" ]; then echo readable; else echo unreadable; fi > "$d/npmrcperm"
+  fi
+  # A byte the auth strip refuses to rewrite.
+  [ -n "$BAD_YARNRC" ] && printf '\\200\\n' >> "$src/.yarnrc.yml"
   mkdir -p "$src/node_modules/ms"
   echo "module.exports=1" > "$src/node_modules/ms/index.js"
   cp "$d/phase1-pkg" "$src/package.json"
@@ -344,6 +375,7 @@ foreach ($c in (Get-Content -LiteralPath /w/cases.json -Raw | ConvertFrom-Json))
     function global:_Safe_Pkg_Yarn_Berry_Run { param($Root, $Spec, $PassArgs) & $global:SafePkgTestRun -Root $Root -Spec $Spec -PassArgs $PassArgs -Os darwin -Cpu arm64 }
   }
   if ($c.hideHelper) { Rename-Item -LiteralPath $helper -NewName hidden.bak }
+  if ($c.fakeHelper) { Rename-Item -LiteralPath $helper -NewName hidden.bak; [IO.File]::WriteAllText($helper, $c.fakeHelper) }
   $cwd = $c.cwd
   if ($c.local) {
     $l = "/tmp/local-$id"
@@ -366,6 +398,7 @@ foreach ($c in (Get-Content -LiteralPath /w/cases.json -Raw | ConvertFrom-Json))
   if ($c.removeFn) { Set-Item "function:global:$($c.removeFn)" -Value $saved }
   if ($run0) { Set-Item function:global:_Safe_Pkg_Yarn_Berry_Run -Value $run0 }
   if ($c.hideHelper) { Rename-Item -LiteralPath "$HOME/.safe-pnpm/hidden.bak" -NewName yarn-berry-check.js }
+  if ($c.fakeHelper) { Remove-Item -LiteralPath $helper; Rename-Item -LiteralPath "$HOME/.safe-pnpm/hidden.bak" -NewName yarn-berry-check.js }
   foreach ($n in $set) { Remove-Item -LiteralPath "env:$n" }
   if ($c.win) { Remove-Item env:OS }
   $env:PATH = $path0
@@ -431,6 +464,20 @@ function writeCase(root, c) {
     }
   }
   for (const f of c.files ?? []) fs.writeFileSync(path.join(proj, f), "x");
+  const env = { ...c.env };
+  if (c.rootless) env.ROOTLESS = "1";
+  if (c.auth) {
+    fs.writeFileSync(path.join(proj, ".npmrc"), AUTH_NPMRC);
+    fs.writeFileSync(path.join(proj, ".yarnrc"), AUTH_YARNRC);
+    fs.writeFileSync(path.join(proj, ".yarnrc.yml"), AUTH_YARNRC_YML);
+    const user = path.join(root, "home", c.id, "user.npmrc");
+    fs.writeFileSync(user, USER_NPMRC);
+    env.NPM_CONFIG_USERCONFIG = `/w/home/${c.id}/user.npmrc`;
+  }
+  if (c.tmpdir) {
+    fs.mkdirSync(path.join(root, "tmpdirs", c.tmpdir), { recursive: true });
+    env.TMPDIR = `/w/tmpdirs/${c.tmpdir}/`;
+  }
   let cwd = proj;
   if (c.workspace) {
     cwd = path.join(proj, "packages", "a");
@@ -462,10 +509,13 @@ function writeCase(root, c) {
     cwd: c.at ?? inW(cwd),
     proj: inW(proj),
     args: c.args ?? ["install"],
-    env: c.rootless ? { ...c.env, ROOTLESS: "1" } : (c.env ?? {}),
+    env,
     path: c.noNode ? NO_NODE_PATH : "",
     removeFn: c.removeFn ?? "",
     hideHelper: !!c.hideHelper,
+    fakeHelper: c.fakeHelper
+      ? `process.stdout.write(${JSON.stringify(c.fakeHelper)});\n`
+      : "",
     strict: !!c.strict,
     chain: !!c.chain,
     win: !!c.win,
@@ -1098,6 +1148,18 @@ t(
   },
 );
 
+// As README.md says: a sandbox step that fails sets $LASTEXITCODE only.
+t(
+  "a failed fetch is no terminating error, so `yarn install && next` runs next",
+  () => {
+    const r = ran("chainfetchfail");
+    assert.equal(r.status, 5, r.out);
+    assert.deepEqual(r.order, ["fetch"], r.out);
+    assert.match(r.out, /NEXT-RAN/);
+    assert.doesNotMatch(r.out, /THROWN/);
+  },
+);
+
 t("the sandbox runs under Set-StrictMode -Version Latest", () => {
   const r = passes("strict");
   assert.equal(r.errors, "");
@@ -1252,6 +1314,89 @@ t(
     refused("bomlock", /does not pin a Yarn version with packageManager/);
   },
 );
+
+// The auth fixture's tokens reach the fetch, and none of them the build.
+const authStripped = (r) => {
+  assert.match(r.read("fetch.npmrc"), /NPMRC-SECRET/);
+  assert.match(r.read("fetch.yarnrc1"), /YARNRC-SECRET/);
+  assert.match(r.read("fetch.yarnrc"), /RC-SECRET/);
+  assert.match(r.read("fetch.homenpmrc"), /:_authToken=\$\{NPM_TOKEN\}/);
+  assert.equal(r.read("build.npmrc"), "registry=https://registry.npmjs.org/\n");
+  assert.equal(
+    r.read("build.yarnrc1"),
+    'registry "https://registry.yarnpkg.com"\n',
+  );
+  assert.doesNotMatch(r.read("build.yarnrc"), /RC-SECRET|npmAuthToken/);
+  assert.equal(r.has("build.homenpmrc"), false, "the user .npmrc copy");
+};
+
+t(
+  "the build sees no token in .npmrc, .yarnrc, .yarnrc.yml or the sandbox user .npmrc",
+  () => {
+    const r = passes("auth");
+    assert.ok(
+      r.argv("fetch").includes("NPM_CONFIG_USERCONFIG=/app/.safe-home/.npmrc"),
+    );
+    authStripped(r);
+  },
+);
+
+TMPDIRS.forEach((dir, i) => {
+  t(
+    `with TMPDIR ${dir} the run works, the auth is stripped and no temp file is left`,
+    () => {
+      const r = passes(`tmpdir${i}`);
+      assert.ok(
+        mountOf(r.argv("build")).startsWith(`/w/tmpdirs/${dir}/`),
+        mountOf(r.argv("build")),
+      );
+      authStripped(r);
+      assert.ok(
+        fs.existsSync(path.join(r.proj, "node_modules", "ms", "index.js")),
+      );
+      assert.deepEqual(fs.readdirSync(path.join(root, "tmpdirs", dir)), []);
+    },
+  );
+});
+
+// The run stopped after the audit: nothing built, nothing copied back.
+const stoppedBeforeBuild = (id, reason) => {
+  const r = ran(id);
+  assert.equal(r.status, 1, r.out);
+  assert.deepEqual(r.order, ["fetch", "audit"], r.out);
+  assert.match(r.out, reason);
+  assert.ok(!fs.existsSync(path.join(r.proj, "node_modules")));
+  assert.equal(fs.readFileSync(path.join(r.proj, "yarn.lock"), "utf8"), LOCK);
+  return r;
+};
+
+t("a .npmrc the auth strip cannot read stops the run before the build", () => {
+  const r = stoppedBeforeBuild(
+    "npmrclocked",
+    /could not remove the registry credentials from \S*\.npmrc; the build phase did not run\./,
+  );
+  assert.equal(
+    r.read("npmrcperm"),
+    "unreadable\n",
+    "the fixture must be unreadable in the container",
+  );
+  assert.match(r.out, /THROWN: safe-pnpm: command refused/);
+});
+
+t("a .yarnrc.yml the auth strip refuses stops the run before the build", () => {
+  stoppedBeforeBuild(
+    "stripfail",
+    /could not remove the registry credentials from \S*\.yarnrc\.yml; the build phase did not run\./,
+  );
+});
+
+t("a helper answer without its closing end line is refused", () => {
+  refused("noend", /gave no answer the wrapper can read/);
+});
+
+t("the pin the helper answers with is checked again before it runs", () => {
+  refused("badspec", /returned no exact Yarn pin/);
+});
 
 t("no sandbox folder is left in the temp folder", () => {
   assert.equal(fs.readFileSync(path.join(root, "log", "tmp-left"), "utf8"), "");

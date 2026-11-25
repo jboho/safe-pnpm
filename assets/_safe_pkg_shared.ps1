@@ -449,6 +449,16 @@ function _Safe_Pkg_Yarn_Berry_Audit {
     return $true
 }
 
+# A new, empty folder in the temp folder. New-TemporaryFile claims a unique
+# name; the folder replaces that file through .NET and New-Item, which read the
+# path literally, where Remove-Item -Path would read a * ? or [ in TMPDIR as a
+# wildcard. New-Item fails if the name was taken again in between.
+function _Safe_Pkg_New_Temp_Dir {
+    $t = (New-TemporaryFile).FullName
+    [IO.File]::Delete($t)
+    return (New-Item -ItemType Directory -Path $t -ErrorAction Stop).FullName
+}
+
 # The two-phase sandbox for a Yarn 2+ project; see the Yarn 2+ steps of
 # _safe_pkg_sandbox in _safe_pkg_shared.sh. Root is the project root, Spec the
 # packageManager pin corepack runs in every container. A failure before the
@@ -498,10 +508,10 @@ function _Safe_Pkg_Yarn_Berry_Run {
         if (-not $Os) { $Os = '-' }
         if (-not $Cpu) { $Cpu = '-' }
 
-        $tmp = (New-TemporaryFile | ForEach-Object { Remove-Item $_ -Force; New-Item -Type Directory $_ }).FullName
+        $tmp = _Safe_Pkg_New_Temp_Dir
         # Host-only, never mounted into a container: the post-fetch manifest
         # snapshots that copy-back reads from.
-        $snap = (New-TemporaryFile | ForEach-Object { Remove-Item $_ -Force; New-Item -Type Directory $_ }).FullName
+        $snap = _Safe_Pkg_New_Temp_Dir
 
         # Manifests, lockfile, settings files, member manifests and patches go
         # into the sandbox; a file that cannot be copied stops the run here.
@@ -565,8 +575,12 @@ function _Safe_Pkg_Yarn_Berry_Run {
 
         if ($fetched) {
             # Strip registry credentials before any build script can run.
-            _Safe_Pkg_Strip_NpmrcAuth (Join-Path $tmp '.npmrc')
-            _Safe_Pkg_Strip_NpmrcAuth (Join-Path $tmp '.yarnrc')
+            foreach ($f in '.npmrc', '.yarnrc') {
+                $rcFile = [IO.Path]::Combine($tmp, $f)
+                try { _Safe_Pkg_Strip_NpmrcAuth $rcFile } catch {
+                    _Safe_Pkg_Refuse "could not remove the registry credentials from $rcFile; the build phase did not run."
+                }
+            }
             $homeNpmrc = [IO.Path]::Combine($tmp, '.safe-home', '.npmrc')
             if ([IO.File]::Exists($homeNpmrc)) { [IO.File]::Delete($homeNpmrc) }
             $step = _Safe_Pkg_Yarn_Berry_Helper -Mode strip -Arguments @($tmp)
@@ -969,8 +983,10 @@ function _Safe_Pkg_Malware_Scan {
 # npmAuthToken/npmAuthIdent keys with `:`.
 function _Safe_Pkg_Strip_NpmrcAuth {
     param([string]$Path)
-    if (-not (Test-Path $Path)) { return }
-    $kept = @(Get-Content $Path |
+    # -LiteralPath: a temp folder named with *, ? or [ would read as a wildcard,
+    # miss the file and leave its credentials in place for the build.
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $kept = @(Get-Content -LiteralPath $Path -ErrorAction Stop |
         Where-Object { $_ -notmatch '(?i)(_authtoken|_auth|_password|username|npmauthtoken|npmauthident)\s*[=:"\s]' })
     # Set-Content with an empty pipeline leaves the file untouched, which would
     # keep every credential when nothing else is in the file.
